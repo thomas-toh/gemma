@@ -14,14 +14,21 @@ Last updated: 2026-07-11
   `spec/schemas/*` at runtime (hard rule 3), `log.py` logging setup. **Step 2 built:**
   `bridge/audio/wake.py` — mic → ≤3 s in-RAM ring buffer → openWakeWord (`hey_jarvis`,
   ONNX) → console. Cross-platform (sounddevice + onnxruntime, Windows + macOS, D10).
-  `--selfcheck` (buffer discipline, no mic) passes. **Live mic test passed on Windows
-  and macOS** (default input, `hey_jarvis` fires) — cross-platform (D10) confirmed.
-  Run instructions in `README.md`. Steps 0–2 done.
+  `--selfcheck` (buffer discipline, no mic) passes. Live mic test passed on Windows and
+  macOS — cross-platform (D10) confirmed. **Step 3 built:** `bridge/audio/listen.py` —
+  wake → Silero VAD (350 ms end-of-speech) → faster-whisper `small.en` → console.
+  Engine A: uses CUDA when loadable, else CPU (one path Win+Mac); `transcribe()` is the
+  seam for a Mac-GPU engine later. VAD runs openWakeWord's bundled Silero ONNX via
+  onnxruntime — **no torch** (torch won't install here: Windows long-path limit).
+  `--selfcheck` (end-of-speech logic + VAD wrapper, no mic) passes; **step 3 live mic
+  test owed** (both OSes). Run instructions in `README.md`. Steps 0–3 done.
+  - **GPU STT not yet on:** the RTX-5080 host lacks the NVIDIA CUDA libs
+    (`cublas`/`cudnn`), so STT falls back to CPU. Install `nvidia-cublas-cu12`
+    `nvidia-cudnn-cu12` (Blackwell/CUDA-12) at latency tuning (step 6/7).
 - **In flight:** —
 - **Next (M0 build order, docs/04 §8):**
-  3) VAD + faster-whisper → console transcripts · 4) earcons + Kokoro TTS out ·
-  5) B1 Claude adapter, streamed to console · 6) orchestrator wiring = **M0 acceptance**
-  · 7) metrics + replay harness (5 recordings)
+  4) earcons + Kokoro TTS out · 5) B1 Claude adapter, streamed to console ·
+  6) orchestrator wiring = **M0 acceptance** · 7) metrics + replay harness (5 recordings)
 
 ## Track H — Headset (Doc 03 → M3)
 

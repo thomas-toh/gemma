@@ -1,6 +1,6 @@
 # Spec 00 — System overview & status
 
-**Status: DESIGNED (no code)** · Last reconciled: 2026-07-11 · Decisions record: [docs/02](../docs/02_architecture/02_system_architecture.md)
+**Status: PARTIAL** (bridge steps 0–3 built — see STATE) · Last reconciled: 2026-07-11 · Decisions record: [docs/02](../docs/02_architecture/02_system_architecture.md)
 
 ## The system in one paragraph
 
@@ -67,7 +67,8 @@ Python 3.12+ / asyncio for the bridge (rationale: docs/02 §6). ESP32-S3 + C++ f
 H2 headset. Audio: 16 kHz 16-bit mono PCM in, 24 kHz mono out (constants in
 [schemas/messages.schema.json](schemas/messages.schema.json)). Wake word: user-specified
 phrase → trained keyword model (openWakeWord on PC; microWakeWord on ESP32) — never an
-LLM, never continuous transcription.
+LLM, never continuous transcription. STT: faster-whisper (`small.en`), GPU where
+available (CUDA on the RTX-5080 host; CPU on Mac until a Metal engine is added).
 
 **D10 (2026-07-10): cross-platform hub.** The bridge targets **Windows 11 and macOS as
 full peers** (Thomas runs a Windows/RTX-5080 desktop and a Mac laptop; an M4/M5-class

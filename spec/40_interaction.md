@@ -1,6 +1,6 @@
 # Spec 40 — Interaction model
 
-**Status: DESIGNED** (wake front-end PARTIAL — `bridge/audio/wake.py`) · Last reconciled: 2026-07-11 · Earcon ids: [schemas/earcons.json](schemas/earcons.json)
+**Status: DESIGNED** (wake + capture/STT front-end PARTIAL — `bridge/audio/{wake,listen}.py`) · Last reconciled: 2026-07-11 · Earcon ids: [schemas/earcons.json](schemas/earcons.json)
 
 ## State machine
 
@@ -43,8 +43,25 @@ rate) — a contained swap behind the same audio pipeline, would update spec/00.
 blocksize and detection threshold are code-level tuning (`bridge/audio/wake.py`), not
 spec constants.
 
+## Speech capture & transcription (M0)
+
+After wake, the bridge opens a listening window (`bridge/audio/listen.py`): **Silero
+VAD** marks end-of-speech at **350 ms** of silence (tunable), then **faster-whisper**
+(`small.en`, English-only) transcribes to the console. Engine **choice A** (spec/40
+review): faster-whisper on GPU (CUDA) where present, else CPU — one code path on Windows
+and macOS. `transcribe()` is the swap-point for a Mac-GPU engine (whisper.cpp / MLX) if
+Mac CPU speed disappoints — added only if measured (it would introduce a per-OS STT
+seam, extending spec/00 D10). Normal turns end on VAD silence at any length; the **30 s**
+cap is a runaway backstop only (on hit: transcribe what we have, warn). Audio is
+RAM-only, discarded after transcription (spec/50 rule 3).
+
 ## Open tuning items
 
 Custom wake phrase (replace the `hey_jarvis` stand-in) + false-accept testing (D8) ·
-VAD silence threshold · follow-up window length · earcon sound design (synthesise vs
-buy — genuinely fun sub-project).
+end-of-speech silence threshold (350 ms start) · pre-roll length · follow-up window
+length · earcon sound design (synthesise vs buy — genuinely fun sub-project).
+
+**Listening-window length may need to vary by context** — a short spoken command vs. a
+long composed prompt to a tool/LLM (which can run to a minute or more). Levers: a longer
+end-of-speech silence tolerance, a higher max-utterance cap, or an explicit dictation
+mode. Revisit when tools/LLM prompting land (M1).
