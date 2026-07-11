@@ -1,0 +1,30 @@
+# Gemma bridge
+
+Python daemon for Project Gemma (bone-conduction headset ↔ LLM brains). Design lives
+in `spec/` (start with `spec/00_overview.md`); current status in `STATE.md`; working
+rules in `CLAUDE.md`.
+
+## Running (dev)
+
+Requires **Python 3.12+**. Use an isolated environment (`.venv`) so installs don't
+touch the system Python — on macOS/Homebrew a system-wide `pip install` is blocked
+outright (PEP 668).
+
+First time — create the environment and install:
+
+```bash
+python3.12 -m venv .venv          # Windows: py -3.12 -m venv .venv
+source .venv/bin/activate         # Windows: .venv\Scripts\activate
+pip install -e .
+```
+
+Every new terminal — reactivate, then run:
+
+```bash
+source .venv/bin/activate         # Windows: .venv\Scripts\activate
+python -m bridge.audio.wake            # wake-word listener (step 2); say "hey jarvis"
+python -m bridge.audio.wake --selfcheck   # no mic; verifies ring-buffer discipline
+```
+
+`deactivate` to leave the environment. The API key is read from the OS credential
+store, never a file (see `spec/50_security.md`).

@@ -14,8 +14,9 @@ Last updated: 2026-07-11
   `spec/schemas/*` at runtime (hard rule 3), `log.py` logging setup. **Step 2 built:**
   `bridge/audio/wake.py` — mic → ≤3 s in-RAM ring buffer → openWakeWord (`hey_jarvis`,
   ONNX) → console. Cross-platform (sounddevice + onnxruntime, Windows + macOS, D10).
-  `--selfcheck` (buffer discipline, no mic) passes. **Live mic test passed on Windows**
-  (default input, `hey_jarvis` fires); **macOS live test still owed**. Steps 0–2 done.
+  `--selfcheck` (buffer discipline, no mic) passes. **Live mic test passed on Windows
+  and macOS** (default input, `hey_jarvis` fires) — cross-platform (D10) confirmed.
+  Run instructions in `README.md`. Steps 0–2 done.
 - **In flight:** —
 - **Next (M0 build order, docs/04 §8):**
   3) VAD + faster-whisper → console transcripts · 4) earcons + Kokoro TTS out ·
