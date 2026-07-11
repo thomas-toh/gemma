@@ -1,0 +1,61 @@
+{
+  "$comment": "Contract T tool registry — SINGLE SOURCE OF TRUTH (spec/30). The bridge loads this at startup; brains receive it as their tool list; the executor refuses calls not defined here. tier: 1=read-only, 2=reversible (earcon announce), 3=destructive (spoken confirmation required). Growth rule: add tools only after a week of daily use without misfires.",
+  "version": "0.1.0",
+  "tools": [
+    {
+      "name": "system_status",
+      "tier": 1,
+      "description": "Report time, battery (if laptop), volume level, active window title, and media playback state.",
+      "parameters": { "type": "object", "properties": {}, "additionalProperties": false }
+    },
+    {
+      "name": "read_clipboard",
+      "tier": 1,
+      "description": "Return the current text contents of the clipboard (truncated to 2000 chars).",
+      "parameters": { "type": "object", "properties": {}, "additionalProperties": false }
+    },
+    {
+      "name": "open_app",
+      "tier": 2,
+      "description": "Launch an application by its friendly name from the configured app map (e.g. 'spotify', 'word', 'chrome'). Fails with the list of known names if not found.",
+      "parameters": {
+        "type": "object",
+        "properties": { "app": { "type": "string", "description": "friendly app name, lowercase" } },
+        "required": ["app"], "additionalProperties": false
+      }
+    },
+    {
+      "name": "focus_window",
+      "tier": 2,
+      "description": "Bring the window whose title best matches the query to the foreground.",
+      "parameters": {
+        "type": "object",
+        "properties": { "title_query": { "type": "string" } },
+        "required": ["title_query"], "additionalProperties": false
+      }
+    },
+    {
+      "name": "media_control",
+      "tier": 2,
+      "description": "Send a media key: play/pause, next, previous, volume_up, volume_down, mute_toggle.",
+      "parameters": {
+        "type": "object",
+        "properties": { "action": { "enum": ["play_pause", "next", "previous", "volume_up", "volume_down", "mute_toggle"] } },
+        "required": ["action"], "additionalProperties": false
+      }
+    },
+    {
+      "name": "set_timer",
+      "tier": 2,
+      "description": "Set a named countdown timer; the bridge plays the 'timer' earcon and speaks the name when it fires.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "seconds": { "type": "integer", "minimum": 5, "maximum": 86400 },
+          "name": { "type": "string", "default": "timer" }
+        },
+        "required": ["seconds"], "additionalProperties": false
+      }
+    }
+  ]
+}

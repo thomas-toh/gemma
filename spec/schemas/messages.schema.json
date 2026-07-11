@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "gemma/contract-h/messages",
+  "title": "Contract H control messages",
+  "version": "0.2.0",
+  "description": "JSON control-channel messages between headset and bridge. Audio travels as raw binary frames on the transport data path, not in these messages. Protocol rules (spec/10 §4): HELLO first on connect; receivers MUST ignore unknown message types (log once); every message carries 'type'. Audio format constants below are normative.",
+  "audioConstants": {
+    "inbound": { "sampleRateHz": 16000, "bitDepth": 16, "channels": 1, "encoding": "PCM S16LE", "frameMs": 20, "frameBytes": 640 },
+    "outbound": { "sampleRateHz": 24000, "bitDepth": 16, "channels": 1, "encoding": "PCM S16LE" }
+  },
+  "oneOf": [
+    { "$ref": "#/$defs/hello" }, { "$ref": "#/$defs/wake" }, { "$ref": "#/$defs/mute" },
+    { "$ref": "#/$defs/button" }, { "$ref": "#/$defs/status" }, { "$ref": "#/$defs/deviceError" },
+    { "$ref": "#/$defs/helloAck" }, { "$ref": "#/$defs/stream" }, { "$ref": "#/$defs/earcon" },
+    { "$ref": "#/$defs/led" }, { "$ref": "#/$defs/volume" }
+  ],
+  "$defs": {
+    "hello": {
+      "type": "object",
+      "description": "headset→bridge: first message after connect. Declares identity, protocol version, and capabilities so the bridge adapts and old firmware keeps working with newer bridges.",
+      "properties": {
+        "type": { "const": "HELLO" },
+        "device": { "type": "string", "description": "device model id, e.g. 'gemma-t2-esp32s3'" },
+        "fw_version": { "type": "string" },
+        "protocol_version": { "type": "string", "description": "version of this schema the device implements" },
+        "capabilities": {
+          "type": "object",
+          "properties": {
+            "wake_on_device": { "type": "boolean" },
+            "has_button": { "type": "boolean" },
+            "has_led": { "type": "boolean" },
+            "reports_battery": { "type": "boolean" },
+            "earcons_cached": { "type": "array", "items": { "type": "string" }, "description": "earcon ids held locally (see earcons.json)" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": ["type", "device", "fw_version", "protocol_version"],
+      "additionalProperties": false
+    },
+    "wake": {
+      "type": "object", "description": "headset→bridge: on-device wake detection fired (wake_on_device capability only)",
+      "properties": { "type": { "const": "WAKE" }, "ts": { "type": "number" }, "confidence": { "type": "number", "minimum": 0, "maximum": 1 } },
+      "required": ["type", "ts"], "additionalProperties": false
+    },
+    "mute": {
+      "type": "object", "description": "headset→bridge: hardware mute switch state (informational; switch cuts mic physically)",
+      "properties": { "type": { "const": "MUTE" }, "on": { "type": "boolean" } },
+      "required": ["type", "on"], "additionalProperties": false
+    },
+    "button": {
+      "type": "object", "description": "headset→bridge: multi-function button event. Default bindings (spec/40): single=stop/dismiss, double=repeat last answer, hold=push-to-talk.",
+      "properties": { "type": { "const": "BUTTON" }, "action": { "enum": ["single", "double", "hold_start", "hold_end"] } },
+      "required": ["type", "action"], "additionalProperties": false
+    },
+    "status": {
+      "type": "object", "description": "headset→bridge: periodic health (reports_battery capability, every 30s)",
+      "properties": { "type": { "const": "STATUS" }, "battery_pct": { "type": "integer", "minimum": 0, "maximum": 100 }, "rssi": { "type": "integer" } },
+      "required": ["type"], "additionalProperties": false
+    },
+    "deviceError": {
+      "type": "object", "description": "headset→bridge: device-side fault the bridge should know about (and may surface via 'error' earcon)",
+      "properties": {
+        "type": { "const": "ERROR" },
+        "code": { "enum": ["audio_underrun", "audio_overrun", "mic_fault", "battery_critical", "internal"] },
+        "detail": { "type": "string" }
+      },
+      "required": ["type", "code"], "additionalProperties": false
+    },
+    "helloAck": {
+      "type": "object", "description": "bridge→headset: handshake reply; confirms the protocol version the bridge will speak",
+      "properties": { "type": { "const": "HELLO_ACK" }, "protocol_version": { "type": "string" } },
+      "required": ["type", "protocol_version"], "additionalProperties": false
+    },
+    "stream": {
+      "type": "object", "description": "bridge→headset: mic streaming gate. Device streams after WAKE/hold_start; bridge sends {on:false} at session end so the radio can sleep — this is the battery-life mechanism.",
+      "properties": { "type": { "const": "STREAM" }, "on": { "type": "boolean" } },
+      "required": ["type", "on"], "additionalProperties": false
+    },
+    "earcon": {
+      "type": "object", "description": "bridge→headset: play a named earcon (ids in earcons.json); device falls back to AUDIO_OUT if id unknown",
+      "properties": { "type": { "const": "EARCON" }, "id": { "type": "string" } },
+      "required": ["type", "id"], "additionalProperties": false
+    },
+    "led": {
+      "type": "object", "description": "bridge→headset: set status LED; MUST truthfully reflect pipeline state (spec/50 rule 4)",
+      "properties": { "type": { "const": "LED" }, "state": { "enum": ["idle", "listening", "thinking", "speaking", "error"] } },
+      "required": ["type", "state"], "additionalProperties": false
+    },
+    "volume": {
+      "type": "object", "description": "bridge→headset: output volume",
+      "properties": { "type": { "const": "VOLUME" }, "level": { "type": "integer", "minimum": 0, "maximum": 100 } },
+      "required": ["type", "level"], "additionalProperties": false
+    }
+  }
+}

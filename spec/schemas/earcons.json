@@ -1,0 +1,14 @@
+{
+  "$comment": "Earcon vocabulary — SINGLE SOURCE OF TRUTH (spec/40). The bridge maps ids to WAV files in bridge/assets/earcons/; T2+ headsets may cache them locally. Keep sounds < 400 ms (except 'timer'), distinct from each other, pleasant at low volume.",
+  "version": "0.1.0",
+  "earcons": [
+    { "id": "ack",          "meaning": "wake word heard, listening",                        "maxMs": 250 },
+    { "id": "working",      "meaning": "thinking has exceeded 1.5 s",                        "maxMs": 400 },
+    { "id": "ok",           "meaning": "tool action succeeded",                              "maxMs": 300 },
+    { "id": "fail",         "meaning": "tool action failed (followed by one spoken sentence)","maxMs": 400 },
+    { "id": "confirm",      "meaning": "Tier 3 gate: say 'confirm' within 8 s to proceed",   "maxMs": 400 },
+    { "id": "answer-ready", "meaning": "long answer held; say 'read it' to hear it",         "maxMs": 400 },
+    { "id": "timer",        "meaning": "a named timer fired",                                "maxMs": 1500 },
+    { "id": "error",        "meaning": "pipeline error (brain unreachable, STT failed)",     "maxMs": 400 }
+  ]
+}
