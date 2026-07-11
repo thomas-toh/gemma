@@ -31,7 +31,9 @@ log = logging.getLogger("gemma.listen")
 VAD_CHUNK = 512                                   # Silero VAD needs 512-sample windows @ 16 kHz
 VAD_CHUNK_MS = VAD_CHUNK * 1000 // SAMPLE_RATE    # 32 ms
 VAD_THRESHOLD = 0.5                               # speech if Silero prob >= this
-SILENCE_MS = 350                                  # spec/40: end-of-speech silence (tune live)
+SILENCE_MS = 1000                                 # spec/40: end-of-speech silence (--silence-ms
+                                                  # to tune live; semantic endpointing is the
+                                                  # proper fix for long composed prompts, M1)
 MAX_UTTERANCE_S = 30                              # safety cap ONLY; VAD ends normal turns
 NOSPEECH_MS = 3000                                # give up if nothing is said after wake
 PREROLL_MS = 200                                  # pre-roll from ring buffer (tune: onset vs
@@ -181,8 +183,10 @@ def transcribe(audio_f32) -> str:
     return text
 
 
-def listen() -> None:
-    """Full wake -> listen -> transcribe loop on the default mic. Ctrl-C to stop."""
+def listen(silence_ms: int = SILENCE_MS) -> None:
+    """Full wake -> listen -> transcribe loop on the default mic. Ctrl-C to stop.
+    silence_ms = how long a pause ends your turn (bigger = more pause-tolerant, but adds
+    that much delay before every reply)."""
     from collections import deque
 
     import numpy as np
@@ -190,14 +194,15 @@ def listen() -> None:
     import openwakeword.utils
     from openwakeword.model import Model
 
+    silence_chunks = (silence_ms + VAD_CHUNK_MS - 1) // VAD_CHUNK_MS
     log.info("loading models (first run downloads them)...")
     openwakeword.utils.download_models([WAKE_MODEL])
     wake_model = Model(wakeword_models=[WAKE_MODEL], inference_framework="onnx")
     vad = SileroVAD(_silero_model_path())
 
     ring: deque = deque(maxlen=BUFFER_BLOCKS)
-    log.info("listening @ %d Hz -- say '%s', then speak (Ctrl-C to stop)",
-             SAMPLE_RATE, WAKE_MODEL.replace("_", " "))
+    log.info("listening @ %d Hz (end-of-speech %d ms) -- say '%s', then speak (Ctrl-C to stop)",
+             SAMPLE_RATE, silence_ms, WAKE_MODEL.replace("_", " "))
     with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="int16",
                         blocksize=0) as stream:
         while True:
@@ -211,7 +216,7 @@ def listen() -> None:
             # --- listen phase: 512-sample chunks into Silero VAD ---
             print("[wake] listening...")
             vad.reset()
-            eos = EndOfSpeech()
+            eos = EndOfSpeech(silence_chunks=silence_chunks)
             captured = [np.concatenate(list(ring)[-PREROLL_BLOCKS:])]   # pre-roll
             while True:
                 chunk, _ = stream.read(VAD_CHUNK)
@@ -267,12 +272,14 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Gemma wake+listen+transcribe (Track G step 3)")
     ap.add_argument("--selfcheck", action="store_true",
                     help="verify end-of-speech logic without a mic or models, then exit")
+    ap.add_argument("--silence-ms", type=int, default=SILENCE_MS,
+                    help=f"end-of-speech silence in ms (default {SILENCE_MS}); tune by ear")
     args = ap.parse_args()
     if args.selfcheck:
         _selfcheck()
         return
     try:
-        listen()
+        listen(args.silence_ms)
     except KeyboardInterrupt:
         print()  # clean newline after ^C
 

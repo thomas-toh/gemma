@@ -16,7 +16,8 @@ Last updated: 2026-07-11
   ONNX) → console. Cross-platform (sounddevice + onnxruntime, Windows + macOS, D10).
   `--selfcheck` (buffer discipline, no mic) passes. Live mic test passed on Windows and
   macOS — cross-platform (D10) confirmed. **Step 3 built:** `bridge/audio/listen.py` —
-  wake → Silero VAD (350 ms end-of-speech) → faster-whisper `small.en` → console.
+  wake → Silero VAD (1 s end-of-speech, `--silence-ms` to tune) → faster-whisper
+  `small.en` → console.
   Engine A: uses CUDA when loadable, else CPU (one path Win+Mac); `transcribe()` is the
   seam for a Mac-GPU engine later. VAD runs openWakeWord's bundled Silero ONNX via
   onnxruntime — **no torch** (torch won't install here: Windows long-path limit).
@@ -76,4 +77,6 @@ Last updated: 2026-07-11
 B3 agent-CLI adapter · H3 (BLE) and H4 (LE Audio) transports · bone-conduction
 microphone experiment (Knowles V2S200D) · earcon sound design session · per-request
 brain routing · wake-phrase false-accept test protocol · **LiveKit Wakeword** trial as
-an openWakeWord replacement (lower false-accept rate; contained swap behind `wake.py`)
+an openWakeWord replacement (lower false-accept rate; contained swap behind `wake.py`) ·
+**semantic endpointing** (M1) — complete-thought detection so long composed prompts
+aren't cut off, the real fix beyond the silence timer (spec/40)
