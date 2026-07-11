@@ -16,14 +16,19 @@ First time — create the environment and install:
 python3.12 -m venv .venv          # Windows: py -3.12 -m venv .venv
 source .venv/bin/activate         # Windows: .venv\Scripts\activate
 pip install -e .
+pip install -e ".[gpu-cuda]"      # optional: NVIDIA GPU speech-to-text (~28x faster)
 ```
+
+`[gpu-cuda]` is optional and NVIDIA-only (Windows/Linux) — skip it on macOS. Without it,
+speech-to-text runs on CPU.
 
 Every new terminal — reactivate, then run:
 
 ```bash
 source .venv/bin/activate         # Windows: .venv\Scripts\activate
-python -m bridge.audio.wake            # wake-word listener (step 2); say "hey jarvis"
-python -m bridge.audio.wake --selfcheck   # no mic; verifies ring-buffer discipline
+python -m bridge.audio.listen          # wake -> listen -> transcribe (step 3); say "hey jarvis"
+python -m bridge.audio.wake            # just the wake-word listener (step 2)
+python -m bridge.audio.listen --selfcheck   # no mic; verifies end-of-speech logic
 ```
 
 `deactivate` to leave the environment. The API key is read from the OS credential

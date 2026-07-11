@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import time
 
 from bridge.audio.wake import (
     SAMPLE_RATE, BLOCK_MS, BLOCK_SAMPLES, BUFFER_BLOCKS, WAKE_MODEL, THRESHOLD,
@@ -120,6 +121,26 @@ class SileroVAD:
 _whisper = None
 
 
+def _add_cuda_dll_dirs() -> None:
+    """Windows: the pip `nvidia-*-cu12` packages drop cuBLAS/cuDNN/cudart DLLs inside the
+    `nvidia` package dir, which is NOT on the DLL search path, so ctranslate2 can't find
+    them. Add them. No-op off Windows or if the packages aren't installed (then transcribe
+    falls back to CPU). GPU also needs `nvidia-cuda-runtime-cu12` (cudart) — see pyproject
+    `[gpu-cuda]` extra."""
+    import os
+    if not hasattr(os, "add_dll_directory"):        # non-Windows: nothing to do
+        return
+    import glob
+    import importlib.util
+    spec = importlib.util.find_spec("nvidia")
+    if spec is None or not spec.submodule_search_locations:
+        return
+    base = spec.submodule_search_locations[0]
+    for d in glob.glob(os.path.join(base, "*", "bin")):
+        if os.path.isdir(d):
+            os.add_dll_directory(d)
+
+
 def _load_whisper(device: str, compute_type: str):
     from faster_whisper import WhisperModel
     log.info("loading faster-whisper %r on %s (first run downloads it)...",
@@ -143,14 +164,21 @@ def transcribe(audio_f32) -> str:
     global _whisper
     if _whisper is None:
         import ctranslate2
-        gpu = ctranslate2.get_cuda_device_count() > 0
-        _whisper = _load_whisper("cuda", "float16") if gpu else _load_whisper("cpu", "int8")
+        if ctranslate2.get_cuda_device_count() > 0:
+            _add_cuda_dll_dirs()
+            _whisper = _load_whisper("cuda", "float16")
+        else:
+            _whisper = _load_whisper("cpu", "int8")
     try:
-        return _run(_whisper, audio_f32)
+        t0 = time.perf_counter()
+        text = _run(_whisper, audio_f32)
     except RuntimeError as e:
         log.warning("GPU transcribe failed (%s) -- falling back to CPU", e)
         _whisper = _load_whisper("cpu", "int8")
-        return _run(_whisper, audio_f32)
+        t0 = time.perf_counter()
+        text = _run(_whisper, audio_f32)
+    log.info("STT %.0f ms", (time.perf_counter() - t0) * 1000)   # real transcription latency
+    return text
 
 
 def listen() -> None:

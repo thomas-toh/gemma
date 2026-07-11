@@ -22,5 +22,11 @@ dependencies = [
     "faster-whisper",
 ]
 
+[project.optional-dependencies]
+# GPU speech-to-text on an NVIDIA host (Windows/Linux): ~28x faster than CPU (STATE).
+# Install with:  pip install -e ".[gpu-cuda]"  -- listen.py then adds these DLLs to the
+# search path automatically. Not for macOS (use the CPU path / a future Metal engine).
+gpu-cuda = ["nvidia-cublas-cu12", "nvidia-cudnn-cu12", "nvidia-cuda-runtime-cu12"]
+
 [tool.setuptools]
 packages = ["bridge"]

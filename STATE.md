@@ -20,11 +20,14 @@ Last updated: 2026-07-11
   Engine A: uses CUDA when loadable, else CPU (one path Win+Mac); `transcribe()` is the
   seam for a Mac-GPU engine later. VAD runs openWakeWord's bundled Silero ONNX via
   onnxruntime — **no torch** (torch won't install here: Windows long-path limit).
-  `--selfcheck` (end-of-speech logic + VAD wrapper, no mic) passes; **step 3 live mic
-  test owed** (both OSes). Run instructions in `README.md`. Steps 0–3 done.
-  - **GPU STT not yet on:** the RTX-5080 host lacks the NVIDIA CUDA libs
-    (`cublas`/`cudnn`), so STT falls back to CPU. Install `nvidia-cublas-cu12`
-    `nvidia-cudnn-cu12` (Blackwell/CUDA-12) at latency tuning (step 6/7).
+  `--selfcheck` (end-of-speech logic + VAD wrapper, no mic) passes; `transcribe()` logs
+  real STT latency. **Step 3 live mic test owed** (both OSes). Run instructions in
+  `README.md`. Steps 0–3 done.
+  - **GPU STT working** on the RTX-5080: `pip install -e ".[gpu-cuda]"` (cuBLAS/cuDNN/
+    cudart) + `listen.py` adds their DLL dirs to the search path (Store-Python quirk).
+    Measured `small.en`, 2 s clip: **CPU 887 ms vs GPU ~33 ms warm** (~28x); the one-time
+    Blackwell kernel JIT (~26 s) is now cached to disk. macOS stays CPU (Metal deferred).
+    Numbers are on synthetic audio — real-speech figures come from the live mic test.
 - **In flight:** —
 - **Next (M0 build order, docs/04 §8):**
   4) earcons + Kokoro TTS out · 5) B1 Claude adapter, streamed to console ·
