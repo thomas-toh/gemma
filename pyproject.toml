@@ -7,11 +7,16 @@ name = "gemma-bridge"
 version = "0.0.0"
 description = "Bridge daemon for Project Gemma (headset <-> LLM brains). See spec/ and docs/04."
 requires-python = ">=3.12"
-# ponytail: only what the code imports today. Audio/VAD/whisper/TTS deps land
-# when steps 2-5 (docs/04 §8) actually need them, not speculatively.
+# ponytail: only what the code imports today. VAD/whisper/TTS deps land when
+# steps 3-5 (docs/04 §8) actually need them, not speculatively.
 dependencies = [
     "anthropic",
     "keyring",
+    # step 2 (docs/04 §8): mic capture + wake word. onnxruntime is explicit because
+    # we run openWakeWord on ONNX (Windows + macOS both, spec/00 D10), not tflite.
+    "sounddevice",
+    "openwakeword",
+    "onnxruntime",
 ]
 
 [tool.setuptools]

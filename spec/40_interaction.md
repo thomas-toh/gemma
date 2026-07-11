@@ -1,6 +1,6 @@
 # Spec 40 — Interaction model
 
-**Status: DESIGNED (no code)** · Last reconciled: 2026-07-10 · Earcon ids: [schemas/earcons.json](schemas/earcons.json)
+**Status: DESIGNED** (wake front-end PARTIAL — `bridge/audio/wake.py`) · Last reconciled: 2026-07-11 · Earcon ids: [schemas/earcons.json](schemas/earcons.json)
 
 ## State machine
 
@@ -34,7 +34,17 @@ IDLE ──wake──▶ LISTENING ──end-of-speech──▶ THINKING ──�
 | End of speech → Tier 2 action executed | < 1.5 s |
 | Barge-in → TTS stopped | < 250 ms |
 
+## Wake detection (M0)
+
+Engine **openWakeWord** on ONNX (spec/00), cross-platform (spec/00 D10). M0 uses the
+bundled model **`hey_jarvis`** as the wake phrase — a stand-in; a custom-trained phrase
+is a later task. **LiveKit Wakeword** is a noted future alternative (lower false-accept
+rate) — a contained swap behind the same audio pipeline, would update spec/00. Capture
+blocksize and detection threshold are code-level tuning (`bridge/audio/wake.py`), not
+spec constants.
+
 ## Open tuning items
 
-Wake phrase choice + false-accept testing (D8) · VAD silence threshold · follow-up
-window length · earcon sound design (synthesise vs buy — genuinely fun sub-project).
+Custom wake phrase (replace the `hey_jarvis` stand-in) + false-accept testing (D8) ·
+VAD silence threshold · follow-up window length · earcon sound design (synthesise vs
+buy — genuinely fun sub-project).

@@ -11,11 +11,13 @@ Last updated: 2026-07-11
 ## Track G — Bridge (Doc 04 → M0, M1, M2)
 
 - **Works now:** repo committed on `main`. `bridge/` skeleton: `config.py` loads
-  `spec/schemas/*` at runtime (hard rule 3, self-check passes), `log.py` logging setup;
-  `pyproject.toml` pins `anthropic`+`keyring` only. Steps 0–1 done.
+  `spec/schemas/*` at runtime (hard rule 3), `log.py` logging setup. **Step 2 built:**
+  `bridge/audio/wake.py` — mic → ≤3 s in-RAM ring buffer → openWakeWord (`hey_jarvis`,
+  ONNX) → console. Cross-platform (sounddevice + onnxruntime, Windows + macOS, D10).
+  `--selfcheck` (buffer discipline, no mic) passes. **Live mic test passed on Windows**
+  (default input, `hey_jarvis` fires); **macOS live test still owed**. Steps 0–2 done.
 - **In flight:** —
 - **Next (M0 build order, docs/04 §8):**
-  2) audio in → ring buffer → openWakeWord (stock phrase) → console ·
   3) VAD + faster-whisper → console transcripts · 4) earcons + Kokoro TTS out ·
   5) B1 Claude adapter, streamed to console · 6) orchestrator wiring = **M0 acceptance**
   · 7) metrics + replay harness (5 recordings)
@@ -62,4 +64,5 @@ Last updated: 2026-07-11
 
 B3 agent-CLI adapter · H3 (BLE) and H4 (LE Audio) transports · bone-conduction
 microphone experiment (Knowles V2S200D) · earcon sound design session · per-request
-brain routing · wake-phrase false-accept test protocol
+brain routing · wake-phrase false-accept test protocol · **LiveKit Wakeword** trial as
+an openWakeWord replacement (lower false-accept rate; contained swap behind `wake.py`)
