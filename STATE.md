@@ -10,10 +10,11 @@ Last updated: 2026-07-10
 
 ## Track A — Bridge software (Doc 04 → M0, M1, M2)
 
-- **Works now:** nothing (no code yet). Doc 04 agreed — its §8 is this queue.
+- **Works now:** repo committed on `main`. `bridge/` skeleton: `config.py` loads
+  `spec/schemas/*` at runtime (hard rule 3, self-check passes), `log.py` logging setup;
+  `pyproject.toml` pins `anthropic`+`keyring` only. Steps 0–1 done.
 - **In flight:** —
-- **Next (M0 build order, docs/04 §8):** 0) `git init` + first commit of the repo as-is ·
-  1) repo skeleton: pyproject, config loader importing `spec/schemas/*`, logging ·
+- **Next (M0 build order, docs/04 §8):**
   2) audio in → ring buffer → openWakeWord (stock phrase) → console ·
   3) VAD + faster-whisper → console transcripts · 4) earcons + Kokoro TTS out ·
   5) B1 Claude adapter, streamed to console · 6) orchestrator wiring = **M0 acceptance**
