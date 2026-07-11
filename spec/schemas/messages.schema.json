@@ -20,7 +20,7 @@
       "description": "headset→bridge: first message after connect. Declares identity, protocol version, and capabilities so the bridge adapts and old firmware keeps working with newer bridges.",
       "properties": {
         "type": { "const": "HELLO" },
-        "device": { "type": "string", "description": "device model id, e.g. 'gemma-t2-esp32s3'" },
+        "device": { "type": "string", "description": "device model id, e.g. 'gemma-h2-esp32s3'" },
         "fw_version": { "type": "string" },
         "protocol_version": { "type": "string", "description": "version of this schema the device implements" },
         "capabilities": {

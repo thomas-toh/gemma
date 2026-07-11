@@ -1,6 +1,6 @@
 # Spec 30 — Contract T: tools & safety tiers
 
-**Status: DESIGNED (no code)** · Last reconciled: 2026-07-10 · Registry (executable): [schemas/tools.json](schemas/tools.json)
+**Status: DESIGNED (no code)** · Last reconciled: 2026-07-11 · Registry (executable): [schemas/tools.json](schemas/tools.json)
 
 The registry file is the single source of truth for tool names, parameter schemas and
 tiers. The bridge loads it at startup; brains receive it (filtered) as their tool list;
@@ -34,5 +34,5 @@ the executor refuses any call not present in it. Code never hardcodes a tool def
 
 ## Starter set (defined in schemas/tools.json)
 
-`system_status` (T1) · `read_clipboard` (T1) · `open_app` (T2) · `focus_window` (T2) ·
-`media_control` (T2) · `set_timer` (T2)
+`system_status` (Tier 1) · `read_clipboard` (Tier 1) · `open_app` (Tier 2) · `focus_window` (Tier 2) ·
+`media_control` (Tier 2) · `set_timer` (Tier 2)

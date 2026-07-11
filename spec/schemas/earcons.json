@@ -1,5 +1,5 @@
 {
-  "$comment": "Earcon vocabulary — SINGLE SOURCE OF TRUTH (spec/40). The bridge maps ids to WAV files in bridge/assets/earcons/; T2+ headsets may cache them locally. Keep sounds < 400 ms (except 'timer'), distinct from each other, pleasant at low volume.",
+  "$comment": "Earcon vocabulary — SINGLE SOURCE OF TRUTH (spec/40). The bridge maps ids to WAV files in bridge/assets/earcons/; H2+ headsets may cache them locally. Keep sounds < 400 ms (except 'timer'), distinct from each other, pleasant at low volume.",
   "version": "0.1.0",
   "earcons": [
     { "id": "ack",          "meaning": "wake word heard, listening",                        "maxMs": 250 },

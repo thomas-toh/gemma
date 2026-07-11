@@ -55,6 +55,8 @@ firmware/          ← (future) ESP32 headset firmware — Doc 03 defines it
   whether a generalised rule is required. When in doubt, preference having no generalised
   rule.
 - Keep a running task list on multi-step work.
+- Review gate on git: show me the diff and the proposed commit message and get my
+  explicit OK before any `git commit`; never `git push` without explicit approval.
 
 ## Current state
 

@@ -1,6 +1,6 @@
 # Spec 10 — Contract H: headset ↔ bridge
 
-**Status: DESIGNED (no code)** · Last reconciled: 2026-07-10 · Message shapes: [schemas/messages.schema.json](schemas/messages.schema.json) (v0.2.0)
+**Status: DESIGNED (no code)** · Last reconciled: 2026-07-11 · Message shapes: [schemas/messages.schema.json](schemas/messages.schema.json) (v0.2.0)
 
 The headset is audio I/O plus wake detection and nothing else. Every physical device
 generation implements this same contract via a transport adapter; nothing above the
@@ -10,8 +10,8 @@ adapter may know which transport is live.
 
 | Message | Payload | Rules |
 |---------|---------|-------|
-| `HELLO` | `device`, `fw_version`, `protocol_version`, `capabilities` | MUST be the first message after connect (T2+). Capabilities (wake_on_device, has_button, has_led, reports_battery, earcons_cached) let the bridge adapt per device. |
-| `WAKE` | `ts`, `confidence` | Only from devices with `wake_on_device`. In T0/T1 the bridge synthesises WAKE from its own PC-side detector. |
+| `HELLO` | `device`, `fw_version`, `protocol_version`, `capabilities` | MUST be the first message after connect (H2+). Capabilities (wake_on_device, has_button, has_led, reports_battery, earcons_cached) let the bridge adapt per device. |
+| `WAKE` | `ts`, `confidence` | Only from devices with `wake_on_device`. In H0/H1 the bridge synthesises WAKE from its own PC-side detector. |
 | `AUDIO` | binary frames | 16 kHz, 16-bit signed LE, mono PCM, 20 ms frames (640 bytes). MUST be contiguous while streaming is on. |
 | `MUTE` | `on: bool` | Informational — the hardware switch physically cuts the mic regardless (spec/50 rule 5). |
 | `BUTTON` | `action`: single · double · hold_start · hold_end | Default bindings (spec/40): single = stop/dismiss, double = repeat last answer, hold = push-to-talk. |
@@ -35,22 +35,22 @@ Control channel = JSON per schema; audio = raw binary on the transport's data pa
 
 | Profile | Device | Control path | Audio path | Status |
 |---------|--------|--------------|------------|--------|
-| **T0** | Stock BT headset + dongle | none (bridge-internal synthesis) | OS audio endpoints (WASAPI), HFP 16 kHz | DESIGNED — first to build (M0) |
-| **T1** | Wired custom build | none / serial GPIO | USB sound card, 48 kHz | DESIGNED |
-| **T2** | ESP32-S3 build | WebSocket JSON over Wi-Fi | binary WS frames (UDP fallback if latency demands) | DESIGNED — Doc 03 |
-| **T3** | nRF52840 BLE (Omi-style) | BLE GATT | Opus over GATT notifications | sketch only |
-| **T4** | LE Audio (nRF5340) | LE Audio | LC3 isochronous | sketch only |
+| **H0** | Stock BT headset + dongle | none (bridge-internal synthesis) | OS audio endpoints (WASAPI), HFP 16 kHz | DESIGNED — first to build (M0) |
+| **H1** | Wired custom build | none / serial GPIO | USB sound card, 48 kHz | DESIGNED |
+| **H2** | ESP32-S3 build | WebSocket JSON over Wi-Fi | binary WS frames (UDP fallback if latency demands) | DESIGNED — Doc 03 |
+| **H3** | nRF52840 BLE (Omi-style) | BLE GATT | Opus over GATT notifications | sketch only |
+| **H4** | LE Audio (nRF5340) | LE Audio | LC3 isochronous | sketch only |
 
-**T0 semantics (normative for M0):** bridge opens the headset's Windows endpoints
+**H0 semantics (normative for M0):** bridge opens the headset's Windows endpoints
 directly; runs wake detection on the continuous mic stream; buffers ≤ 3 s of audio in
 RAM and discards untriggered audio (spec/50 rule 3). Verify the HFP endpoint reports
 16,000 Hz — 8 kHz fallback degrades STT and must be surfaced as a warning at startup.
-In T0/T1 the bridge synthesises HELLO internally (a virtual device with no
+In H0/H1 the bridge synthesises HELLO internally (a virtual device with no
 capabilities) so the orchestrator sees one uniform world.
 
 ## 4. Protocol rules (how the contract stays evolvable)
 
-1. **HELLO first.** No other control message before the handshake (T2+).
+1. **HELLO first.** No other control message before the handshake (H2+).
 2. **Version negotiation.** Device states its `protocol_version`; bridge replies with the
    version it will speak (its own, or the device's if lower). Breaking schema changes bump
    the minor version pre-1.0.
