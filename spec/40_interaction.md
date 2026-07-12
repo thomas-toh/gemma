@@ -28,6 +28,11 @@ IDLE ──wake──▶ LISTENING ──end-of-speech──▶ THINKING ──�
   by default; spoken step narration ("Fetching X…") is a config flag, **default off**.
   The overlay's tool-activity icon is the always-on visual.
 
+> The ≤2-sentence speak/hold split above is an **M0 heuristic**. **M0.5 "It speaks well"
+> (spec/00) replaces it** with a model-tagged output contract — the brain marks what to
+> speak vs hold, plus TTS-safe formatting and speech normalization — so length isn't
+> guessed post-hoc. *(planned, M0.5)*
+
 ## Latency acceptance criteria (M0/M1 gates, measured not vibes — spec/00 D11)
 
 | Turn class | Metric | Target |

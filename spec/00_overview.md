@@ -59,6 +59,7 @@ Definitions only — live progress per track is in [STATE.md](../STATE.md).
 | Milestone | Definition (acceptance test) |
 |-----------|------------------------------|
 | **M0 — Loop closed** | Wake → question: audible feedback < 1.5 s, spoken answer starts < 4 s (D11), ×10 consecutively; stock headset (H0), B1 brain, zero tools |
+| **M0.5 — It speaks well** | A 10-prompt bank (factual · complex · list-shaped · tool-result) each renders voice-correctly *without* the sentence-count heuristic: short answers spoken whole, long → spoken TL;DR + held detail, no markdown/emoji/URL reaches TTS, numbers/units read naturally. A model-driven output contract replaces spec/40's ≤2-sentence stopgap; adapter-agnostic (B2-tolerant parse). |
 | **M1 — It acts** | "Open Spotify and play something" → `awake` earcon; audit log shows the calls; 6 starter tools |
 | **M2 — It's local** | M1 script passes with Wi-Fi unplugged (B2 brain) |
 | **M3 — On your head** | Full loop on custom ESP32 headset (H2), on-device wake, battery > 4 h |

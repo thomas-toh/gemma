@@ -61,7 +61,11 @@ Last updated: 2026-07-12
   Re-run with a longer streamed output — feeds the provisional D11 numbers (spec/00).
 - **In flight:** —
 - **Next:** 1) install Ollama on the 5080, pull one small model, sanity-check tokens/sec
-  (B2 groundwork — no commitment to final model; that's the M2 bake-off)
+  (B2 groundwork — no commitment to final model; that's the M2 bake-off) ·
+  2) **M0.5 "It speaks well" (spec/00):** voice output contract — model-tagged
+  spoken/held split (retires spec/40's sentence-count heuristic), versioned persona
+  prompt (retires the `claude.py` placeholder), speech normalization, B2-tolerant
+  parse. Consumed by the orchestrator (Track G).
 
 ## Track T — Tools (Contract T → M1)
 
