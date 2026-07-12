@@ -1,6 +1,6 @@
 # Spec 00 — System overview & status
 
-**Status: PARTIAL** (bridge steps 0–4 built — see STATE) · Last reconciled: 2026-07-12 · Decisions record: [docs/02](../docs/02_architecture/02_system_architecture.md)
+**Last reconciled: 2026-07-12** · Build progress: [STATE.md](../STATE.md) · Decisions record: [docs/02](../docs/02_architecture/02_system_architecture.md)
 
 ## The system in one paragraph
 
@@ -41,26 +41,28 @@ per-track *sub-steps* live in `STATE.md`; the frozen M0 build order is in docs/0
 
 ## Component inventory
 
-| Component | Spec | Code location (future) | Status |
-|-----------|------|------------------------|--------|
-| Headset hardware (H0 stock → H2 ESP32) | [10_contract_h](10_contract_h.md) | `firmware/` | DESIGNED — Doc 03 pending |
-| Transport adapters | [10_contract_h](10_contract_h.md) §3 | `bridge/transports/` | DESIGNED |
-| Audio pipeline (wake, VAD, STT, TTS, earcons) | [40_interaction](40_interaction.md) | `bridge/audio/` | DESIGNED |
-| Visual overlay (PC, post-M0 supplement) | [40_interaction](40_interaction.md) § Visual output | `bridge/ui/` (future) | DESIGNED — deferred |
-| Orchestrator (state machine) | [40_interaction](40_interaction.md) | `bridge/orchestrator.py` | DESIGNED |
-| Brain adapters | [20_contract_b](20_contract_b.md) | `bridge/brains/` | DESIGNED |
-| Tool registry + executor | [30_contract_t](30_contract_t.md) + [schemas/tools.json](schemas/tools.json) | `bridge/tools/` | DESIGNED |
-| Security posture | [50_security](50_security.md) | cross-cutting | BINDING |
+| Component | Spec | Code location | Lands at |
+|-----------|------|---------------|----------|
+| Headset hardware (H0 stock → H2 ESP32) | [10_contract_h](10_contract_h.md) | `firmware/` | M3 (Doc 03 pending) |
+| Transport adapters | [10_contract_h](10_contract_h.md) §3 | `bridge/transports/` | H0 bridge-internal at M0 · H2 adapter at M3 |
+| Audio pipeline (wake, VAD, STT, TTS, earcons) | [40_interaction](40_interaction.md) | `bridge/audio/` | M0 |
+| Visual overlay (PC, post-M0 supplement) | [40_interaction](40_interaction.md) § Visual output | `bridge/ui/` | post-M0 |
+| Orchestrator (state machine) | [40_interaction](40_interaction.md) | `bridge/orchestrator.py` | M0 (build step 6) |
+| Brain adapters | [20_contract_b](20_contract_b.md) | `bridge/brains/` | B1 at M0 · B2 at M2 · B3 at M4 |
+| Tool registry + executor | [30_contract_t](30_contract_t.md) + [schemas/tools.json](schemas/tools.json) | `bridge/tools/` | M1 |
+| Security posture | [50_security](50_security.md) | cross-cutting | always (BINDING) |
 
 ## Milestones
 
-| Milestone | Definition (acceptance test) | Status |
-|-----------|------------------------------|--------|
-| **M0 — Loop closed** | Wake → question → spoken answer < 2 s, ×10 consecutively; stock headset (H0), B1 brain, zero tools | not started |
-| **M1 — It acts** | "Open Spotify and play something" → `awake` earcon; audit log shows the calls; 6 starter tools | not started |
-| **M2 — It's local** | M1 script passes with Wi-Fi unplugged (B2 brain) | not started |
-| **M3 — On your head** | Full loop on custom ESP32 headset (H2), on-device wake, battery > 4 h | not started |
-| **M4 — Experiments** | B3 adapter · bone-conduction mic · H3/H4 · per-request routing | not started |
+Definitions only — live progress per track is in [STATE.md](../STATE.md).
+
+| Milestone | Definition (acceptance test) |
+|-----------|------------------------------|
+| **M0 — Loop closed** | Wake → question: audible feedback < 1.5 s, spoken answer starts < 4 s (D11), ×10 consecutively; stock headset (H0), B1 brain, zero tools |
+| **M1 — It acts** | "Open Spotify and play something" → `awake` earcon; audit log shows the calls; 6 starter tools |
+| **M2 — It's local** | M1 script passes with Wi-Fi unplugged (B2 brain) |
+| **M3 — On your head** | Full loop on custom ESP32 headset (H2), on-device wake, battery > 4 h |
+| **M4 — Experiments** | B3 adapter · bone-conduction mic · H3/H4 · per-request routing |
 
 ## Fixed platform decisions
 
@@ -79,3 +81,17 @@ exactly two seams: audio endpoint access and the Contract T tool-executor backen
 platform-neutral by construction. Windows is the reference platform (built and tested
 first); macOS parity is checked at each milestone, not retrofitted at the end.
 Portability design: docs/04 §3.
+
+**D11 (2026-07-12): feedback-first latency posture.** The system guarantees fast
+*feedback*, not fast *answers*. Every turn class produces something audible within
+**1.5 s** of end-of-speech (the first spoken word, or the `working` earcon). A no-tool
+conversational answer must then start speaking within **4 s** (B1) / **5 s** (B2) —
+provisional numbers pending the owed measurements (STATE: step-3 live mic test, B1
+first-token re-run). A tool-running turn is acknowledged within the same 1.5 s but has
+**no completion bound** — it finishes when it finishes and signals with the
+`task-complete`/`error` earcon. Consequences: TTS stays **generate-then-play** for
+M0/M1 (sentence-streamed TTS parked; reopen only if measured use feels slow); spoken
+tool-progress narration is config-gated, **default off** (`working` ping, then silence —
+the PC overlay carries continuous state). Clock definition in spec/40. No "complex task
+mode": long-running work is a property of the turn the orchestrator observes (ToolCall
+events), never a spoken mode the user must remember to enter or exit.

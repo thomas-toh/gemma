@@ -1,6 +1,9 @@
 # Spec 30 — Contract T: tools & safety tiers
 
-**Status: DESIGNED (no code)** · Last reconciled: 2026-07-12 · Registry (executable): [schemas/tools.json](schemas/tools.json)
+**Last reconciled: 2026-07-12** · Build progress: [STATE.md](../STATE.md) · Registry (executable): [schemas/tools.json](schemas/tools.json)
+
+*(planned — executor and per-OS backends land at M1; the registry file itself is live
+already, loaded by `bridge/config.py`. See STATE, Track T.)*
 
 The registry file is the single source of truth for tool names, parameter schemas and
 tiers. The bridge loads it at startup; brains receive it (filtered) as their tool list;

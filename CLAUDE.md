@@ -11,6 +11,9 @@ to code — with AI assistance. Not a commercial product.
 CLAUDE.md          ← you are here; keep THIN (index + rules only, never the spec itself)
 STATE.md           ← the jump table: per-track status + next actions. Read at session start;
                      update in the same commit as the work it describes.
+NOTES.md           ← operational findings (topic-keyed, lean). NEVER required reading —
+                     consult only when a task touches its topic; promote anything
+                     load-bearing into spec/README/code.
 spec/              ← CURRENT TRUTH of the system. Read the relevant file before working on an area.
   00_overview.md      system map + milestone status (start here)
   10_contract_h.md    headset ↔ bridge interface
@@ -20,7 +23,7 @@ spec/              ← CURRENT TRUTH of the system. Read the relevant file befor
   50_security.md      binding security & privacy posture
   schemas/            EXECUTABLE truth — JSON the code imports (never copy values into code)
 docs/              ← frozen decision records (01 scoping, 02 architecture, …). Never retro-edited.
-bridge/            ← (future) Python daemon — Doc 04 defines it
+bridge/            ← Python daemon — Doc 04 defines it; build status in STATE.md
 firmware/          ← (future) ESP32 headset firmware — Doc 03 defines it
 ```
 
@@ -28,8 +31,11 @@ firmware/          ← (future) ESP32 headset firmware — Doc 03 defines it
 
 1. **Spec discipline.** `spec/` is the single current truth. Any change to behaviour,
    an interface, or a schema updates the relevant `spec/` file **in the same commit**.
-   Every spec file carries a `Status:` header (`DESIGNED` | `PARTIAL` | `AS-BUILT`) and a
-   `Last reconciled:` date — update both when touching it.
+   Every spec file carries a `Last reconciled:` date (update it when touching the file)
+   and a build-progress pointer to `STATE.md` — **STATE is the sole record of build
+   progress**; spec files never state how built something is. Sections describing
+   unbuilt behaviour are tagged inline (`planned, M1`). spec/50's `BINDING` header
+   stays — that is normativity, not build status.
 2. **Docs are frozen.** Files under `docs/` record decisions and reasoning at a point in
    time. Never edit them to track reality; if superseded, add a one-line
    `> Superseded by spec/<file> §<n>` note at the top and nothing else.
@@ -41,6 +47,12 @@ firmware/          ← (future) ESP32 headset firmware — Doc 03 defines it
    disk; LED state must truthfully reflect audio streaming; the hardware mute switch
    physically cuts the mic. These are design constants, not preferences.
 5. **Keep this file thin.** If a section here grows past a screen, it belongs in `spec/`.
+
+## Conventions
+
+- `ponytail:` code comments are the ponytail plugin's markers (deliberate minimal-code
+  shortcut + its revisit condition). Leave them intact when editing nearby; the debt
+  ledger is greppable, or harvested with `/ponytail-debt` where the plugin is loaded.
 
 ## How to work with Thomas
 
@@ -60,6 +72,5 @@ firmware/          ← (future) ESP32 headset firmware — Doc 03 defines it
 
 ## Current state
 
-`STATE.md` is the live answer (per-track). Milestone definitions live in
-`spec/00_overview.md`. As of July 2026: everything is `DESIGNED`, no code exists yet.
-First build target is **M0** (voice loop closed on stock headset + Claude API brain).
+`STATE.md` is the live answer (per-track); milestone definitions live in
+`spec/00_overview.md`. This file makes no status claims — dated claims here rot.

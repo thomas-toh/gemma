@@ -1,7 +1,7 @@
 """Track G step 3 (docs/04 §8): wake -> listen (VAD) -> transcribe -> console.
 
 Extends step 2. On wake it captures speech, uses Silero VAD to find end-of-speech
-(350 ms of silence, spec/40), then transcribes the utterance with faster-whisper
+(1 s of silence, spec/40; --silence-ms to tune), then transcribes the utterance with faster-whisper
 (small.en) and prints the text. A little pre-roll from the ring buffer keeps the start
 of the sentence. All audio stays in RAM and is dropped after transcription (spec/50
 rule 3) -- nothing is written to disk.
@@ -39,7 +39,7 @@ NOSPEECH_MS = 3000                                # give up if nothing is said a
 PREROLL_MS = 200                                  # pre-roll from ring buffer (tune: onset vs
                                                   # bleeding the wake word into the transcript)
 
-SILENCE_CHUNKS = (SILENCE_MS + VAD_CHUNK_MS - 1) // VAD_CHUNK_MS   # ceil -> 11 (~352 ms)
+SILENCE_CHUNKS = (SILENCE_MS + VAD_CHUNK_MS - 1) // VAD_CHUNK_MS   # ceil -> 32 (~1024 ms)
 MAX_CHUNKS = MAX_UTTERANCE_S * 1000 // VAD_CHUNK_MS                # 937 (~30 s)
 NOSPEECH_CHUNKS = NOSPEECH_MS // VAD_CHUNK_MS                      # 93 (~3 s)
 PREROLL_BLOCKS = PREROLL_MS // BLOCK_MS                            # 2 (~160 ms)

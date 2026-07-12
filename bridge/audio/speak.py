@@ -154,6 +154,8 @@ def speak(text: str, voice: str = VOICE) -> float:
 def _selfcheck() -> None:
     """No audio/model: every schema earcon generates a non-empty tone within its maxMs."""
     maxms = {e["id"]: e["maxMs"] for e in load_schemas()["earcons"]["earcons"]}
+    stray = set(TONES) - set(maxms)          # a motif whose id left the schema would
+    assert not stray, f"TONES has motifs for ids not in the schema: {sorted(stray)}"  # otherwise die silently
     for name in sorted(_earcon_ids()):
         samples = _tone(TONES.get(name, DEFAULT_TONE), SAMPLE_RATE_OUT)
         dur_ms = len(samples) / SAMPLE_RATE_OUT * 1000

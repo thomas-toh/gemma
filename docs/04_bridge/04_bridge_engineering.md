@@ -1,5 +1,7 @@
 # Project Gemma — Bridge Engineering
 
+> Superseded in part: secrets handling by spec/50 §10 (OS credential store — not env vars as §5 says); repo layout, module names and STT model by spec/00 + spec/40 + the `bridge/` tree as built.
+
 **Doc 04 of the project series** · *Status: draft for discussion · July 2026*
 
 The engineering plan for the bridge: the Python daemon that is the whole product until

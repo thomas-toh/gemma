@@ -1,6 +1,9 @@
 # Spec 10 — Contract H: headset ↔ bridge
 
-**Status: DESIGNED (no code)** · Last reconciled: 2026-07-11 · Message shapes: [schemas/messages.schema.json](schemas/messages.schema.json) (v0.2.0)
+**Last reconciled: 2026-07-12** · Build progress: [STATE.md](../STATE.md) · Message shapes: [schemas/messages.schema.json](schemas/messages.schema.json) (v0.2.0)
+
+*(planned — no transport adapter exists yet; the bridge currently implements the H0
+capture semantics internally: ring buffer, discard, PC-side wake. See STATE, Track G.)*
 
 The headset is audio I/O plus wake detection and nothing else. Every physical device
 generation implements this same contract via a transport adapter; nothing above the
@@ -33,8 +36,8 @@ Control channel = JSON per schema; audio = raw binary on the transport's data pa
 
 ## 3. Transport profiles
 
-| Profile | Device | Control path | Audio path | Status |
-|---------|--------|--------------|------------|--------|
+| Profile | Device | Control path | Audio path | Maturity |
+|---------|--------|--------------|------------|----------|
 | **H0** | Stock BT headset + dongle | none (bridge-internal synthesis) | OS audio endpoints (WASAPI), HFP 16 kHz | DESIGNED — first to build (M0) |
 | **H1** | Wired custom build | none / serial GPIO | USB sound card, 48 kHz | DESIGNED |
 | **H2** | ESP32-S3 build | WebSocket JSON over Wi-Fi | binary WS frames (UDP fallback if latency demands) | DESIGNED — Doc 03 |

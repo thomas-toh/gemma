@@ -1,5 +1,5 @@
 {
-  "$comment": "Earcon vocabulary — SINGLE SOURCE OF TRUTH (spec/40). The bridge maps ids to sounds (M0: generated tones in bridge/audio/speak.py; later: WAV files in bridge/assets/earcons/); H2+ headsets may cache them locally. Sounds ring out to ~1.1 s (except 'timer'), distinct from each other, pleasant at low volume. What's latency-bounded is the earcon *onset* (spec/40: wake→awake < 300 ms), not its length — the ring-out overlaps the next phase.",
+  "$comment": "Earcon vocabulary — SINGLE SOURCE OF TRUTH for ids, meanings and maxMs. Design rationale (ring-out, onset-vs-length, sound mapping) lives in spec/40 § Voice out. The bridge maps ids to sounds (M0: generated tones in bridge/audio/speak.py; later: WAV files in bridge/assets/earcons/); H2+ headsets may cache them locally.",
   "version": "0.3.0",
   "earcons": [
     { "id": "awake",         "meaning": "wake word heard, now listening",                     "maxMs": 1100 },

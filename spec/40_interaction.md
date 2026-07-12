@@ -1,8 +1,8 @@
 # Spec 40 — Interaction model
 
-**Status: DESIGNED** (wake + capture/STT + voice-out front-end PARTIAL — `bridge/audio/{wake,listen,speak}.py`) · Last reconciled: 2026-07-12 · Earcon ids: [schemas/earcons.json](schemas/earcons.json)
+**Last reconciled: 2026-07-12** · Build progress: [STATE.md](../STATE.md) (Track G) · Earcon ids: [schemas/earcons.json](schemas/earcons.json)
 
-## State machine
+## State machine *(planned — orchestrator, build step 6)*
 
 ```
 IDLE ──wake──▶ LISTENING ──end-of-speech──▶ THINKING ──┬─▶ SPEAKING ─▶ FOLLOW-UP ─▶ IDLE
@@ -14,25 +14,39 @@ IDLE ──wake──▶ LISTENING ──end-of-speech──▶ THINKING ──�
 - `FOLLOW-UP`: 8 s window accepting speech without re-wake. Mic open, LED `listening`.
 - **Barge-in (binding):** user speech during `SPEAKING` stops TTS ≤ 250 ms and routes
   the speech as new input.
-- `THINKING` > 1.5 s fires the `working` earcon once.
+- `THINKING` > 1.5 s fires the `working` earcon once — this is the D11 feedback
+  guarantee for any turn that can't answer fast.
 
-## Narration rules (agreed 2026-07-10)
+## Narration rules (agreed 2026-07-10; enforced by the orchestrator, build step 6)
 
 - Answers ≤ 2 sentences: spoken automatically.
 - Longer answers: play `answer-ready`, hold the text; "read it" (in follow-up window)
   speaks it. Never lecture uninvited.
 - Successful Tier 2 actions: `task-complete` earcon only. Failures: `error` earcon + one-sentence explanation.
 - Tier 3: `ask` earcon + spoken one-line summary of what will happen.
+- Tool progress (M1, planned — D11): during `ACTING`, the `working` ping then silence
+  by default; spoken step narration ("Fetching X…") is a config flag, **default off**.
+  The overlay's tool-activity icon is the always-on visual.
 
-## Latency acceptance criteria (M0/M1 gates, measured not vibes)
+## Latency acceptance criteria (M0/M1 gates, measured not vibes — spec/00 D11)
 
-| Metric | Target |
-|--------|--------|
-| Wake detect → `awake` earcon | < 300 ms |
-| End of speech → first spoken word (B1) | < 1.5 s |
-| End of speech → first spoken word (B2) | < 2.0 s |
-| End of speech → Tier 2 action executed | < 1.5 s |
-| Barge-in → TTS stopped | < 250 ms |
+| Turn class | Metric | Target |
+|------------|--------|--------|
+| any | Wake detect → `awake` earcon | < 300 ms |
+| any | End of speech → audible feedback (first spoken word or `working` earcon) | < 1.5 s |
+| no-tool answer | End of speech → first spoken word (B1) | < 4 s* |
+| no-tool answer | End of speech → first spoken word (B2) | < 5 s* |
+| tool turn | End of speech → starter-tool (Tier 2) action executed | < 1.5 s |
+| tool turn | Completion of longer work | unbounded — ends with `task-complete`/`error` earcon |
+| any | Barge-in → TTS stopped | < 250 ms |
+
+*Provisional (D11) — confirm with the owed measurements (STATE: step-3 live mic test,
+B1 first-token re-run), then fix or amend with data.
+
+**Clock (binding).** "End of speech" = the moment VAD *declares* the turn over. The
+silence timer (1 s) runs before this clock starts — it is a turn-taking cost, tuned
+separately (`--silence-ms` now; semantic endpointing at M1), not part of the response
+budget.
 
 ## Wake detection (M0)
 
@@ -62,9 +76,13 @@ rate:
 - **Earcons** — short signal tones, one per `schemas/earcons.json` id (ids read from the
   schema, never hard-coded). M0 uses *generated* placeholder tones kept within each id's
   `maxMs`; designed WAVs (in `bridge/assets/earcons/`) are a later sound-design task.
+  Sound-design intent: distinct from each other, pleasant at low volume, ringing out to
+  ~1.1 s (`timer` longer). What's latency-bounded is the earcon **onset** (wake →
+  `awake` < 300 ms), not its length — the ring-out overlaps the next phase.
 - **TTS** — **Kokoro** via `kokoro-onnx` (ONNX runtime, **no torch**; `espeakng-loader`
   bundles the espeak-ng phonemiser, so no manual install). Native 24 kHz. Generate-then-
-  play for M0; streaming TTS is a later latency optimisation. CPU is faster-than-real-time,
+  play — the accepted M0/M1 design (spec/00 D11); sentence-streamed TTS is parked
+  (STATE), reopened only if measured use feels slow. CPU is faster-than-real-time,
   so no GPU needed. Model files fetch once to `~/.cache/gemma/`.
 
 *When* each earcon fires and *whether* to speak vs. stay quiet is the orchestrator's job
@@ -97,6 +115,8 @@ Role and hard boundaries:
   `asleep` earcon: falling asleep is passive and a lasting state, better shown than beeped.
 - **Out of scope for M0** (close the voice loop first). Overlay tech per platform
   (Windows/macOS always-on-top transparent window) and visual design are TBD when scheduled.
+
+## Open tuning items (M0)
 
 Custom wake phrase (replace the `hey_jarvis` stand-in) + false-accept testing (D8) ·
 end-of-speech silence threshold (1 s start, `--silence-ms` to tune live) · pre-roll

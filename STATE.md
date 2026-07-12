@@ -4,47 +4,26 @@ Purpose: make track-hopping free. Thomas works by mood; that is fine **because**
 contracts isolate the tracks. The rules that keep it safe: pick a track by mood, but
 within a track always take the next queued action · max one item in flight per track ·
 when abandoning mid-task, park it here with a one-line note · read this file at session
-start, update it in the same commit as the work.
+start, update it in the same commit as the work · when a step closes, collapse its
+entry to one or two lines — durable knowledge moves out (behaviour → spec · run
+instructions → README · findings → NOTES.md · decisions → a D-number in spec/00).
 
 Last updated: 2026-07-12
 
 ## Track G — Bridge (Doc 04 → M0, M1, M2)
 
-- **Works now:** repo committed on `main`. `bridge/` skeleton: `config.py` loads
-  `spec/schemas/*` at runtime (hard rule 3), `log.py` logging setup. **Step 2 built:**
-  `bridge/audio/wake.py` — mic → ≤3 s in-RAM ring buffer → openWakeWord (`hey_jarvis`,
-  ONNX) → console. Cross-platform (sounddevice + onnxruntime, Windows + macOS, D10).
-  `--selfcheck` (buffer discipline, no mic) passes. Live mic test passed on Windows and
-  macOS — cross-platform (D10) confirmed. **Step 3 built:** `bridge/audio/listen.py` —
-  wake → Silero VAD (1 s end-of-speech, `--silence-ms` to tune) → faster-whisper
-  `small.en` → console.
-  Engine A: uses CUDA when loadable, else CPU (one path Win+Mac); `transcribe()` is the
-  seam for a Mac-GPU engine later. VAD runs openWakeWord's bundled Silero ONNX via
-  onnxruntime — **no torch** (torch won't install here: Windows long-path limit).
-  `--selfcheck` (end-of-speech logic + VAD wrapper, no mic) passes; `transcribe()` logs
-  real STT latency. **Step 3 live-tested on Windows** (wake→speech→transcript confirmed);
-  macOS live test owed. Run instructions in `README.md`. Steps 0–3 done.
-  - **GPU STT working** on the RTX-5080: `pip install -e ".[gpu-cuda]"` (cuBLAS/cuDNN/
-    cudart) + `listen.py` adds their DLL dirs to the search path (Store-Python quirk).
-    Measured `small.en`, 2 s clip: **CPU 887 ms vs GPU ~33 ms warm** (~28x); the one-time
-    Blackwell kernel JIT (~26 s) is now cached to disk. macOS stays CPU (Metal deferred).
-    Numbers are on synthetic audio — real-speech figures come from the live mic test.
-  **Step 4 built:** `bridge/audio/speak.py` — earcons (generated placeholder tones, one
-  per schema id, within each `maxMs`) + Kokoro TTS (`kokoro-onnx`, no torch, 24 kHz),
-  played via sounddevice. espeak-ng phonemiser auto-bundled (`espeakng-loader`, no manual
-  install). `--selfcheck` (tone gen) passes; synth validated to array (1.26 s for a test
-  line). **7 earcons** (schema 0.3.0): `awake · working · task-complete · ask ·
-  answer-ready · timer · error` (renamed from ack/confirm/ok; `fail` merged into
-  `error`). Earcons: warm overlapping-ring tonal chimes, **auditioned & approved on wired
-  IEMs**. `ask` (Tier 3) deliberately kept distinct — safety gate. Model files cache to
-  `~/.cache/gemma/`. Steps 0–4 done. PC visual overlay recorded as designed/deferred
-  (spec/40 § Visual output, spec/00 inventory).
-  - **Bluetooth onset buzz (noted):** BT output (AirPods, and the H0/H3/H4 headsets)
-    glitches on the first audio after silence — the link waking from idle. Wired output
-    is clean. Fix = a persistent warm output stream at the orchestrator (step 6, spec/40).
+- **Works now:** steps 0–4 built and `--selfcheck`-green. `bridge/`: `config.py`
+  (loads `spec/schemas/*`, hard rule 3) + `log.py`; `audio/wake.py` (mic → ≤3 s RAM
+  ring → openWakeWord); `audio/listen.py` (wake → Silero VAD → faster-whisper
+  `small.en`, GPU when loadable else CPU); `audio/speak.py` (earcons + Kokoro TTS,
+  24 kHz). Cross-platform per D10 (step 2 verified live on both OSes). Run
+  instructions: `README.md` · GPU setup, benchmarks, quirks: `NOTES.md`.
+- **Owed:** live mic test of steps 3–4 on both OSes (real-speech STT figures + earcon/
+  TTS audition) — feeds the provisional D11 numbers (spec/00).
 - **In flight:** —
 - **Next (M0 build order, docs/04 §8):**
-  5) B1 Claude adapter, streamed to console · 6) orchestrator wiring = **M0 acceptance**
+  5) B1 Claude adapter, streamed to console · 6) orchestrator wiring, incl. the
+  persistent warm output stream (BT onset-buzz fix, spec/40) = **M0 acceptance**
   · 7) metrics + replay harness (5 recordings)
 
 ## Track H — Headset (Doc 03 → M3)
@@ -63,10 +42,11 @@ Last updated: 2026-07-12
 
 - **Works now:** B1 smoke test (`scripts/b1_smoke.py`) green on Windows — auth, streaming,
   tool-call/tool-loop all PASS. Dedicated "gemma" key (spend-capped) lives in Windows
-  Credential Manager under service `gemma`. First-token measured **1817 ms** — but that
-  run had `chunks=1` (whole short reply in one chunk, first≈total), so it's really
-  "time to full short response," cold, and well above the 300–900 ms spec/40 expects.
-  **Re-measure** with a longer streamed output before trusting it for the latency budget.
+  Credential Manager under service `gemma`.
+- **Owed:** first-token re-measure — the recorded **1817 ms** ran with `chunks=1`
+  (whole short reply in one chunk, first≈total), so it's really "time to full short
+  response," cold; well above the ~300–900 ms ballpark noted in `b1_smoke.py`.
+  Re-run with a longer streamed output — feeds the provisional D11 numbers (spec/00).
 - **In flight:** —
 - **Next:** 1) install Ollama on the 5080, pull one small model, sanity-check tokens/sec
   (B2 groundwork — no commitment to final model; that's the M2 bake-off)
@@ -81,7 +61,10 @@ Last updated: 2026-07-12
 ## Specs — spec & decision docs
 
 - **Works now:** spec/ scaffold v0.2 (Contract H v0.2.0, D10 cross-platform recorded);
-  docs 01, 02, 04 frozen
+  **D11 feedback-first latency posture recorded** (spec/00, 2026-07-12: feedback < 1.5 s
+  every turn; no-tool answers bounded; tool turns acknowledged, not bounded;
+  generate-then-play stays); `NOTES.md` added for operational findings (routing rule
+  in the preamble above); docs 01, 02, 04 frozen
 - **In flight:** —
 - **Next:** Doc 03 (headset engineering) when the hardware mood strikes
 
@@ -94,4 +77,9 @@ an openWakeWord replacement (lower false-accept rate; contained swap behind `wak
 **semantic endpointing** (M1) — complete-thought detection so long composed prompts
 aren't cut off, the real fix beyond the silence timer (spec/40) · **PC visual overlay**
 (Dynamic-Island-style state/text/icons; a supplement to audio, never a replacement) —
-designed & deferred, see spec/40 § Visual output + spec/00 inventory
+designed & deferred, see spec/40 § Visual output + spec/00 inventory ·
+**sentence-streamed TTS** — parked per D11 (feedback beats speed); a contained
+addition to the TTS path later, reopen only if measured daily use feels slow ·
+**long-task interaction pattern** (dispatch-and-notify, heartbeat cadence during long
+silence, mid-task status queries by wake, "work on this in the background" phrasing) —
+design when B3 or a heavyweight tool lands (D11 discussion, 2026-07-12)
