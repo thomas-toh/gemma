@@ -22,8 +22,8 @@ Last updated: 2026-07-12
   seam for a Mac-GPU engine later. VAD runs openWakeWord's bundled Silero ONNX via
   onnxruntime — **no torch** (torch won't install here: Windows long-path limit).
   `--selfcheck` (end-of-speech logic + VAD wrapper, no mic) passes; `transcribe()` logs
-  real STT latency. **Step 3 live mic test owed** (both OSes). Run instructions in
-  `README.md`. Steps 0–3 done.
+  real STT latency. **Step 3 live-tested on Windows** (wake→speech→transcript confirmed);
+  macOS live test owed. Run instructions in `README.md`. Steps 0–3 done.
   - **GPU STT working** on the RTX-5080: `pip install -e ".[gpu-cuda]"` (cuBLAS/cuDNN/
     cudart) + `listen.py` adds their DLL dirs to the search path (Store-Python quirk).
     Measured `small.en`, 2 s clip: **CPU 887 ms vs GPU ~33 ms warm** (~28x); the one-time
@@ -33,8 +33,12 @@ Last updated: 2026-07-12
   per schema id, within each `maxMs`) + Kokoro TTS (`kokoro-onnx`, no torch, 24 kHz),
   played via sounddevice. espeak-ng phonemiser auto-bundled (`espeakng-loader`, no manual
   install). `--selfcheck` (tone gen) passes; synth validated to array (1.26 s for a test
-  line). Earcons: warm overlapping-ring FM-free tonal chimes (tuned by ear against
-  reference notification sounds). Model files cache to `~/.cache/gemma/`. Steps 0–4 done.
+  line). **7 earcons** (schema 0.3.0): `awake · working · task-complete · ask ·
+  answer-ready · timer · error` (renamed from ack/confirm/ok; `fail` merged into
+  `error`). Earcons: warm overlapping-ring tonal chimes, **auditioned & approved on wired
+  IEMs**. `ask` (Tier 3) deliberately kept distinct — safety gate. Model files cache to
+  `~/.cache/gemma/`. Steps 0–4 done. PC visual overlay recorded as designed/deferred
+  (spec/40 § Visual output, spec/00 inventory).
   - **Bluetooth onset buzz (noted):** BT output (AirPods, and the H0/H3/H4 headsets)
     glitches on the first audio after silence — the link waking from idle. Wired output
     is clean. Fix = a persistent warm output stream at the orchestrator (step 6, spec/40).
