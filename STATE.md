@@ -12,19 +12,31 @@ Last updated: 2026-07-12
 
 ## Track G — Bridge (Doc 04 → M0, M1, M2)
 
-- **Works now:** steps 0–4 built and `--selfcheck`-green. `bridge/`: `config.py`
+- **Works now:** steps 0–5 built and `--selfcheck`-green. `bridge/`: `config.py`
   (loads `spec/schemas/*`, hard rule 3) + `log.py`; `audio/wake.py` (mic → ≤3 s RAM
   ring → openWakeWord); `audio/listen.py` (wake → Silero VAD → faster-whisper
   `small.en`, GPU when loadable else CPU); `audio/speak.py` (earcons + Kokoro TTS,
-  24 kHz). Cross-platform per D10 (step 2 verified live on both OSes). Run
+  24 kHz); `brains/` (Contract B): `base.py` (BrainAdapter Protocol + BrainEvent
+  types) + `claude.py` (B1 Anthropic adapter — async streaming, live console
+  round-trip OK, zero tools; no `thinking` = fast first token; model via
+  `GEMMA_BRAIN_MODEL`, default `claude-opus-4-8`, drop to sonnet-5/haiku-4-5 for the
+  voice loop). Cross-platform per D10 (step 2 verified live on both OSes). Run
   instructions: `README.md` · GPU setup, benchmarks, quirks: `NOTES.md`.
 - **Owed:** live mic test of steps 3–4 on both OSes (real-speech STT figures + earcon/
   TTS audition) — feeds the provisional D11 numbers (spec/00).
 - **In flight:** —
 - **Next (M0 build order, docs/04 §8):**
-  5) B1 Claude adapter, streamed to console · 6) orchestrator wiring, incl. the
-  persistent warm output stream (BT onset-buzz fix, spec/40) = **M0 acceptance**
-  · 7) metrics + replay harness (5 recordings)
+  6) orchestrator wiring 2→5 into the spec/40 state machine (+ follow-up, barge-in,
+  the persistent warm output stream = BT onset-buzz fix) = **M0 acceptance** ·
+  7) metrics + replay harness (5 recordings)
+- **M0-close gate (Thomas; beyond docs/04 §8):** settings surface for tool setup —
+  per-adapter tunables, exposed to the user before M0 is called done. Claude knobs:
+  model · effort · thinking. Must be **adapter-aware** (effort/thinking are
+  Claude-only; a local B2 model has temperature instead), not a flat global form.
+  Now: model via env `GEMMA_BRAIN_MODEL`; thinking hardcoded off; effort unwired.
+  Missing piece is a config source (file → panel); reuses the routing config already
+  reserved in spec/20. Adapter code shape (~8 lines to promote the knobs to params)
+  noted in the 2026-07-12 discussion.
 
 ## Track H — Headset (Doc 03 → M3)
 

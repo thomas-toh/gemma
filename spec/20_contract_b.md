@@ -2,8 +2,8 @@
 
 **Last reconciled: 2026-07-12** · Build progress: [STATE.md](../STATE.md) · Rationale: docs/02 §3
 
-*(planned — no adapter code yet; B1 is build step 5. The B1 API path itself is
-smoke-tested: `scripts/b1_smoke.py`. See STATE, Tracks G & B.)*
+*(Interface contract. Build status + the standalone B1 API smoke test
+(`scripts/b1_smoke.py`) live in STATE, Tracks G & B.)*
 
 One async interface; every brain is a plug-in behind it. Internal message shape is the
 chat-completions convention (system/user/assistant/tool messages, JSON-schema tools).
