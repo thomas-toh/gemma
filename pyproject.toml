@@ -20,6 +20,9 @@ dependencies = [
     # step 3: STT. VAD needs no new dep -- we run the Silero VAD ONNX model that
     # openWakeWord already ships, via onnxruntime (no torch; see bridge/audio/listen.py).
     "faster-whisper",
+    # step 4: TTS out. Kokoro on onnxruntime (no torch); espeakng-loader (pulled in)
+    # bundles the espeak-ng phonemiser, so no manual install. Earcons need no dep.
+    "kokoro-onnx",
 ]
 
 [project.optional-dependencies]

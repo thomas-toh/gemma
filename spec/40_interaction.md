@@ -1,6 +1,6 @@
 # Spec 40 — Interaction model
 
-**Status: DESIGNED** (wake + capture/STT front-end PARTIAL — `bridge/audio/{wake,listen}.py`) · Last reconciled: 2026-07-11 · Earcon ids: [schemas/earcons.json](schemas/earcons.json)
+**Status: DESIGNED** (wake + capture/STT + voice-out front-end PARTIAL — `bridge/audio/{wake,listen,speak}.py`) · Last reconciled: 2026-07-12 · Earcon ids: [schemas/earcons.json](schemas/earcons.json)
 
 ## State machine
 
@@ -21,14 +21,14 @@ IDLE ──wake──▶ LISTENING ──end-of-speech──▶ THINKING ──�
 - Answers ≤ 2 sentences: spoken automatically.
 - Longer answers: play `answer-ready`, hold the text; "read it" (in follow-up window)
   speaks it. Never lecture uninvited.
-- Successful Tier 2 actions: earcon only. Failures: earcon + one-sentence explanation.
-- Tier 3: `confirm?` earcon + spoken one-line summary of what will happen.
+- Successful Tier 2 actions: `task-complete` earcon only. Failures: `error` earcon + one-sentence explanation.
+- Tier 3: `ask` earcon + spoken one-line summary of what will happen.
 
 ## Latency acceptance criteria (M0/M1 gates, measured not vibes)
 
 | Metric | Target |
 |--------|--------|
-| Wake detect → `ack` earcon | < 300 ms |
+| Wake detect → `awake` earcon | < 300 ms |
 | End of speech → first spoken word (B1) | < 1.5 s |
 | End of speech → first spoken word (B2) | < 2.0 s |
 | End of speech → Tier 2 action executed | < 1.5 s |
@@ -55,7 +55,48 @@ seam, extending spec/00 D10). Normal turns end on VAD silence at any length; the
 cap is a runaway backstop only (on hit: transcribe what we have, warn). Audio is
 RAM-only, discarded after transcription (spec/50 rule 3).
 
-## Open tuning items
+## Voice out — earcons & TTS (M0)
+
+Two output paths (`bridge/audio/speak.py`), played via sounddevice at the 24 kHz schema
+rate:
+- **Earcons** — short signal tones, one per `schemas/earcons.json` id (ids read from the
+  schema, never hard-coded). M0 uses *generated* placeholder tones kept within each id's
+  `maxMs`; designed WAVs (in `bridge/assets/earcons/`) are a later sound-design task.
+- **TTS** — **Kokoro** via `kokoro-onnx` (ONNX runtime, **no torch**; `espeakng-loader`
+  bundles the espeak-ng phonemiser, so no manual install). Native 24 kHz. Generate-then-
+  play for M0; streaming TTS is a later latency optimisation. CPU is faster-than-real-time,
+  so no GPU needed. Model files fetch once to `~/.cache/gemma/`.
+
+*When* each earcon fires and *whether* to speak vs. stay quiet is the orchestrator's job
+(step 6) per the narration rules above — step 4 is only the mechanism.
+
+**Bluetooth output keep-alive (binding for BT devices).** Bluetooth links (H0 stock
+headset; H3/H4) idle during silence and glitch on the first audio after silence — a brief
+buzz at each earcon/reply onset. Wired output is unaffected. The daemon MUST hold a
+**persistent output stream** open, feeding silence between sounds, so the link never idles
+(orchestrator, step 6). The step-4 demo opens/closes the device per sound, so it exhibits
+the glitch by design — it disappears under the warm stream.
+
+## Visual output — PC overlay (planned, post-M0)
+
+A supplementary on-screen indicator on the hub PC: a Dynamic-Island-style overlay — a
+small pill/panel near the top of the screen — showing, at a glance, session **state**
+(pulsing dot = awake/listening · spinner = thinking · gone = asleep), the current
+**response text**, and small **status icons** (mute, tool activity, error). Component
+row in spec/00; `bridge/ui/` when built.
+
+Role and hard boundaries:
+- **Supplement, never a replacement.** The system is *eyes-free first* (bone-conduction
+  headset); earcons and TTS remain the primary feedback and must fully carry the
+  experience on their own. The overlay only helps when the user is at the PC and looking.
+- **PC-side, not the headset.** Distinct from spec/10's "no screen on the headset"
+  exclusion — this lives on the hub machine's display, not the device. The wearer can't
+  see their own headset LED either, so the screen is the only *self*-visible surface.
+- **Carries continuous state**, which one-shot earcons can't — so it, not a sound,
+  covers the awake→asleep (end-of-session) transition. This is *why* there is no
+  `asleep` earcon: falling asleep is passive and a lasting state, better shown than beeped.
+- **Out of scope for M0** (close the voice loop first). Overlay tech per platform
+  (Windows/macOS always-on-top transparent window) and visual design are TBD when scheduled.
 
 Custom wake phrase (replace the `hey_jarvis` stand-in) + false-accept testing (D8) ·
 end-of-speech silence threshold (1 s start, `--silence-ms` to tune live) · pre-roll

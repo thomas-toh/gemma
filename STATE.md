@@ -6,7 +6,7 @@ within a track always take the next queued action · max one item in flight per 
 when abandoning mid-task, park it here with a one-line note · read this file at session
 start, update it in the same commit as the work.
 
-Last updated: 2026-07-11
+Last updated: 2026-07-12
 
 ## Track G — Bridge (Doc 04 → M0, M1, M2)
 
@@ -29,10 +29,19 @@ Last updated: 2026-07-11
     Measured `small.en`, 2 s clip: **CPU 887 ms vs GPU ~33 ms warm** (~28x); the one-time
     Blackwell kernel JIT (~26 s) is now cached to disk. macOS stays CPU (Metal deferred).
     Numbers are on synthetic audio — real-speech figures come from the live mic test.
+  **Step 4 built:** `bridge/audio/speak.py` — earcons (generated placeholder tones, one
+  per schema id, within each `maxMs`) + Kokoro TTS (`kokoro-onnx`, no torch, 24 kHz),
+  played via sounddevice. espeak-ng phonemiser auto-bundled (`espeakng-loader`, no manual
+  install). `--selfcheck` (tone gen) passes; synth validated to array (1.26 s for a test
+  line). Earcons: warm overlapping-ring FM-free tonal chimes (tuned by ear against
+  reference notification sounds). Model files cache to `~/.cache/gemma/`. Steps 0–4 done.
+  - **Bluetooth onset buzz (noted):** BT output (AirPods, and the H0/H3/H4 headsets)
+    glitches on the first audio after silence — the link waking from idle. Wired output
+    is clean. Fix = a persistent warm output stream at the orchestrator (step 6, spec/40).
 - **In flight:** —
 - **Next (M0 build order, docs/04 §8):**
-  4) earcons + Kokoro TTS out · 5) B1 Claude adapter, streamed to console ·
-  6) orchestrator wiring = **M0 acceptance** · 7) metrics + replay harness (5 recordings)
+  5) B1 Claude adapter, streamed to console · 6) orchestrator wiring = **M0 acceptance**
+  · 7) metrics + replay harness (5 recordings)
 
 ## Track H — Headset (Doc 03 → M3)
 
@@ -79,4 +88,6 @@ microphone experiment (Knowles V2S200D) · earcon sound design session · per-re
 brain routing · wake-phrase false-accept test protocol · **LiveKit Wakeword** trial as
 an openWakeWord replacement (lower false-accept rate; contained swap behind `wake.py`) ·
 **semantic endpointing** (M1) — complete-thought detection so long composed prompts
-aren't cut off, the real fix beyond the silence timer (spec/40)
+aren't cut off, the real fix beyond the silence timer (spec/40) · **PC visual overlay**
+(Dynamic-Island-style state/text/icons; a supplement to audio, never a replacement) —
+designed & deferred, see spec/40 § Visual output + spec/00 inventory

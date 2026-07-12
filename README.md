@@ -28,6 +28,7 @@ Every new terminal — reactivate, then run:
 source .venv/bin/activate         # Windows: .venv\Scripts\activate
 python -m bridge.audio.listen          # wake -> listen -> transcribe (step 3); say "hey jarvis"
 python -m bridge.audio.wake            # just the wake-word listener (step 2)
+python -m bridge.audio.speak "hello"   # voice out (step 4): TTS; --earcon all auditions earcons
 python -m bridge.audio.listen --selfcheck   # no mic; verifies end-of-speech logic
 ```
 

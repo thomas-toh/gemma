@@ -1,6 +1,6 @@
 # Spec 30 — Contract T: tools & safety tiers
 
-**Status: DESIGNED (no code)** · Last reconciled: 2026-07-11 · Registry (executable): [schemas/tools.json](schemas/tools.json)
+**Status: DESIGNED (no code)** · Last reconciled: 2026-07-12 · Registry (executable): [schemas/tools.json](schemas/tools.json)
 
 The registry file is the single source of truth for tool names, parameter schemas and
 tiers. The bridge loads it at startup; brains receive it (filtered) as their tool list;
@@ -11,8 +11,8 @@ the executor refuses any call not present in it. Code never hardcodes a tool def
 | Tier | Meaning | Gate | Log |
 |------|---------|------|-----|
 | 1 | Read-only | none | audit |
-| 2 | Reversible action | earcon announce (`ok`/`fail`) | audit |
-| 3 | Destructive / consequential | **spoken confirmation** — orchestrator plays `confirm?`, requires the user to say "confirm" within 8 s, else cancels | audit |
+| 2 | Reversible action | earcon announce (`task-complete`/`error`) | audit |
+| 3 | Destructive / consequential | **spoken confirmation** — orchestrator plays the `ask` earcon, requires the user to say "confirm" within 8 s, else cancels | audit |
 
 ## Rules (binding)
 

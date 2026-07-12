@@ -1,14 +1,13 @@
 {
-  "$comment": "Earcon vocabulary — SINGLE SOURCE OF TRUTH (spec/40). The bridge maps ids to WAV files in bridge/assets/earcons/; H2+ headsets may cache them locally. Keep sounds < 400 ms (except 'timer'), distinct from each other, pleasant at low volume.",
-  "version": "0.1.0",
+  "$comment": "Earcon vocabulary — SINGLE SOURCE OF TRUTH (spec/40). The bridge maps ids to sounds (M0: generated tones in bridge/audio/speak.py; later: WAV files in bridge/assets/earcons/); H2+ headsets may cache them locally. Sounds ring out to ~1.1 s (except 'timer'), distinct from each other, pleasant at low volume. What's latency-bounded is the earcon *onset* (spec/40: wake→awake < 300 ms), not its length — the ring-out overlaps the next phase.",
+  "version": "0.3.0",
   "earcons": [
-    { "id": "ack",          "meaning": "wake word heard, listening",                        "maxMs": 250 },
-    { "id": "working",      "meaning": "thinking has exceeded 1.5 s",                        "maxMs": 400 },
-    { "id": "ok",           "meaning": "tool action succeeded",                              "maxMs": 300 },
-    { "id": "fail",         "meaning": "tool action failed (followed by one spoken sentence)","maxMs": 400 },
-    { "id": "confirm",      "meaning": "Tier 3 gate: say 'confirm' within 8 s to proceed",   "maxMs": 400 },
-    { "id": "answer-ready", "meaning": "long answer held; say 'read it' to hear it",         "maxMs": 400 },
-    { "id": "timer",        "meaning": "a named timer fired",                                "maxMs": 1500 },
-    { "id": "error",        "meaning": "pipeline error (brain unreachable, STT failed)",     "maxMs": 400 }
+    { "id": "awake",         "meaning": "wake word heard, now listening",                     "maxMs": 1100 },
+    { "id": "working",       "meaning": "thinking has exceeded 1.5 s",                         "maxMs": 1000 },
+    { "id": "task-complete", "meaning": "a tool action succeeded",                             "maxMs": 1200 },
+    { "id": "ask",           "meaning": "Tier 3 gate: about to do something destructive — say 'confirm' within 8 s to proceed", "maxMs": 1100 },
+    { "id": "answer-ready",  "meaning": "long answer held; say 'read it' to hear it",          "maxMs": 1150 },
+    { "id": "timer",         "meaning": "a named timer fired",                                 "maxMs": 1500 },
+    { "id": "error",         "meaning": "something went wrong: a tool action failed (a spoken reason follows) or the pipeline broke (brain unreachable, STT failed)", "maxMs": 1100 }
   ]
 }

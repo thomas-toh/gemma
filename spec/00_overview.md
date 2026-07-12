@@ -1,6 +1,6 @@
 # Spec 00 — System overview & status
 
-**Status: PARTIAL** (bridge steps 0–3 built — see STATE) · Last reconciled: 2026-07-11 · Decisions record: [docs/02](../docs/02_architecture/02_system_architecture.md)
+**Status: PARTIAL** (bridge steps 0–4 built — see STATE) · Last reconciled: 2026-07-12 · Decisions record: [docs/02](../docs/02_architecture/02_system_architecture.md)
 
 ## The system in one paragraph
 
@@ -46,6 +46,7 @@ per-track *sub-steps* live in `STATE.md`; the frozen M0 build order is in docs/0
 | Headset hardware (H0 stock → H2 ESP32) | [10_contract_h](10_contract_h.md) | `firmware/` | DESIGNED — Doc 03 pending |
 | Transport adapters | [10_contract_h](10_contract_h.md) §3 | `bridge/transports/` | DESIGNED |
 | Audio pipeline (wake, VAD, STT, TTS, earcons) | [40_interaction](40_interaction.md) | `bridge/audio/` | DESIGNED |
+| Visual overlay (PC, post-M0 supplement) | [40_interaction](40_interaction.md) § Visual output | `bridge/ui/` (future) | DESIGNED — deferred |
 | Orchestrator (state machine) | [40_interaction](40_interaction.md) | `bridge/orchestrator.py` | DESIGNED |
 | Brain adapters | [20_contract_b](20_contract_b.md) | `bridge/brains/` | DESIGNED |
 | Tool registry + executor | [30_contract_t](30_contract_t.md) + [schemas/tools.json](schemas/tools.json) | `bridge/tools/` | DESIGNED |
@@ -56,7 +57,7 @@ per-track *sub-steps* live in `STATE.md`; the frozen M0 build order is in docs/0
 | Milestone | Definition (acceptance test) | Status |
 |-----------|------------------------------|--------|
 | **M0 — Loop closed** | Wake → question → spoken answer < 2 s, ×10 consecutively; stock headset (H0), B1 brain, zero tools | not started |
-| **M1 — It acts** | "Open Spotify and play something" → earcon ack; audit log shows the calls; 6 starter tools | not started |
+| **M1 — It acts** | "Open Spotify and play something" → `awake` earcon; audit log shows the calls; 6 starter tools | not started |
 | **M2 — It's local** | M1 script passes with Wi-Fi unplugged (B2 brain) | not started |
 | **M3 — On your head** | Full loop on custom ESP32 headset (H2), on-device wake, battery > 4 h | not started |
 | **M4 — Experiments** | B3 adapter · bone-conduction mic · H3/H4 · per-request routing | not started |
