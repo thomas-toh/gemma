@@ -69,7 +69,9 @@ Last updated: 2026-07-13
   (B2 groundwork — no commitment to final model; that's the M2 bake-off) ·
   2) **M0.5 "It speaks well" (spec/00):** voice output contract — model-tagged
   spoken/held split (retires spec/40's sentence-count heuristic), versioned persona
-  prompt (retires the `claude.py` placeholder), speech normalization, B2-tolerant
+  prompt (retires the `claude.py` placeholder; decided 2026-07-13: persona = template
+  + capability clause derived per turn from the filtered tool list — never a static
+  capability claim, which goes stale at M1), speech normalization, B2-tolerant
   parse. Consumed by the orchestrator (Track G).
 
 ## Track T — Tools (Contract T → M1)
@@ -99,8 +101,9 @@ an openWakeWord replacement (lower false-accept rate; contained swap behind `wak
 aren't cut off, the real fix beyond the silence timer (spec/40) · **PC visual overlay**
 (Dynamic-Island-style state/text/icons; a supplement to audio, never a replacement) —
 designed & deferred, see spec/40 § Visual output + spec/00 inventory ·
-**sentence-streamed TTS** — parked per D11 (feedback beats speed); a contained
-addition to the TTS path later, reopen only if measured daily use feels slow ·
+**sentence-streamed TTS** — parked per D11 (feedback beats speed); `synth()` already
+works per sentence, so streaming = play-each-piece-as-ready; reopen only if measured
+daily use feels slow ·
 **long-task interaction pattern** (dispatch-and-notify, heartbeat cadence during long
 silence, mid-task status queries by wake, "work on this in the background" phrasing) —
 design when B3 or a heavyweight tool lands (D11 discussion, 2026-07-12)

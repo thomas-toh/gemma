@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
 import threading
 import time
 from collections import deque
@@ -31,10 +32,19 @@ from bridge.log import setup_logging
 
 log = logging.getLogger("gemma.speak")
 
+# The espeak phonemizer logs a harmless "words count mismatch" warning whenever it
+# merges/splits words (contractions, numbers) — once per sentence since synthesis is
+# per-sentence. Pure noise; real phonemizer failures still surface as errors.
+logging.getLogger("phonemizer").setLevel(logging.ERROR)
+
 # Output rate is a Contract-H schema constant -- load it, never hardcode (hard rule 3).
 SAMPLE_RATE_OUT = load_schemas()["messages"]["audioConstants"]["outbound"]["sampleRateHz"]
 
-VOICE = "af_sarah"          # a Kokoro en-us voice; --voice to try others
+VOICE = "bf_emma:45,af_heart:40,bm_george:15"   # Gemma's voice (chosen by ear, 2026-07-13):
+                                                # British-led (emma dominant -> en-gb phonemes),
+                                                # heart's clarity, george for depth; --voice to retune
+
+SENTENCE_GAP_MS = 300       # ponytail: silence joined between sentences; tune by ear
 
 RING_MS = 900      # each struck note rings this long, overlapping into the next -> fuller
 
@@ -202,26 +212,71 @@ def _kokoro_model_paths() -> tuple[Path, Path]:
     return paths["kokoro-v1.0.onnx"], paths["voices-v1.0.bin"]
 
 
-def synth(text: str, voice: str = VOICE):
+def _sentence_chunks(text: str) -> list[str]:
+    """Split text at sentence terminators for per-sentence synthesis. ponytail: 'Dr.'
+    mis-splits into an extra pause — rare and mild; M0.5 normalization cleans inputs."""
+    return [p for p in re.split(r"(?<=[.!?])\s+", text.strip()) if p]
+
+
+def _voice_weights(spec: str) -> list[tuple[str, float]]:
+    """Parse a voice spec into normalised (name, weight) pairs. 'af_heart' -> 100%;
+    'af_heart:60,af_nicole:40' -> a 60/40 blend (weights needn't sum to anything)."""
+    parts = [(n.strip(), float(w or 1)) for n, _, w in
+             (p.partition(":") for p in spec.split(","))]
+    total = sum(w for _, w in parts)
+    return [(n, w / total) for n, w in parts]
+
+
+def _voice_lang(weights: list[tuple[str, float]]) -> str:
+    """espeak phonemizer language from the dominant blend voice — Kokoro's b* voices
+    are British; American phonemes flatten their accent."""
+    top = max(weights, key=lambda nw: nw[1])[0]
+    return "en-gb" if top.startswith("b") else "en-us"
+
+
+def synth(text: str, voice: str = VOICE, speed: float = 1.0):
     """Synthesise `text` to samples at SAMPLE_RATE_OUT (no playback — the orchestrator
-    feeds these into the OutputPump). Kokoro's native rate is the schema's 24 kHz."""
+    feeds these into the OutputPump). Kokoro's native rate is the schema's 24 kHz.
+
+    Per-sentence synthesis, joined with SENTENCE_GAP_MS of silence: Kokoro rushes
+    sentence boundaries and flattens prosody on long inputs, so pacing is ours and
+    each sentence gets its natural contour. (Also the unit sentence-streamed TTS
+    would need, if ever unparked — see STATE.)
+
+    `voice` may be a single name or a blend, e.g. 'af_heart:60,af_nicole:40' —
+    Kokoro voices are style vectors, so a weighted mix is itself a voice."""
+    import numpy as np
     global _kokoro
     if _kokoro is None:
         from kokoro_onnx import Kokoro
         model, voices = _kokoro_model_paths()
         log.info("loading Kokoro TTS...")
         _kokoro = Kokoro(str(model), str(voices))
+    weights = _voice_weights(voice)
+    style = (sum(_kokoro.get_voice_style(n) * w for n, w in weights)
+             if len(weights) > 1 else weights[0][0])
+    lang = _voice_lang(weights)
     t0 = time.perf_counter()
-    samples, rate = _kokoro.create(text, voice=voice, speed=1.0, lang="en-us")
+    gap = np.zeros(SAMPLE_RATE_OUT * SENTENCE_GAP_MS // 1000, dtype=np.float32)
+    pieces: list = []
+    for sentence in _sentence_chunks(text):
+        samples, rate = _kokoro.create(sentence, voice=style, speed=speed, lang=lang)
+        if rate != SAMPLE_RATE_OUT:  # never happens with Kokoro v1; loud if a swap breaks it
+            log.warning("TTS rate %d != schema outbound %d", rate, SAMPLE_RATE_OUT)
+        if pieces:
+            pieces.append(gap)
+        pieces.append(np.asarray(samples, dtype=np.float32))
     log.info("TTS %.0f ms for %d chars", (time.perf_counter() - t0) * 1000, len(text))
-    if rate != SAMPLE_RATE_OUT:     # never happens with Kokoro v1; loud if a swap breaks it
-        log.warning("TTS rate %d != schema outbound %d", rate, SAMPLE_RATE_OUT)
-    return samples
+    out = np.concatenate(pieces) if pieces else np.zeros(0, dtype=np.float32)
+    if len(out) and (peak := float(np.abs(out).max())) > 0:
+        out *= 0.8 / peak   # ponytail: peak normalisation = consistent presence at the
+                            # pump; a proper loudness (RMS/LUFS) pass is sound-design work
+    return out
 
 
-def speak(text: str, voice: str = VOICE) -> float:
+def speak(text: str, voice: str = VOICE, speed: float = 1.0) -> float:
     """Synthesise `text` and play it. Returns the spoken duration in seconds."""
-    samples = synth(text, voice)
+    samples = synth(text, voice, speed)
     _play(samples, SAMPLE_RATE_OUT)
     return len(samples) / SAMPLE_RATE_OUT
 
@@ -236,6 +291,21 @@ def _selfcheck() -> None:
         dur_ms = len(samples) / SAMPLE_RATE_OUT * 1000
         assert len(samples) > 0, f"{name}: empty tone"
         assert dur_ms <= maxms[name] + 1, f"{name}: {dur_ms:.0f} ms exceeds schema maxMs {maxms[name]}"
+
+    # Sentence splitter for per-sentence TTS pacing.
+    assert _sentence_chunks("Sure! Mercury is small. And Neptune is windy.") == \
+        ["Sure!", "Mercury is small.", "And Neptune is windy."]
+    assert _sentence_chunks("no terminator") == ["no terminator"]
+    assert _sentence_chunks("Really?  Yes.") == ["Really?", "Yes."]
+    assert _sentence_chunks("") == []
+
+    # Voice-blend spec parser + phonemizer-language inference.
+    assert _voice_weights("af_heart") == [("af_heart", 1.0)]
+    assert _voice_weights("af_heart:60,af_nicole:40") == [("af_heart", 0.6), ("af_nicole", 0.4)]
+    assert _voice_weights("a:1, b:1") == [("a", 0.5), ("b", 0.5)]
+    assert _voice_lang([("af_heart", 1.0)]) == "en-us"
+    assert _voice_lang([("bf_emma", 0.7), ("af_heart", 0.3)]) == "en-gb"
+    assert _voice_lang([("af_heart", 0.3), ("bm_george", 0.7)]) == "en-gb"
 
     # OutputPump buffer discipline, no device: drive the callback by hand.
     import numpy as np
@@ -266,7 +336,10 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Gemma voice out: earcons + TTS (Track G step 4)")
     ap.add_argument("text", nargs="?", help="text to speak")
     ap.add_argument("--earcon", help="play an earcon id (or 'all' to audition every one)")
-    ap.add_argument("--voice", default=VOICE, help=f"Kokoro voice (default {VOICE})")
+    ap.add_argument("--voice", default=VOICE,
+                    help=f"Kokoro voice or blend like af_heart:60,af_nicole:40 (default {VOICE})")
+    ap.add_argument("--speed", type=float, default=1.0,
+                    help="speech rate; 0.90-0.95 adds weight (default 1.0)")
     ap.add_argument("--selfcheck", action="store_true",
                     help="verify tone generation without audio or the TTS model, then exit")
     args = ap.parse_args()
@@ -281,7 +354,7 @@ def main() -> None:
     elif args.earcon:
         earcon(args.earcon)
     if args.text:
-        speak(args.text, voice=args.voice)
+        speak(args.text, voice=args.voice, speed=args.speed)
 
 
 if __name__ == "__main__":

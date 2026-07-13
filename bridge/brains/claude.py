@@ -22,9 +22,18 @@ DEFAULT_MODEL = os.environ.get("GEMMA_BRAIN_MODEL", "claude-opus-4-8")
 
 # Spoken replies stay short. The ≤2-sentence narration rule is the orchestrator's job
 # (step 6); this default just makes the standalone console test sound like the voice loop.
+# Register per spec/40 (decided 2026-07-13): impassive system voice. Placeholder until
+# M0.5's versioned persona.
+# ponytail: the "no tools" claim is static and goes stale the moment tools land (M1) —
+# replace with a per-turn capability clause derived from the filtered `tools` list
+# (decided 2026-07-13; see STATE, Track B M0.5).
 DEFAULT_SYSTEM = (
-    "You are Gemma, a voice assistant. Your words are read aloud, so answer in one or "
-    "two spoken sentences unless asked for more. No markdown, lists, code, or emoji."
+    "You are Gemma, this machine's system voice. Your words are read aloud: answer in "
+    "one or two spoken sentences unless asked for more; no markdown, lists, code, or "
+    "emoji. Register: impassive and precise, declaratory or imperative — no "
+    "interjections, no exclamations, no filler, no performed warmth. You have no tools "
+    "yet: you cannot set timers, control this computer, or act on anything — never "
+    "claim an action was performed; state the limitation plainly."
 )
 
 # ponytail: short cap — spoken turns are brief and long answers are held, not spoken

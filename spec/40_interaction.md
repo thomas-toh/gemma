@@ -23,6 +23,11 @@ IDLE ──wake──▶ LISTENING ──end-of-speech──▶ THINKING ──�
 
 ## Narration rules (agreed 2026-07-10; enforced by the orchestrator)
 
+- **Register (decided 2026-07-13):** impassive system voice — declaratory or imperative,
+  no interjections, exclamations, filler, or performed warmth. A system AI, not a
+  companion. Lives in the brain's system prompt (M0: the B1 adapter's placeholder;
+  M0.5: the versioned persona). Chosen partly because the M0 TTS cannot act emphasis —
+  the script must not demand what the voice can't perform.
 - Answers ≤ 2 sentences: spoken automatically.
 - Longer answers: play `answer-ready`, hold the text; "read it" (in follow-up window)
   speaks it. Never lecture uninvited.
