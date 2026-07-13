@@ -8,27 +8,32 @@ start, update it in the same commit as the work · when a step closes, collapse 
 entry to one or two lines — durable knowledge moves out (behaviour → spec · run
 instructions → README · findings → NOTES.md · decisions → a D-number in spec/00).
 
-Last updated: 2026-07-12
+Last updated: 2026-07-13
 
 ## Track G — Bridge (Doc 04 → M0, M1, M2)
 
-- **Works now:** steps 0–5 built and `--selfcheck`-green. `bridge/`: `config.py`
+- **Works now:** steps 0–6 built and `--selfcheck`-green. `bridge/`: `config.py`
   (loads `spec/schemas/*`, hard rule 3) + `log.py`; `audio/wake.py` (mic → ≤3 s RAM
   ring → openWakeWord); `audio/listen.py` (wake → Silero VAD → faster-whisper
   `small.en`, GPU when loadable else CPU); `audio/speak.py` (earcons + Kokoro TTS,
-  24 kHz); `brains/` (Contract B): `base.py` (BrainAdapter Protocol + BrainEvent
-  types) + `claude.py` (B1 Anthropic adapter — async streaming, live console
-  round-trip OK, zero tools; no `thinking` = fast first token; model via
+  24 kHz; `OutputPump` = the persistent warm output stream, spec/40 BT keep-alive);
+  `brains/` (Contract B): `base.py` + `claude.py` (B1 Anthropic adapter — async
+  streaming, zero tools; no `thinking` = fast first token; model via
   `GEMMA_BRAIN_MODEL`, default `claude-opus-4-8`, drop to sonnet-5/haiku-4-5 for the
-  voice loop). Cross-platform per D10 (step 2 verified live on both OSes). Run
-  instructions: `README.md` · GPU setup, benchmarks, quirks: `NOTES.md`.
-- **Owed:** live mic test of steps 3–4 on both OSes (real-speech STT figures + earcon/
-  TTS audition) — feeds the provisional D11 numbers (spec/00).
+  voice loop); `orchestrator.py` (step 6: spec/40 state machine — wake→listen→think→
+  speak, follow-up window, barge-in, working-earcon timer, ≤2-sentence speak/hold
+  heuristic, per-turn latency logs). Cross-platform per D10 (step 2 verified live on
+  both OSes). Run instructions: `README.md` · GPU setup, benchmarks, quirks: `NOTES.md`.
+- **Owed:** live full-loop test (both OSes) = **the M0 acceptance run** (spec/00: ×10,
+  feedback < 1.5 s, first word < 4 s — per-turn latency lines print) + real-speech STT
+  figures for the provisional D11 numbers (spec/00). Watch items for that run: earcon
+  ring-out bleeding into VAD on open speakers · BT A2DP↔HFP duplex behaviour (headset
+  mic use may degrade output) · barge-in false-trigger rate on speakers (knob:
+  `BARGE_CHUNKS` in `orchestrator.py`).
+- **Open question:** should conversation history persist across wakes? (Now: dies at
+  IDLE, one wake-chain.) Parked — Thomas is ideating this in a separate Fable session.
 - **In flight:** —
-- **Next (M0 build order, docs/04 §8):**
-  6) orchestrator wiring 2→5 into the spec/40 state machine (+ follow-up, barge-in,
-  the persistent warm output stream = BT onset-buzz fix) = **M0 acceptance** ·
-  7) metrics + replay harness (5 recordings)
+- **Next (M0 build order, docs/04 §8):** 7) metrics + replay harness (5 recordings)
 - **M0-close gate (Thomas; beyond docs/04 §8):** settings surface for tool setup —
   per-adapter tunables, exposed to the user before M0 is called done. Claude knobs:
   model · effort · thinking. Must be **adapter-aware** (effort/thinking are

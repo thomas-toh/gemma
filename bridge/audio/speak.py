@@ -21,7 +21,9 @@ from __future__ import annotations
 
 import argparse
 import logging
+import threading
 import time
+from collections import deque
 from pathlib import Path
 
 from bridge.config import load_schemas
@@ -107,11 +109,75 @@ def _play(samples, rate: int = SAMPLE_RATE_OUT) -> None:
     sd.wait()
 
 
-def earcon(name: str) -> None:
-    """Play one earcon by its schema id."""
+def tone_samples(name: str):
+    """Samples for one earcon by its schema id (no playback — the orchestrator feeds
+    these into the OutputPump; the CLI plays them via earcon())."""
     if name not in _earcon_ids():
         raise ValueError(f"unknown earcon {name!r}; valid: {sorted(_earcon_ids())}")
-    _play(_tone(TONES.get(name, DEFAULT_TONE), SAMPLE_RATE_OUT))
+    return _tone(TONES.get(name, DEFAULT_TONE), SAMPLE_RATE_OUT)
+
+
+def earcon(name: str) -> None:
+    """Play one earcon by its schema id."""
+    _play(tone_samples(name))
+
+
+class OutputPump:
+    """Persistent warm output stream (spec/40, binding for BT devices): one OutputStream
+    held open for the daemon's life, fed silence between sounds so a Bluetooth link never
+    idles — the onset-buzz fix. play() enqueues without blocking; cut() drops all queued
+    audio (the barge-in stop, ≤ 250 ms); the callback runs on PortAudio's thread, so the
+    main loop stays free to read the mic while sound plays."""
+
+    def __init__(self, rate: int = SAMPLE_RATE_OUT):
+        self.rate = rate
+        self._lock = threading.Lock()
+        self._queue: deque = deque()    # pending float32 arrays; head may be part-played
+        self._stream = None
+
+    def __enter__(self) -> "OutputPump":
+        import sounddevice as sd
+        # ponytail: latency="low" keeps barge-in cuts inside the 250 ms budget; the
+        # callback is a memcpy so underruns shouldn't happen — raise it if a device crackles.
+        self._stream = sd.OutputStream(samplerate=self.rate, channels=1, dtype="float32",
+                                       latency="low", callback=self._callback)
+        self._stream.start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._stream.stop()
+        self._stream.close()
+        self._stream = None
+
+    def _callback(self, outdata, frames, time_info, status) -> None:
+        outdata.fill(0)                 # silence baseline — this line IS the BT keep-alive
+        filled = 0
+        with self._lock:
+            while filled < frames and self._queue:
+                chunk = self._queue[0]
+                n = min(frames - filled, len(chunk))
+                outdata[filled:filled + n, 0] = chunk[:n]
+                if n == len(chunk):
+                    self._queue.popleft()
+                else:
+                    self._queue[0] = chunk[n:]
+                filled += n
+
+    def play(self, samples) -> None:
+        """Enqueue samples (float32 mono at self.rate). Returns immediately."""
+        import numpy as np
+        with self._lock:
+            self._queue.append(np.ascontiguousarray(samples, dtype=np.float32))
+
+    def cut(self) -> None:
+        """Drop everything queued — output goes silent within one callback block."""
+        with self._lock:
+            self._queue.clear()
+
+    def playing(self) -> bool:
+        """True while queued audio remains (the device buffer adds ~latency ms after)."""
+        with self._lock:
+            return bool(self._queue)
 
 
 # --- text-to-speech (Kokoro via kokoro-onnx) ---
@@ -136,8 +202,9 @@ def _kokoro_model_paths() -> tuple[Path, Path]:
     return paths["kokoro-v1.0.onnx"], paths["voices-v1.0.bin"]
 
 
-def speak(text: str, voice: str = VOICE) -> float:
-    """Synthesise `text` and play it. Returns the spoken duration in seconds."""
+def synth(text: str, voice: str = VOICE):
+    """Synthesise `text` to samples at SAMPLE_RATE_OUT (no playback — the orchestrator
+    feeds these into the OutputPump). Kokoro's native rate is the schema's 24 kHz."""
     global _kokoro
     if _kokoro is None:
         from kokoro_onnx import Kokoro
@@ -147,8 +214,16 @@ def speak(text: str, voice: str = VOICE) -> float:
     t0 = time.perf_counter()
     samples, rate = _kokoro.create(text, voice=voice, speed=1.0, lang="en-us")
     log.info("TTS %.0f ms for %d chars", (time.perf_counter() - t0) * 1000, len(text))
-    _play(samples, rate)
-    return len(samples) / rate
+    if rate != SAMPLE_RATE_OUT:     # never happens with Kokoro v1; loud if a swap breaks it
+        log.warning("TTS rate %d != schema outbound %d", rate, SAMPLE_RATE_OUT)
+    return samples
+
+
+def speak(text: str, voice: str = VOICE) -> float:
+    """Synthesise `text` and play it. Returns the spoken duration in seconds."""
+    samples = synth(text, voice)
+    _play(samples, SAMPLE_RATE_OUT)
+    return len(samples) / SAMPLE_RATE_OUT
 
 
 def _selfcheck() -> None:
@@ -161,7 +236,29 @@ def _selfcheck() -> None:
         dur_ms = len(samples) / SAMPLE_RATE_OUT * 1000
         assert len(samples) > 0, f"{name}: empty tone"
         assert dur_ms <= maxms[name] + 1, f"{name}: {dur_ms:.0f} ms exceeds schema maxMs {maxms[name]}"
-    print(f"selfcheck OK: tones for {len(_earcon_ids())} earcons, all within schema maxMs")
+
+    # OutputPump buffer discipline, no device: drive the callback by hand.
+    import numpy as np
+    pump = OutputPump()
+    out = np.ones((8, 1), dtype=np.float32)
+    pump._callback(out, 8, None, None)
+    assert not out.any(), "empty pump must emit pure silence (BT keep-alive)"
+    pump.play(np.arange(1, 11, dtype=np.float32))          # 10 samples: 1..10
+    pump.play(np.full(4, 99, dtype=np.float32))
+    pump._callback(out, 8, None, None)
+    assert list(out[:, 0]) == [1, 2, 3, 4, 5, 6, 7, 8], "callback must drain in order"
+    assert pump.playing()
+    pump._callback(out, 8, None, None)
+    assert list(out[:, 0]) == [9, 10, 99, 99, 99, 99, 0, 0], "must cross chunks, then pad silence"
+    assert not pump.playing()
+    pump.play(np.ones(100, dtype=np.float32))
+    pump.cut()
+    assert not pump.playing(), "cut() must empty the queue"
+    pump._callback(out, 8, None, None)
+    assert not out.any(), "after cut(), silence"
+
+    print(f"selfcheck OK: tones for {len(_earcon_ids())} earcons within schema maxMs; "
+          f"pump drains in order, pads silence, cut() empties")
 
 
 def main() -> None:

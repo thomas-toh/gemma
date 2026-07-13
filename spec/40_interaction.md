@@ -1,23 +1,27 @@
 # Spec 40 — Interaction model
 
-**Last reconciled: 2026-07-12** · Build progress: [STATE.md](../STATE.md) (Track G) · Earcon ids: [schemas/earcons.json](schemas/earcons.json)
+**Last reconciled: 2026-07-13** · Build progress: [STATE.md](../STATE.md) (Track G) · Earcon ids: [schemas/earcons.json](schemas/earcons.json)
 
-## State machine *(planned — orchestrator, build step 6)*
+## State machine (orchestrator: `bridge/orchestrator.py`)
 
 ```
 IDLE ──wake──▶ LISTENING ──end-of-speech──▶ THINKING ──┬─▶ SPEAKING ─▶ FOLLOW-UP ─▶ IDLE
                    │                                    └─▶ ACTING(tools) ─▶ earcon ─┘
-                   └── timeout 10 s / mute ──▶ IDLE
+                   └── timeout 5 s / mute ──▶ IDLE
 ```
 
-- `LISTENING` opens on WAKE; end-of-speech = VAD silence (initial: 1 s, tune in M0).
+- `LISTENING` opens on WAKE; end-of-speech = VAD silence (initial: 1 s, tune in M0);
+  give-up if speech never starts: 5 s (decided 2026-07-13; was 10 s).
 - `FOLLOW-UP`: 8 s window accepting speech without re-wake. Mic open, LED `listening`.
 - **Barge-in (binding):** user speech during `SPEAKING` stops TTS ≤ 250 ms and routes
   the speech as new input.
-- `THINKING` > 1.5 s fires the `working` earcon once — this is the D11 feedback
-  guarantee for any turn that can't answer fast.
+- `THINKING` that outlives the 1.5 s feedback budget fires the `working` earcon once
+  (fired just before the deadline so the sound lands inside it) — this is the D11
+  feedback guarantee for any turn that can't answer fast.
+- Conversation history threads through one wake-chain (`Session.history`) and dies at
+  IDLE; whether it should persist across wakes is an open question (parked — STATE).
 
-## Narration rules (agreed 2026-07-10; enforced by the orchestrator, build step 6)
+## Narration rules (agreed 2026-07-10; enforced by the orchestrator)
 
 - Answers ≤ 2 sentences: spoken automatically.
 - Longer answers: play `answer-ready`, hold the text; "read it" (in follow-up window)
@@ -91,14 +95,14 @@ rate:
   so no GPU needed. Model files fetch once to `~/.cache/gemma/`.
 
 *When* each earcon fires and *whether* to speak vs. stay quiet is the orchestrator's job
-(step 6) per the narration rules above — step 4 is only the mechanism.
+per the narration rules above — `speak.py` is only the mechanism.
 
 **Bluetooth output keep-alive (binding for BT devices).** Bluetooth links (H0 stock
 headset; H3/H4) idle during silence and glitch on the first audio after silence — a brief
 buzz at each earcon/reply onset. Wired output is unaffected. The daemon MUST hold a
 **persistent output stream** open, feeding silence between sounds, so the link never idles
-(orchestrator, step 6). The step-4 demo opens/closes the device per sound, so it exhibits
-the glitch by design — it disappears under the warm stream.
+(the orchestrator's `OutputPump`). The standalone `speak.py` CLI opens/closes the device
+per sound, so it exhibits the glitch by design — it disappears under the warm stream.
 
 ## Visual output — PC overlay (planned, post-M0)
 

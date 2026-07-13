@@ -35,7 +35,7 @@ SILENCE_MS = 1000                                 # spec/40: end-of-speech silen
                                                   # to tune live; semantic endpointing is the
                                                   # proper fix for long composed prompts, M1)
 MAX_UTTERANCE_S = 30                              # safety cap ONLY; VAD ends normal turns
-NOSPEECH_MS = 3000                                # give up if nothing is said after wake
+NOSPEECH_MS = 5000                                # spec/40: give up if nothing said after wake
 PREROLL_MS = 200                                  # pre-roll from ring buffer (tune: onset vs
                                                   # bleeding the wake word into the transcript)
 

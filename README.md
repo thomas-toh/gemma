@@ -26,10 +26,11 @@ Every new terminal — reactivate, then run:
 
 ```bash
 source .venv/bin/activate         # Windows: .venv\Scripts\activate
+python -m bridge.orchestrator          # THE M0 LOOP (step 6): say "hey jarvis", ask, hear the answer
 python -m bridge.audio.listen          # wake -> listen -> transcribe (step 3); say "hey jarvis"
 python -m bridge.audio.wake            # just the wake-word listener (step 2)
 python -m bridge.audio.speak "hello"   # voice out (step 4): TTS; --earcon all auditions earcons
-python -m bridge.audio.listen --selfcheck   # no mic; verifies end-of-speech logic
+python -m bridge.orchestrator --selfcheck   # no mic/network; each module has a --selfcheck
 ```
 
 `deactivate` to leave the environment. The API key is read from the OS credential
