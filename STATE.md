@@ -58,13 +58,19 @@ Last updated: 2026-07-14
 ## Track H — Headset (Doc 03 → M3)
 
 - **Works now:** nothing
-- **In flight:** Thomas is buying a **used Shokz** (OpenRun/OpenMove class, ~£40–60,
-  eBay) — guaranteed-true BC feel test, quality benchmark (docs/01 §4), eventual
-  teardown donor. See how it fares before further headset purchases.
-- **Next:** 1) **order the Phase 0/1 component basket** (docs/01 §11) — lead-time
-  item, do early; delivery time is free cover for Track G work · 2) draft Doc 03
-  (headset engineering) · 3) teardown practice on the cheapest available donor
-  (LiPo precautions, docs/01 §4.1)
+- **Plan:** `docs/03_headset/03a_track_h_plan.md` — 7 stages / 4 gates to M3.
+  **DRAFT, pending Thomas's sign-off** (freezes on that commit, hard rule 2).
+- **In flight:** **Shokz OpenSwim Pro acquired (2026-07-14)** — chosen over the
+  used-OpenRun idea because it also fills the swim niche (BT 5.4 + call mic + IP68/
+  32 GB MP3; the only current BC unit covering both duties). Plan Stage 1: wear it
+  daily ≥ a week, then judge Gate 1 (the medium gate). Stays intact permanently —
+  never a teardown donor; Stage 3's £30 generic is the sacrifice. First bridge use:
+  verify the Hands-Free endpoint reports 16 kHz (spec/10 §3).
+- **Next (per plan, draft):** Stage 2 **order the component basket** (docs/01 §11 as
+  adapted in the plan, ≈£170 — OpenComm2 dropped) — lead-time item, runs in parallel
+  with Stage 1 · Stage 3 teardown practice (LiPo precautions, docs/01 §4.1) ·
+  Stage 4 H1 wired build · Stage 5 draft Doc 03 — deliberately reordered *after*
+  teardown + wired build so the engineering doc encodes measured facts, not guesses
 - **Blocked by:** parts delivery once ordered
 
 ## Track B — Brain (M0 needs B1; M2 needs B2)
