@@ -13,3 +13,7 @@ dist/
 
 # Local Claude Code settings (per-machine, not shared)
 .claude/settings.local.json
+
+# Replay fixtures are Thomas's voice — kept out of the (private) remote by choice;
+# copied to the Mac clone by hand. cases.json (text) IS committed.
+tests/replay/wav/

@@ -31,6 +31,8 @@ python -m bridge.audio.listen          # wake -> listen -> transcribe (step 3); 
 python -m bridge.audio.wake            # just the wake-word listener (step 2)
 python -m bridge.audio.speak "hello"   # voice out (step 4): TTS; --earcon all auditions earcons
 python -m bridge.orchestrator --selfcheck   # no mic/network; each module has a --selfcheck
+python -m tests.replay                 # replay harness (step 7): recorded WAVs -> assertions
+python -m tests.replay --record wake_short  # record one case's WAV (scripts in tests/replay/cases.json)
 ```
 
 `deactivate` to leave the environment. The API key is read from the OS credential

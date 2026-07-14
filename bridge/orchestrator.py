@@ -105,12 +105,41 @@ async def _collect(brain, session: Session, utterance: str) -> tuple[str, str | 
     return "".join(parts).strip(), err
 
 
+def latency_table(trace) -> str:
+    """Render per-turn latencies from an event trace against the spec/40 targets.
+    Printed at the end of every live session and every replay case (docs/04 §7)."""
+    out = [f"{'turn':<6}{'wake->awake':>12}{'eos->feedback':>15}{'eos->word':>11}"
+           "   (targets <300 / <1500 / <4000 ms, spec/40)"]
+    wake_t = awake = cur = None
+    turns: list[dict] = []
+    for t, ev, detail in trace:
+        if ev == "wake":
+            wake_t, awake = t, None
+        elif ev == "earcon" and detail == "awake" and wake_t is not None:
+            awake = (t - wake_t) * 1000
+        elif ev == "eos":
+            cur = {"eos": t, "awake": awake, "fb": None, "word": None}
+            turns.append(cur)
+            awake = None
+        elif cur is not None and ev in ("earcon", "speak"):
+            if cur["fb"] is None:
+                cur["fb"] = (t - cur["eos"]) * 1000
+            if ev == "speak" and cur["word"] is None:
+                cur["word"] = (t - cur["eos"]) * 1000
+    fmt = lambda v: f"{v:.0f}" if v is not None else "-"  # noqa: E731
+    for i, r in enumerate(turns, 1):
+        out.append(f"{i:<6}{fmt(r['awake']):>12}{fmt(r['fb']):>15}{fmt(r['word']):>11}")
+    return "\n".join(out)
+
+
 class Orchestrator:
     def __init__(self, silence_ms: int = SILENCE_MS, voice: str = VOICE,
-                 model: str = DEFAULT_MODEL):
+                 model: str = DEFAULT_MODEL, brain=None):
         self.silence_chunks = (silence_ms + VAD_CHUNK_MS - 1) // VAD_CHUNK_MS
         self.voice = voice
-        self.brain = ClaudeBrain(model=model)
+        self.brain = brain or ClaudeBrain(model=model)   # injectable: replay's fake brain
+        self.synth = synth                               # injectable: replay fakes TTS
+        self.trace: list[tuple[float, str, str]] = []    # (t, event, detail) — latency_table
         self.session = Session(id="boot")
         self.held: str | None = None            # long answer awaiting "read it"
         self.audible = True                     # has this turn produced sound yet?
@@ -119,6 +148,12 @@ class Orchestrator:
         self.pump: OutputPump | None = None
         self.mic = None
         self.vad: SileroVAD | None = None
+
+    def _ev(self, event: str, detail: str = "", show: str | None = None) -> None:
+        """Trace an event (the harness asserts on these) and print its console line."""
+        self.trace.append((time.perf_counter(), event, detail))
+        if show is not None:
+            print(show)
 
     # --- feedback bookkeeping (D11: something audible < 1.5 s after end of speech) ---
 
@@ -133,10 +168,12 @@ class Orchestrator:
         # Timer thread — pump.play is thread-safe. THINKING outlived the feedback
         # budget, so the earcon IS the feedback.
         self.pump.play(tone_samples("working"))
+        self._ev("earcon", "working")
         self._mark_audible("'working' earcon")
 
     def _ping(self, name: str) -> None:
         self.pump.play(tone_samples(name))
+        self._ev("earcon", name)
         self._mark_audible(f"'{name}' earcon")
 
     # --- mic helpers ---
@@ -176,6 +213,7 @@ class Orchestrator:
         if not eos.speech_started:
             return None
         self.t_eos = time.perf_counter()
+        self._ev("eos")
         return np.concatenate(captured).astype("float32") / 32768.0
 
     # --- the states ---
@@ -183,7 +221,7 @@ class Orchestrator:
     def _turn(self, audio):
         """THINKING → SPEAKING/held → FOLLOW-UP for one utterance. Returns the next
         utterance's audio (from follow-up or barge-in), or None — the chain ends."""
-        print("[thinking]")
+        self._ev("thinking", show="[thinking]")
         self.audible = False
         self.working = threading.Timer(WORKING_AFTER_S, self._working_ping)
         self.working.daemon = True
@@ -192,18 +230,18 @@ class Orchestrator:
         text = transcribe(audio)
         if not text:
             self._ping("error")                 # narration rules: the pipeline broke
-            print("(no transcript)")
+            self._ev("no-transcript", show="(no transcript)")
             return self._followup()
-        print(f"> {text}")
+        self._ev("transcript", text, show=f"> {text}")
 
         if self.held and wants_readback(text):
             held, self.held = self.held, None
-            return self._speak(synth(held, self.voice))
+            return self._speak(self.synth(held, self.voice))
 
         reply, err = asyncio.run(_collect(self.brain, self.session, text))
         if err or not reply:
             self._ping("error")
-            return self._speak(synth(spoken_error(err or "unknown"), self.voice))
+            return self._speak(self.synth(spoken_error(err or "unknown"), self.voice))
 
         self.session.history += [{"role": "user", "content": text},
                                  {"role": "assistant", "content": reply}]
@@ -211,9 +249,9 @@ class Orchestrator:
         if sentences(reply) > 2:                # spec/40: long answers held, never lectured
             self._ping("answer-ready")
             self.held = reply
-            print("[answer held — say 'read it']")
+            self._ev("held", show="[answer held — say 'read it']")
             return self._followup()
-        return self._speak(synth(reply, self.voice))
+        return self._speak(self.synth(reply, self.voice))
 
     def _speak(self, samples):
         """SPEAKING: play via the pump while watching the mic — user speech cuts TTS
@@ -221,6 +259,7 @@ class Orchestrator:
         self._flush_mic()
         self.vad.reset()
         self.pump.play(samples)
+        self._ev("speak")
         self._mark_audible("speech")
         log.info("first spoken word %.0f ms after end of speech",
                  (time.perf_counter() - self.t_eos) * 1000)
@@ -232,13 +271,13 @@ class Orchestrator:
             recent.append(samples_in)
             if barge.update(self.vad.prob(samples_in) >= VAD_THRESHOLD):
                 self.pump.cut()
-                print("[barge-in]")
+                self._ev("barge-in", show="[barge-in]")
                 return self._capture(seed=list(recent))
         return self._followup()
 
     def _followup(self):
         """FOLLOW-UP: 8 s window, mic open, no re-wake (spec/40). None ends the chain."""
-        print("[follow-up window]")
+        self._ev("follow-up", show="[follow-up window]")
         self._flush_mic()
         return self._capture(nospeech_ms=FOLLOWUP_MS)
 
@@ -256,6 +295,38 @@ class Orchestrator:
             wake_model.predict(zero)
         wake_model.reset()
 
+    def serve(self, mic, pump, wake_model) -> None:
+        """The IDLE→wake→turn-chain loop against a mic, pump and wake model — real
+        devices from run(), fakes from the replay harness (tests/replay.py)."""
+        self.pump, self.mic = pump, mic
+        ring: deque = deque(maxlen=BUFFER_BLOCKS)   # ≤3 s pre-trigger audio, RAM only (spec/50)
+        while True:
+            # IDLE: wake watch
+            block, _ = mic.read(BLOCK_SAMPLES)
+            frame = block[:, 0]
+            ring.append(frame)
+            if not any(s >= THRESHOLD for s in wake_model.predict(frame).values()):
+                continue
+            t_wake = time.perf_counter()
+            self._ev("wake", show="[wake] listening...")
+            pump.play(tone_samples("awake"))    # < 300 ms: enqueued immediately
+            self._ev("earcon", "awake")
+            log.info("awake earcon %.0f ms after wake detect",
+                     (time.perf_counter() - t_wake) * 1000)
+            # ponytail: fresh history each wake-chain — whether it should persist
+            # across wakes is an open question (parked; STATE), so it dies at IDLE.
+            self.session = Session(id=time.strftime("%H%M%S"))
+            self.held = None
+
+            utt = self._capture(preroll=list(ring)[-PREROLL_BLOCKS:])
+            ring.clear()
+            if utt is None:
+                self._ev("nothing-heard", show="[nothing heard]")
+            while utt is not None:              # the turn chain: follow-ups, barge-ins
+                utt = self._turn(utt)
+            self._flush_wake(wake_model)        # else the old phrase re-triggers
+            self._ev("idle", show="[idle]")
+
     def run(self) -> None:
         import numpy as np
         import sounddevice as sd
@@ -271,37 +342,11 @@ class Orchestrator:
         synth("ready")                                            # loads Kokoro; discarded
         log.info("warm-up done in %.1f s", time.perf_counter() - t0)
 
-        ring: deque = deque(maxlen=BUFFER_BLOCKS)   # ≤3 s pre-trigger audio, RAM only (spec/50)
         with OutputPump() as pump, \
              sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="int16",
                             blocksize=0) as mic:
-            self.pump, self.mic = pump, mic
             log.info("ready — say '%s' (Ctrl-C to stop)", WAKE_MODEL.replace("_", " "))
-            while True:
-                # IDLE: wake watch
-                block, _ = mic.read(BLOCK_SAMPLES)
-                frame = block[:, 0]
-                ring.append(frame)
-                if not any(s >= THRESHOLD for s in wake_model.predict(frame).values()):
-                    continue
-                t_wake = time.perf_counter()
-                pump.play(tone_samples("awake"))    # < 300 ms: enqueued immediately
-                log.info("awake earcon %.0f ms after wake detect",
-                         (time.perf_counter() - t_wake) * 1000)
-                print("[wake] listening...")
-                # ponytail: fresh history each wake-chain — whether it should persist
-                # across wakes is an open question (parked; STATE), so it dies at IDLE.
-                self.session = Session(id=time.strftime("%H%M%S"))
-                self.held = None
-
-                utt = self._capture(preroll=list(ring)[-PREROLL_BLOCKS:])
-                ring.clear()
-                if utt is None:
-                    print("[nothing heard]")
-                while utt is not None:              # the turn chain: follow-ups, barge-ins
-                    utt = self._turn(utt)
-                self._flush_wake(wake_model)        # else the old phrase re-triggers
-                print("[idle]")
+            self.serve(mic, pump, wake_model)
 
 
 def _selfcheck() -> None:
@@ -332,7 +377,17 @@ def _selfcheck() -> None:
         line = spoken_error(kind)
         assert line and sentences(line) <= 2, kind
 
-    print("selfcheck OK: speak/hold split, readback match, barge-in counter, error lines")
+    # latency table: two turns — one with wake+working+speak, one speak-only
+    tbl = latency_table([(0.0, "wake", ""), (0.1, "earcon", "awake"), (1.0, "eos", ""),
+                         (2.2, "earcon", "working"), (3.5, "speak", ""),
+                         (10.0, "eos", ""), (10.8, "speak", "")])
+    lines = tbl.splitlines()
+    assert len(lines) == 3, tbl
+    assert "100" in lines[1] and "1200" in lines[1] and "2500" in lines[1], lines[1]
+    assert lines[2].count("800") == 2 and "-" in lines[2], lines[2]
+
+    print("selfcheck OK: speak/hold split, readback match, barge-in counter, "
+          "error lines, latency table")
 
 
 def main() -> None:
@@ -349,10 +404,13 @@ def main() -> None:
     if args.selfcheck:
         _selfcheck()
         return
+    orch = Orchestrator(args.silence_ms, args.voice, args.model)
     try:
-        Orchestrator(args.silence_ms, args.voice, args.model).run()
+        orch.run()
     except KeyboardInterrupt:
         print()  # clean newline after ^C
+        if orch.trace:
+            print(latency_table(orch.trace))   # the session's metrics (docs/04 §7)
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ start, update it in the same commit as the work · when a step closes, collapse 
 entry to one or two lines — durable knowledge moves out (behaviour → spec · run
 instructions → README · findings → NOTES.md · decisions → a D-number in spec/00).
 
-Last updated: 2026-07-13
+Last updated: 2026-07-14
 
 ## Track G — Bridge (Doc 04 → M0, M1, M2)
 
@@ -30,10 +30,22 @@ Last updated: 2026-07-13
   ring-out bleeding into VAD on open speakers · BT A2DP↔HFP duplex behaviour (headset
   mic use may degrade output) · barge-in false-trigger rate on speakers (knob:
   `BARGE_CHUNKS` in `orchestrator.py`).
+- **Works now (step 7):** replay harness (`tests/replay.py`) — recorded WAVs through
+  the real wake/VAD/STT pipeline driving the real orchestrator with fake mic/pump/
+  brain/TTS; 5 cases defined in `tests/replay/cases.json`; per-turn latency table
+  (also printed when a live session ends). Selfcheck CI on GitHub Actions
+  (windows-latest) — **deviation from docs/04 §7:** replay does NOT run in CI because
+  the WAVs (Thomas's voice) are deliberately untracked (`tests/replay/wav/`,
+  gitignored; copy the folder to the Mac clone by hand).
+- **Owed:** ① record the 5 case WAVs (`python -m tests.replay --record <name>`,
+  scripts in cases.json) and run 5/5 green on the PC, later on the Mac (D10 parity) ·
+  ② the **M0 acceptance run** — ×10 consecutive live turns, latency table vs spec/00
+  targets · ③ real-speech STT figures for the provisional D11 numbers.
 - **Open question:** should conversation history persist across wakes? (Now: dies at
   IDLE, one wake-chain.) Parked — Thomas is ideating this in a separate Fable session.
 - **In flight:** —
-- **Next (M0 build order, docs/04 §8):** 7) metrics + replay harness (5 recordings)
+- **Next:** M0 build order (docs/04 §8) complete — remaining before M0 is called done:
+  the owed acceptance run + the M0-close gate below.
 - **M0-close gate (Thomas; beyond docs/04 §8):** settings surface for tool setup —
   per-adapter tunables, exposed to the user before M0 is called done. Claude knobs:
   model · effort · thinking. Must be **adapter-aware** (effort/thinking are

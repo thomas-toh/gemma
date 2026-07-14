@@ -1,0 +1,53 @@
+{
+  "$comment": "Replay cases (docs/04 §7). Text only — the WAVs are Thomas's voice, recorded with `python -m tests.replay --record <name>` into tests/replay/wav/ (gitignored; copy the folder to the Mac by hand). Every real-world misfire later becomes a new case here.",
+  "cases": [
+    {
+      "name": "wake_short",
+      "file": "wake_short.wav",
+      "seconds": 10,
+      "script": "Say: 'hey jarvis' — brief pause — 'what time is it in Tokyo?' — then stay silent.",
+      "wake": true,
+      "transcripts": ["what time is it in Tokyo?"],
+      "brain_reply": "It is early evening in Tokyo right now.",
+      "expect_events": ["speak"]
+    },
+    {
+      "name": "wake_long",
+      "file": "wake_long.wav",
+      "seconds": 16,
+      "script": "Say: 'hey jarvis' — then, with natural pauses under a second: 'I am planning a trip to Japan next spring and I want to know whether April is a good month to see the cherry blossoms.' Then stay silent.",
+      "wake": true,
+      "transcripts": ["I am planning a trip to Japan next spring and I want to know whether April is a good month to see the cherry blossoms."],
+      "brain_reply": "April is usually past peak bloom in Tokyo; late March is safer.",
+      "expect_events": ["speak"]
+    },
+    {
+      "name": "wake_silence",
+      "file": "wake_silence.wav",
+      "seconds": 9,
+      "script": "Say: 'hey jarvis' — then remain completely silent for the rest of the recording.",
+      "wake": true,
+      "transcripts": [],
+      "expect_events": ["nothing-heard"]
+    },
+    {
+      "name": "ambient",
+      "file": "ambient.wav",
+      "seconds": 12,
+      "script": "Talk normally for the whole recording about anything — reading a paragraph aloud works — WITHOUT saying the wake phrase.",
+      "wake": false,
+      "transcripts": [],
+      "expect_events": []
+    },
+    {
+      "name": "wake_barge",
+      "file": "wake_barge.wav",
+      "seconds": 15,
+      "script": "Say: 'hey jarvis' — 'tell me about the solar system' — pause about two seconds — then interrupt with: 'stop, what is the time?' — then stay silent.",
+      "wake": true,
+      "transcripts": ["tell me about the solar system", "stop, what is the time?"],
+      "brain_reply": "The solar system consists of the Sun and everything bound to it by gravity. That includes eight planets, five recognised dwarf planets, hundreds of moons, and countless asteroids and comets. The four inner planets are small and rocky, while the four outer planets are large and gaseous. Most of the system's mass, over ninety-nine percent, sits in the Sun itself.",
+      "expect_events": ["barge-in"]
+    }
+  ]
+}

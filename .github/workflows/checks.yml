@@ -1,0 +1,25 @@
+# Selfcheck CI: every module's offline logic check, on every push (docs/04 §7, scoped
+# down — the replay harness can't run here because the voice WAVs are deliberately
+# untracked; see STATE, Track G). No models, no API key, no audio device needed.
+name: checks
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  selfchecks:
+    runs-on: windows-latest # the reference platform (spec/00 D10)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e .
+      - run: python -m bridge.config
+      - run: python -m bridge.audio.wake --selfcheck
+      - run: python -m bridge.audio.listen --selfcheck
+      - run: python -m bridge.audio.speak --selfcheck
+      - run: python -m bridge.brains.claude --selfcheck
+      - run: python -m bridge.orchestrator --selfcheck
