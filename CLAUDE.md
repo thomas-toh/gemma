@@ -1,9 +1,10 @@
 # Project Gemma — CLAUDE.md
 
-Gemma is a personal prototyping project: a bone-conduction headset that talks to an
-always-listening voice assistant ("the bridge") on a Windows PC, backed by swappable
-LLM brains (Claude API first, local LLM second). Built by Thomas — a lawyer learning
-to code — with AI assistance. Not a commercial product.
+Gemma is a personal prototyping project: an always-listening voice assistant +
+dictation bridge on a Windows PC, backed by swappable LLM brains (Claude API first,
+local LLM second), with a bone-conduction headset as a parked hardware ambition (D12).
+Built by Thomas — a lawyer learning to code — with AI assistance. Not a commercial
+product.
 
 ## Repo map
 
@@ -53,6 +54,10 @@ firmware/          ← (future) ESP32 headset firmware — Doc 03 defines it
 - `ponytail:` code comments are the ponytail plugin's markers (deliberate minimal-code
   shortcut + its revisit condition). Leave them intact when editing nearby; the debt
   ledger is greppable, or harvested with `/ponytail-debt` where the plugin is loaded.
+- **Reviews** (point-in-time studies of this codebase or others') live in
+  `docs/01_scoping/Reviews/`, named `[YYYY-MM-DD]_[HHMM]_Review-[2-5 keyword summary].md`
+  (e.g. `2026-07-18_1643_Review-gemma-voiceink-codebases.md`). Frozen like the rest of
+  `docs/` (hard rule 2).
 
 ## How to work with Thomas
 

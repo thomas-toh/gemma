@@ -8,7 +8,7 @@ start, update it in the same commit as the work · when a step closes, collapse 
 entry to one or two lines — durable knowledge moves out (behaviour → spec · run
 instructions → README · findings → NOTES.md · decisions → a D-number in spec/00).
 
-Last updated: 2026-07-14
+Last updated: 2026-07-18
 
 ## Track G — Bridge (Doc 04 → M0, M1, M2)
 
@@ -45,7 +45,8 @@ Last updated: 2026-07-14
   IDLE, one wake-chain.) Parked — Thomas is ideating this in a separate Fable session.
 - **In flight:** —
 - **Next:** M0 build order (docs/04 §8) complete — remaining before M0 is called done:
-  the owed acceptance run + the M0-close gate below.
+  the owed acceptance run + the M0-close gate below. The acceptance run now also
+  unblocks Track D (D12 sequencing, 2026-07-18).
 - **M0-close gate (Thomas; beyond docs/04 §8):** settings surface for tool setup —
   per-adapter tunables, exposed to the user before M0 is called done. Claude knobs:
   model · effort · thinking. Must be **adapter-aware** (effort/thinking are
@@ -55,23 +56,17 @@ Last updated: 2026-07-14
   reserved in spec/20. Adapter code shape (~8 lines to promote the knobs to params)
   noted in the 2026-07-12 discussion.
 
-## Track H — Headset (Doc 03 → M3)
+## Track H — Headset (Doc 03 → M3) — **PARKED (D12, 2026-07-18)**
 
-- **Works now:** nothing
-- **Plan:** `docs/03_headset/03a_track_h_plan.md` — 7 stages / 4 gates to M3.
-  **DRAFT, pending Thomas's sign-off** (freezes on that commit, hard rule 2).
-- **In flight:** **Shokz OpenSwim Pro acquired (2026-07-14)** — chosen over the
-  used-OpenRun idea because it also fills the swim niche (BT 5.4 + call mic + IP68/
-  32 GB MP3; the only current BC unit covering both duties). Plan Stage 1: wear it
-  daily ≥ a week, then judge Gate 1 (the medium gate). Stays intact permanently —
-  never a teardown donor; Stage 3's £30 generic is the sacrifice. First bridge use:
-  verify the Hands-Free endpoint reports 16 kHz (spec/10 §3).
-- **Next (per plan, draft):** Stage 2 **order the component basket** (docs/01 §11 as
-  adapted in the plan, ≈£170 — OpenComm2 dropped) — lead-time item, runs in parallel
-  with Stage 1 · Stage 3 teardown practice (LiPo precautions, docs/01 §4.1) ·
-  Stage 4 H1 wired build · Stage 5 draft Doc 03 — deliberately reordered *after*
-  teardown + wired build so the engineering doc encodes measured facts, not guesses
-- **Blocked by:** parts delivery once ordered
+- **Parked:** project re-centred on bridge + dictation (spec/00 D12); daily audio is
+  IEMs + built-in/desk mic. Nothing was built. The plan doc
+  (`docs/03_headset/03a_track_h_plan.md`) stays DRAFT — never signed off, so never
+  frozen. Stage 2 component basket (≈£170) **not ordered — do not order.**
+  Shokz OpenSwim Pro stays as a daily headset/swim unit, never a teardown donor;
+  its one Gemma errand (verify the Hands-Free endpoint reports 16 kHz, spec/10 §3)
+  moves to Parked/someday.
+- **Un-park condition:** M0 validated + dictation (MD) solid in daily use, and the
+  hardware itch returns. Contract H and the H0–H4 ladder remain current truth.
 
 ## Track B — Brain (M0 needs B1; M2 needs B2)
 
@@ -92,6 +87,31 @@ Last updated: 2026-07-14
   capability claim, which goes stale at M1), speech normalization, B2-tolerant
   parse. Consumed by the orchestrator (Track G).
 
+## Track D — Dictation (spec/00 D12 → MD)
+
+- **Works now:** nothing. Design settled 2026-07-18 (D12; study:
+  `docs/01_scoping/Reviews/2026-07-18_1643_Review-gemma-voiceink-codebases.md`):
+  **trigger-is-the-mode** — wake word =
+  assistant, global hotkey = dictation (hybrid: tap = toggle, hold ≥0.5 s =
+  push-to-talk; **the key is the endpoint** — release/second-press stops capture, VAD
+  only trims edges, never the assistant loop's 1 s silence cut) · cleanup via a new
+  Contract-B verb **`transform(text, instructions)`** ("rewrite, never answer" — port
+  VoiceInk's enhancement prompt; B1 does cleanup now, B2 inherits it at M2) ·
+  delivery = clipboard + synthetic Ctrl+V, deterministic and user-initiated, never a
+  Contract-T tool · capture stays in RAM (spec/50 rule 3) · STT model is per-mode
+  config — dictation is the stricter quality test.
+- **Blocked by:** the M0 acceptance run (Track G) — decided 2026-07-18: validate the
+  shared capture path live before building on it.
+- **In flight:** —
+- **Next (when unblocked):** ① draft `spec/60_dictation.md` + add `transform` to
+  spec/20 (Contract B) · ② D1 build slice: hotkey → capture → whisper → transform →
+  paste, cleanup included from day one (decided 2026-07-18) · ③ measure
+  `large-v3-turbo` vs `small.en` on the 5080 (latency + error rate on dictated text)
+  for the per-mode model default.
+- **Deferred at design time:** voice-switch into dictation ("take dictation") ·
+  per-app modes (foreground-window detection) · streaming partials ·
+  browser-URL / screen-OCR context blocks.
+
 ## Track T — Tools (Contract T → M1)
 
 - **Works now:** nothing. M0 runs zero tools; the six starter tools (spec/30) land at M1.
@@ -111,7 +131,8 @@ Last updated: 2026-07-14
 
 ## Parked / someday
 
-B3 agent-CLI adapter · H3 (BLE) and H4 (LE Audio) transports · bone-conduction
+Shokz HFP check — verify the Hands-Free endpoint reports 16 kHz (spec/10 §3; was Track
+H's first bridge errand) · B3 agent-CLI adapter · H3 (BLE) and H4 (LE Audio) transports · bone-conduction
 microphone experiment (Knowles V2S200D) · earcon sound design session · per-request
 brain routing · wake-phrase false-accept test protocol · **LiveKit Wakeword** trial as
 an openWakeWord replacement (lower false-accept rate; contained swap behind `wake.py`) ·

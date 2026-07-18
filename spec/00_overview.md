@@ -1,6 +1,6 @@
 # Spec 00 — System overview & status
 
-**Last reconciled: 2026-07-12** · Build progress: [STATE.md](../STATE.md) · Decisions record: [docs/02](../docs/02_architecture/02_system_architecture.md)
+**Last reconciled: 2026-07-18** · Build progress: [STATE.md](../STATE.md) · Decisions record: [docs/02](../docs/02_architecture/02_system_architecture.md)
 
 ## The system in one paragraph
 
@@ -51,6 +51,7 @@ per-track *sub-steps* live in `STATE.md`; the frozen M0 build order is in docs/0
 | Brain adapters | [20_contract_b](20_contract_b.md) | `bridge/brains/` | B1 at M0 · B2 at M2 · B3 at M4 |
 | Tool registry + executor | [30_contract_t](30_contract_t.md) + [schemas/tools.json](schemas/tools.json) | `bridge/tools/` | M1 |
 | Security posture | [50_security](50_security.md) | cross-cutting | always (BINDING) |
+| Dictation (hotkey → transform → paste) | 60_dictation (owed — drafted after the M0 run) | `bridge/dictation/` | MD |
 
 ## Milestones
 
@@ -62,7 +63,8 @@ Definitions only — live progress per track is in [STATE.md](../STATE.md).
 | **M0.5 — It speaks well** | A 10-prompt bank (factual · complex · list-shaped · tool-result) each renders voice-correctly *without* the sentence-count heuristic: short answers spoken whole, long → spoken TL;DR + held detail, no markdown/emoji/URL reaches TTS, numbers/units read naturally. A model-driven output contract replaces spec/40's ≤2-sentence stopgap; adapter-agnostic (B2-tolerant parse). |
 | **M1 — It acts** | "Open Spotify and play something" → `awake` earcon; audit log shows the calls; 6 starter tools |
 | **M2 — It's local** | M1 script passes with Wi-Fi unplugged (B2 brain) |
-| **M3 — On your head** | Full loop on custom ESP32 headset (H2), on-device wake, battery > 4 h |
+| **M3 — On your head** *(parked, D12)* | Full loop on custom ESP32 headset (H2), on-device wake, battery > 4 h |
+| **MD — It types** *(feature milestone, parallel to the M-ladder)* | Hotkey → dictated speech lands in the focused app: ×10 consecutive dictations across ≥3 apps paste correctly after cleanup, zero answer-instead-of-transcript failures; capture in RAM; assistant loop unaffected |
 | **M4 — Experiments** | B3 adapter · bone-conduction mic · H3/H4 · per-request routing |
 
 ## Fixed platform decisions
@@ -96,3 +98,21 @@ tool-progress narration is config-gated, **default off** (`working` ping, then s
 the PC overlay carries continuous state). Clock definition in spec/40. No "complex task
 mode": long-running work is a property of the turn the orchestrator observes (ToolCall
 events), never a spoken mode the user must remember to enter or exit.
+
+**D12 (2026-07-18): Track H parked; dictation joins as an assistant-internal feature.**
+The project re-centres on bridge + brain + tools: audio I/O runs on commodity gear
+(IEMs + built-in/desk mic) for the foreseeable future. The custom BC headset (M3) is
+**parked, not cancelled** — Contract H and the H-generations remain the design for
+whenever it un-parks; the system-in-one-paragraph above describes that end state, with
+the headset seat currently filled by stock hardware. In its place, **dictation** becomes
+a first-class feature *within* the assistant (the assistant remains primary): a global
+hotkey (hybrid — tap = toggle, hold = push-to-talk) triggers capture → STT → LLM
+cleanup ("transform, never answer") → clipboard-paste into the focused app.
+**Trigger-is-the-mode:** the wake word always means assistant, the hotkey always means
+dictation — no spoken mode-switching, no intent inference. The hotkey is Contract H's
+`BUTTON hold=push-to-talk` message arriving early via keyboard. The paste is
+deterministic post-processing, never a Contract-T tool — the model cannot invoke it;
+only the user's keypress does. Capture stays in RAM (spec/50 rule 3 unchanged). Full
+behaviour spec: `spec/60_dictation.md` (owed — drafted after the M0 acceptance run,
+sequencing decided 2026-07-18). Design study:
+[Review — Gemma & VoiceInk codebases](../docs/01_scoping/Reviews/2026-07-18_1643_Review-gemma-voiceink-codebases.md).
