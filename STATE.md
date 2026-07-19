@@ -44,9 +44,13 @@ Last updated: 2026-07-18
 - **Open question:** should conversation history persist across wakes? (Now: dies at
   IDLE, one wake-chain.) Parked — Thomas is ideating this in a separate Fable session.
 - **In flight:** —
-- **Next:** M0 build order (docs/04 §8) complete — remaining before M0 is called done:
-  the owed acceptance run + the M0-close gate below. The acceptance run now also
-  unblocks Track D (D12 sequencing, 2026-07-18).
+- **Next:** M0 build order (docs/04 §8) complete — remaining before M0 is called done,
+  in order: ① **overlay v0 (D13)** — status broadcaster in the orchestrator (localhost
+  JSON feed: state · partial/final transcript · mic level · per-turn latency; schema
+  file first, hard rule 3) + `bridge/ui/` PySide6 pill (non-activating — BINDING,
+  spec/40), testable against scripted fake events with no audio running · ② the owed
+  acceptance run, watched through the overlay · ③ the M0-close gate below. The
+  acceptance run also unblocks Track D (D12 sequencing, 2026-07-18).
 - **M0-close gate (Thomas; beyond docs/04 §8):** settings surface for tool setup —
   per-adapter tunables, exposed to the user before M0 is called done. Claude knobs:
   model · effort · thinking. Must be **adapter-aware** (effort/thinking are
@@ -107,7 +111,8 @@ Last updated: 2026-07-18
   spec/20 (Contract B) · ② D1 build slice: hotkey → capture → whisper → transform →
   paste, cleanup included from day one (decided 2026-07-18) · ③ measure
   `large-v3-turbo` vs `small.en` on the 5080 (latency + error rate on dictated text)
-  for the per-mode model default.
+  for the per-mode model default · ④ D2: overlay dictation states (recording + mic
+  level · transcribing · transforming · pasted) on the D13 status feed.
 - **Deferred at design time:** voice-switch into dictation ("take dictation") ·
   per-app modes (foreground-window detection) · streaming partials ·
   browser-URL / screen-OCR context blocks.
@@ -137,9 +142,7 @@ microphone experiment (Knowles V2S200D) · earcon sound design session · per-re
 brain routing · wake-phrase false-accept test protocol · **LiveKit Wakeword** trial as
 an openWakeWord replacement (lower false-accept rate; contained swap behind `wake.py`) ·
 **semantic endpointing** (M1) — complete-thought detection so long composed prompts
-aren't cut off, the real fix beyond the silence timer (spec/40) · **PC visual overlay**
-(Dynamic-Island-style state/text/icons; a supplement to audio, never a replacement) —
-designed & deferred, see spec/40 § Visual output + spec/00 inventory ·
+aren't cut off, the real fix beyond the silence timer (spec/40) ·
 **sentence-streamed TTS** — parked per D11 (feedback beats speed); `synth()` already
 works per sentence, so streaming = play-each-piece-as-ready; reopen only if measured
 daily use feels slow ·

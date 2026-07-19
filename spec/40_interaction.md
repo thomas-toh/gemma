@@ -1,6 +1,6 @@
 # Spec 40 — Interaction model
 
-**Last reconciled: 2026-07-13** · Build progress: [STATE.md](../STATE.md) (Track G) · Earcon ids: [schemas/earcons.json](schemas/earcons.json)
+**Last reconciled: 2026-07-18** · Build progress: [STATE.md](../STATE.md) (Track G) · Earcon ids: [schemas/earcons.json](schemas/earcons.json)
 
 ## State machine (orchestrator: `bridge/orchestrator.py`)
 
@@ -109,7 +109,7 @@ buzz at each earcon/reply onset. Wired output is unaffected. The daemon MUST hol
 (the orchestrator's `OutputPump`). The standalone `speak.py` CLI opens/closes the device
 per sound, so it exhibits the glitch by design — it disappears under the warm stream.
 
-## Visual output — PC overlay (planned, post-M0)
+## Visual output — PC overlay (D13; v0 planned, pre-M0-run)
 
 A supplementary on-screen indicator on the hub PC: a Dynamic-Island-style overlay — a
 small pill/panel near the top of the screen — showing, at a glance, session **state**
@@ -118,17 +118,34 @@ small pill/panel near the top of the screen — showing, at a glance, session **
 row in spec/00; `bridge/ui/` when built.
 
 Role and hard boundaries:
-- **Supplement, never a replacement.** The system is *eyes-free first* (bone-conduction
-  headset); earcons and TTS remain the primary feedback and must fully carry the
-  experience on their own. The overlay only helps when the user is at the PC and looking.
+- **Supplement, never a replacement — for the assistant.** The assistant is *eyes-free
+  first* (headset audio); earcons and TTS remain the primary feedback and must fully
+  carry the experience on their own. The overlay only helps when the user is at the PC
+  and looking. **For dictation (Track D) the roles invert:** eyes are on screen by
+  definition and sound would intrude, so the overlay is dictation's *primary* feedback
+  surface *(planned, D2)*.
 - **PC-side, not the headset.** Distinct from spec/10's "no screen on the headset"
   exclusion — this lives on the hub machine's display, not the device. The wearer can't
   see their own headset LED either, so the screen is the only *self*-visible surface.
 - **Carries continuous state**, which one-shot earcons can't — so it, not a sound,
   covers the awake→asleep (end-of-session) transition. This is *why* there is no
   `asleep` earcon: falling asleep is passive and a lasting state, better shown than beeped.
-- **Out of scope for M0** (close the voice loop first). Overlay tech per platform
-  (Windows/macOS always-on-top transparent window) and visual design are TBD when scheduled.
+
+Architecture (D13, spec/00):
+- **Separate process on a status feed.** The overlay never runs inside the daemon. The
+  orchestrator broadcasts JSON status events — state transitions, partial/final
+  transcript, mic level, per-turn latency — over a **localhost-only** socket; the
+  overlay subscribes and renders what arrives. Feed message schema lands in
+  `spec/schemas/` at build (hard rule 3). Renderer: **PySide6/Qt** frameless translucent
+  pill on Windows; a later mac renderer consumes the same feed.
+- **Never takes focus (BINDING).** The window is non-activating (`WS_EX_NOACTIVATE` /
+  Qt `WindowDoesNotAcceptFocus` + `ShowWithoutActivating`). Vital for dictation: focus
+  determines where the paste lands — an overlay that steals focus misroutes the transcript.
+- **Truthful state (BINDING).** The listening indicator inherits spec/50's LED rule:
+  it must truthfully reflect whether audio is streaming.
+- **Build order:** overlay v0 (state · live transcript · latency readout) lands
+  **before the M0 acceptance run** and doubles as its instrument; dictation states
+  (recording + mic level · transcribing · transforming · pasted) land at Track D's D2.
 
 ## Open tuning items (M0)
 

@@ -46,7 +46,7 @@ per-track *sub-steps* live in `STATE.md`; the frozen M0 build order is in docs/0
 | Headset hardware (H0 stock → H2 ESP32) | [10_contract_h](10_contract_h.md) | `firmware/` | M3 (Doc 03 pending) |
 | Transport adapters | [10_contract_h](10_contract_h.md) §3 | `bridge/transports/` | H0 bridge-internal at M0 · H2 adapter at M3 |
 | Audio pipeline (wake, VAD, STT, TTS, earcons) | [40_interaction](40_interaction.md) | `bridge/audio/` | M0 |
-| Visual overlay (PC, post-M0 supplement) | [40_interaction](40_interaction.md) § Visual output | `bridge/ui/` | post-M0 |
+| Visual overlay (PC) — separate process on the status feed | [40_interaction](40_interaction.md) § Visual output | `bridge/ui/` | v0 pre-M0-run (D13) · dictation states at D2 |
 | Orchestrator (state machine) | [40_interaction](40_interaction.md) | `bridge/orchestrator.py` | M0 (build step 6) |
 | Brain adapters | [20_contract_b](20_contract_b.md) | `bridge/brains/` | B1 at M0 · B2 at M2 · B3 at M4 |
 | Tool registry + executor | [30_contract_t](30_contract_t.md) + [schemas/tools.json](schemas/tools.json) | `bridge/tools/` | M1 |
@@ -116,3 +116,19 @@ only the user's keypress does. Capture stays in RAM (spec/50 rule 3 unchanged). 
 behaviour spec: `spec/60_dictation.md` (owed — drafted after the M0 acceptance run,
 sequencing decided 2026-07-18). Design study:
 [Review — Gemma & VoiceInk codebases](../docs/01_scoping/Reviews/2026-07-18_1643_Review-gemma-voiceink-codebases.md).
+
+**D13 (2026-07-18): overlay architecture — a separate process on a status feed.** The
+PC overlay (spec/40 § Visual output) runs as its **own process**, never inside the
+daemon: the orchestrator broadcasts JSON status events — state transitions,
+partial/final transcript, mic level, per-turn latency — over a **localhost-only**
+socket, and the overlay is a dumb subscriber rendering whatever arrives. Rationale:
+crash isolation (overlay death never touches the voice loop) · no GIL contention
+between repaints and audio/STT · renderer swappability · contract symmetry — the
+overlay is a second "headset" made of pixels, consuming the same kind of status stream
+Contract H sketches, and its listening indicator inherits spec/50's LED-truthfulness
+rule. The feed's message schema lands in `spec/schemas/` at build (hard rule 3).
+Renderer: **PySide6/Qt** on Windows — frameless, translucent, and **non-activating
+(BINDING, spec/40)**: the overlay must never take focus, because during dictation focus
+determines where the paste lands. A later mac renderer consumes the same feed. Build
+order: overlay v0 (state · live transcript · latency readout) lands **before the M0
+acceptance run** as its instrument; dictation states at Track D's D2.
