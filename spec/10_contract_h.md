@@ -1,9 +1,15 @@
 # Spec 10 — Contract H: headset ↔ bridge
 
-**Last reconciled: 2026-07-12** · Build progress: [STATE.md](../STATE.md) · Message shapes: [schemas/messages.schema.json](schemas/messages.schema.json) (v0.2.0)
+**Last reconciled: 2026-07-20** · Build progress: [STATE.md](../STATE.md) · Message shapes: [schemas/messages.schema.json](schemas/messages.schema.json) (v0.2.0)
 
-*(planned — no transport adapter exists yet; the bridge currently implements the H0
-capture semantics internally: ring buffer, discard, PC-side wake. See STATE, Track G.)*
+> **PARKED (D12/D16, 2026-07-20).** Track H is parked; this contract is out of
+> *current truth* until a headset revival and binds nothing in the desk product.
+> Content preserved intact for that revival. Two ideas born here already live on
+> elsewhere: `BUTTON hold=push-to-talk` became the hotkey triggers (D14/D16), and the
+> status-stream shape informed the overlay feed (D13). The bridge still implements
+> the H0 capture semantics internally: ring buffer, discard, PC-side wake.
+
+*(planned — no transport adapter exists yet)*
 
 The headset is audio I/O plus wake detection and nothing else. Every physical device
 generation implements this same contract via a transport adapter; nothing above the

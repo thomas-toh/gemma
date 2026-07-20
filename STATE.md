@@ -8,7 +8,7 @@ start, update it in the same commit as the work · when a step closes, collapse 
 entry to one or two lines — durable knowledge moves out (behaviour → spec · run
 instructions → README · findings → NOTES.md · decisions → a D-number in spec/00).
 
-Last updated: 2026-07-18
+Last updated: 2026-07-20
 
 ## Track G — Bridge (Doc 04 → M0, M1, M2)
 
@@ -46,11 +46,18 @@ Last updated: 2026-07-18
 - **In flight:** —
 - **Next:** M0 build order (docs/04 §8) complete — remaining before M0 is called done,
   in order: ① **overlay v0 (D13)** — status broadcaster in the orchestrator (localhost
-  JSON feed: state · partial/final transcript · mic level · per-turn latency; schema
-  file first, hard rule 3) + `bridge/ui/` PySide6 pill (non-activating — BINDING,
-  spec/40), testable against scripted fake events with no audio running · ② the owed
-  acceptance run, watched through the overlay · ③ the M0-close gate below. The
-  acceptance run also unblocks Track D (D12 sequencing, 2026-07-18).
+  JSON feed: state · partial/final transcript · **brain text deltas (D14 teleprompter)**
+  · mic level · per-turn latency; schema file first, hard rule 3) + `bridge/ui/`
+  PySide6 pill (non-activating — BINDING, spec/40), testable against scripted fake
+  events with no audio running · ② **hotkey module + ask-Gemma path (D14/D16)** —
+  shared `bridge/hotkeys/` (hybrid tap-toggle / hold-PTT logic, later reused by Track
+  D's D1); ask key opens LISTENING directly · ③ the owed acceptance run, now
+  **desk-shaped (D16)**: ×10 ask-hotkey turns (overlay streaming + speech) + ×3
+  wake-word variant, latency table vs spec/40 targets · ④ the M0-close gate below.
+  The acceptance run also unblocks Track D (D12 sequencing, 2026-07-18).
+- **Post-M0 (D14/D15):** overlay expandable session view (in-memory only) ·
+  word-replacement layer wired into the assistant path · `--clean-prompts` experiment
+  (after Track B's Ollama groundwork; A/B ~20 real transcripts + latency row).
 - **M0-close gate (Thomas; beyond docs/04 §8):** settings surface for tool setup —
   per-adapter tunables, exposed to the user before M0 is called done. Claude knobs:
   model · effort · thinking. Must be **adapter-aware** (effort/thinking are
@@ -83,7 +90,8 @@ Last updated: 2026-07-18
   Re-run with a longer streamed output — feeds the provisional D11 numbers (spec/00).
 - **In flight:** —
 - **Next:** 1) install Ollama on the 5080, pull one small model, sanity-check tokens/sec
-  (B2 groundwork — no commitment to final model; that's the M2 bake-off) ·
+  (B2 groundwork — no commitment to final model; that's the M2 bake-off · also the
+  engine for the D15 `--clean-prompts` experiment) ·
   2) **M0.5 "It speaks well" (spec/00):** voice output contract — model-tagged
   spoken/held split (retires spec/40's sentence-count heuristic), versioned persona
   prompt (retires the `claude.py` placeholder; decided 2026-07-13: persona = template
@@ -103,13 +111,16 @@ Last updated: 2026-07-18
   VoiceInk's enhancement prompt; B1 does cleanup now, B2 inherits it at M2) ·
   delivery = clipboard + synthetic Ctrl+V, deterministic and user-initiated, never a
   Contract-T tool · capture stays in RAM (spec/50 rule 3) · STT model is per-mode
-  config — dictation is the stricter quality test.
+  config — dictation is the stricter quality test · shared deterministic
+  word-replacement layer (D15) runs before `transform` here and before the brain in
+  the assistant path.
 - **Blocked by:** the M0 acceptance run (Track G) — decided 2026-07-18: validate the
   shared capture path live before building on it.
 - **In flight:** —
 - **Next (when unblocked):** ① draft `spec/60_dictation.md` + add `transform` to
   spec/20 (Contract B) · ② D1 build slice: hotkey → capture → whisper → transform →
-  paste, cleanup included from day one (decided 2026-07-18) · ③ measure
+  paste, cleanup included from day one (decided 2026-07-18; reuses Track G's
+  `bridge/hotkeys/` module — D16) · ③ measure
   `large-v3-turbo` vs `small.en` on the 5080 (latency + error rate on dictated text)
   for the per-mode model default · ④ D2: overlay dictation states (recording + mic
   level · transcribing · transforming · pasted) on the D13 status feed.

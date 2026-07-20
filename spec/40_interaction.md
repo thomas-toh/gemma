@@ -1,6 +1,6 @@
 # Spec 40 — Interaction model
 
-**Last reconciled: 2026-07-18** · Build progress: [STATE.md](../STATE.md) (Track G) · Earcon ids: [schemas/earcons.json](schemas/earcons.json)
+**Last reconciled: 2026-07-20** · Build progress: [STATE.md](../STATE.md) (Track G) · Earcon ids: [schemas/earcons.json](schemas/earcons.json)
 
 ## State machine (orchestrator: `bridge/orchestrator.py`)
 
@@ -28,9 +28,12 @@ IDLE ──wake──▶ LISTENING ──end-of-speech──▶ THINKING ──�
   companion. Lives in the brain's system prompt (M0: the B1 adapter's placeholder;
   M0.5: the versioned persona). Chosen partly because the M0 TTS cannot act emphasis —
   the script must not demand what the voice can't perform.
+- Every answer renders in full on the overlay as it streams (D16) — the spoken channel
+  follows the rules below, redundant by design at the desk.
 - Answers ≤ 2 sentences: spoken automatically.
-- Longer answers: play `answer-ready`, hold the text; "read it" (in follow-up window)
-  speaks it. Never lecture uninvited.
+- Longer answers: full text on the overlay; the spoken channel plays `answer-ready`
+  and speaks on "read it" (unchanged away-from-screen behaviour). Never lecture
+  uninvited. M0.5 upgrades this to a model-tagged spoken TL;DR over displayed detail.
 - Successful Tier 2 actions: `task-complete` earcon only. Failures: `error` earcon + one-sentence explanation.
 - Tier 3: `ask` earcon + spoken one-line summary of what will happen.
 - Tool progress (M1, planned — D11): during `ACTING`, the `working` ping then silence
@@ -47,7 +50,8 @@ IDLE ──wake──▶ LISTENING ──end-of-speech──▶ THINKING ──�
 | Turn class | Metric | Target |
 |------------|--------|--------|
 | any | Wake detect → `awake` earcon | < 300 ms |
-| any | End of speech → audible feedback (first spoken word or `working` earcon) | < 1.5 s |
+| any | Ask-hotkey press → listening indication (overlay + earcon) | < 300 ms* |
+| any | End of speech → perceptible feedback (first spoken word, `working` earcon, or overlay THINKING — audible alone must satisfy this away from the screen; D16) | < 1.5 s |
 | no-tool answer | End of speech → first spoken word (B1) | < 4 s* |
 | no-tool answer | End of speech → first spoken word (B2) | < 5 s* |
 | tool turn | End of speech → starter-tool (Tier 2) action executed | < 1.5 s |
@@ -71,6 +75,13 @@ rate) — a contained swap behind the same audio pipeline, would update spec/00.
 blocksize and detection threshold are code-level tuning (`bridge/audio/wake.py`), not
 spec constants.
 
+**Ask-Gemma hotkey (planned, D14/D16).** A push-to-ask key opens `LISTENING` directly —
+the same assistant loop with the wake phrase skipped. Third trigger under
+trigger-is-the-mode (D12/D14): wake word = assistant hands-free · dictation hotkey =
+dictation · ask hotkey = assistant push-to-ask. Builds **before** the desk-shaped M0
+acceptance run (D16), in the shared `bridge/hotkeys/` module; Track D's D1 reuses that
+plumbing.
+
 ## Speech capture & transcription (M0)
 
 After wake, the bridge opens a listening window (`bridge/audio/listen.py`): **Silero
@@ -82,6 +93,13 @@ Mac CPU speed disappoints — added only if measured (it would introduce a per-O
 seam, extending spec/00 D10). Normal turns end on VAD silence at any length; the **30 s**
 cap is a runaway backstop only (on hit: transcribe what we have, warn). Audio is
 RAM-only, discarded after transcription (spec/50 rule 3).
+
+**Transcript hygiene (planned, D15).** Every transcript passes the deterministic
+word-replacement table (known mishearings; schema-defined) before use — both paths.
+The assistant path additionally supports `--clean-prompts` (**default off**): a
+per-prompt `transform()` pass ("fix errors and structure only") via a small local
+model, added as its own row in the latency table and judged by A/B before ever
+becoming default. The overlay shows raw → cleaned when the flag is on.
 
 ## Voice out — earcons & TTS (M0)
 
@@ -118,12 +136,13 @@ small pill/panel near the top of the screen — showing, at a glance, session **
 row in spec/00; `bridge/ui/` when built.
 
 Role and hard boundaries:
-- **Supplement, never a replacement — for the assistant.** The assistant is *eyes-free
-  first* (headset audio); earcons and TTS remain the primary feedback and must fully
-  carry the experience on their own. The overlay only helps when the user is at the PC
-  and looking. **For dictation (Track D) the roles invert:** eyes are on screen by
-  definition and sound would intrude, so the overlay is dictation's *primary* feedback
-  surface *(planned, D2)*.
+- **First-class at the desk; audio must suffice away (D14).** At the desk the overlay
+  is a primary surface — a teleprompter of the transcribed prompt, the streamed
+  response, and tool activity, expandable to the current session's turns (**in-memory
+  only**; nothing written to disk, spec/50 unchanged). Away from the screen, earcons
+  and TTS alone must still fully carry the experience — the demoted-but-binding
+  residue of eyes-free-first; a headset revival depends on it. For dictation (Track D)
+  the overlay is the *primary* feedback surface *(planned, D2)*.
 - **PC-side, not the headset.** Distinct from spec/10's "no screen on the headset"
   exclusion — this lives on the hub machine's display, not the device. The wearer can't
   see their own headset LED either, so the screen is the only *self*-visible surface.
