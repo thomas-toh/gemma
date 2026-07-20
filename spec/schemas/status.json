@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "gemma/overlay/status",
+  "title": "Overlay status feed messages",
+  "version": "0.1.0",
+  "description": "JSON status events the orchestrator broadcasts over a localhost-only socket for the Teleprompter overlay to render (spec/00 D13, Contract P). Transport is one JSON object per line (NDJSON) on 127.0.0.1. The overlay is a dumb subscriber: it renders whatever arrives and never drives the voice loop. Protocol: receivers ignore unknown message types (log once); every message carries 'type'. The 'state' values are the overlay's own; its listening indicator inherits spec/50's truthful-indicator rule (shows 'listening' only while audio is actually being captured).",
+  "oneOf": [
+    { "$ref": "#/$defs/state" },
+    { "$ref": "#/$defs/transcript" },
+    { "$ref": "#/$defs/response" },
+    { "$ref": "#/$defs/mic" },
+    { "$ref": "#/$defs/latency" }
+  ],
+  "$defs": {
+    "state": {
+      "type": "object",
+      "description": "orchestrator->overlay: coarse session state — drives the island's mode (idle = asleep/hidden, listening = bars, thinking = processing, speaking = reply shown, error = fault). 'listening' also covers the follow-up window (mic open, spec/40).",
+      "properties": {
+        "type": { "const": "state" },
+        "state": { "enum": ["idle", "listening", "thinking", "speaking", "error"] }
+      },
+      "required": ["type", "state"],
+      "additionalProperties": false
+    },
+    "transcript": {
+      "type": "object",
+      "description": "orchestrator->overlay: the user's transcribed prompt AFTER the deterministic word-replacement/cleanup (spec/40, D15). 'final':false is reserved for streaming STT (deferred); M0 always sends final:true. The overlay accumulates finals for the expandable session history (D14, in-memory).",
+      "properties": {
+        "type": { "const": "transcript" },
+        "text": { "type": "string" },
+        "final": { "type": "boolean", "default": true }
+      },
+      "required": ["type", "text"],
+      "additionalProperties": false
+    },
+    "response": {
+      "type": "object",
+      "description": "orchestrator->overlay: one chunk of the brain's reply as it streams (the teleprompter, D14). The overlay appends 'delta' to the current reply; 'done':true marks the reply complete. A 'state' message resets the reply for the next turn.",
+      "properties": {
+        "type": { "const": "response" },
+        "delta": { "type": "string", "default": "" },
+        "done": { "type": "boolean", "default": false }
+      },
+      "required": ["type"],
+      "additionalProperties": false
+    },
+    "mic": {
+      "type": "object",
+      "description": "orchestrator->overlay: mic input level in [0,1], emitted while capturing — drives the listening bars and IS the spec/50 truthful-streaming indicator (present <=> audio is being captured). High-frequency and droppable; the overlay must not infer 'listening' from anything else.",
+      "properties": {
+        "type": { "const": "mic" },
+        "level": { "type": "number", "minimum": 0, "maximum": 1 }
+      },
+      "required": ["type", "level"],
+      "additionalProperties": false
+    },
+    "latency": {
+      "type": "object",
+      "description": "orchestrator->overlay: a per-turn latency reading as the orchestrator measures it against the spec/40 targets. 'feedback' = end-of-speech -> first perceptible feedback; 'first_word' = end-of-speech -> first spoken word. Instrument data for the M0 acceptance run, not user-facing chrome by default.",
+      "properties": {
+        "type": { "const": "latency" },
+        "metric": { "enum": ["feedback", "first_word"] },
+        "ms": { "type": "number", "minimum": 0 }
+      },
+      "required": ["type", "metric", "ms"],
+      "additionalProperties": false
+    }
+  }
+}

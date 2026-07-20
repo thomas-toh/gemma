@@ -34,3 +34,21 @@ history.
 
 - Synthesis ≈ 1.26 s for a one-line test on CPU (roughly 0.3–0.4× real-time). Feeds the
   D11 no-tool answer budget; re-check with real reply lengths at step 6.
+
+## Concurrency — why Python's GIL is not the bottleneck
+
+- The GIL serialises only *pure-Python bytecode running in threads*; it is **released**
+  during native/C/GPU work and while blocked on I/O. Every heavy part of Gemma runs
+  outside it: STT (CUDA / CTranslate2), wake·VAD·TTS (ONNX Runtime, C++), the brain
+  (network I/O, async), audio capture/playback (PortAudio's own callback thread — see
+  `speak.py` `OutputPump`). Python is the microsecond glue between them, so the moving
+  parts already run concurrently.
+- It would only bite CPU-bound *pure-Python* parallelism — which Gemma never does; the
+  maths lives in numpy / ONNX / CUDA (all GIL-releasing). This is the standard
+  ML-orchestration pattern, not a special case — hence Python for the bridge (spec/00
+  platform decisions, docs/02 §6). Not a reason to change language.
+- The one genuine concurrency refinement is Python-internal: the per-turn `asyncio.run`
+  loop → a single long-lived async daemon (docs/02 async design; flagged in the
+  2026-07-18 VoiceInk review), due before tools/streaming land. If real parallel
+  pure-Python compute ever appears, Python 3.13+ has an optional free-threaded (no-GIL)
+  build — not needed here.
