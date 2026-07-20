@@ -82,6 +82,11 @@ dictation · ask hotkey = assistant push-to-ask. Builds **before** the desk-shap
 acceptance run (D16), in the shared `bridge/hotkeys/` module; Track D's D1 reuses that
 plumbing.
 
+**Rewrite mode (in principle, D17; planned, Track D slice D3).** Select text → invoke
+→ speak an instruction → the selection is replaced via `transform()`. The trigger
+mapping for all Track D modes is settled by the D17 interaction-consolidation review
+before Track D builds; whatever scheme wins, mode selection stays deterministic (D12).
+
 ## Speech capture & transcription (M0)
 
 After wake, the bridge opens a listening window (`bridge/audio/listen.py`): **Silero

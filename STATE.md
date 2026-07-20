@@ -113,17 +113,24 @@ Last updated: 2026-07-20
   Contract-T tool · capture stays in RAM (spec/50 rule 3) · STT model is per-mode
   config — dictation is the stricter quality test · shared deterministic
   word-replacement layer (D15) runs before `transform` here and before the brain in
-  the assistant path.
-- **Blocked by:** the M0 acceptance run (Track G) — decided 2026-07-18: validate the
-  shared capture path live before building on it.
+  the assistant path · **rewrite mode in principle (D17):** selection + spoken
+  instruction → `transform` → paste-over; slice D3.
+- **Blocked by:** ① the M0 acceptance run (Track G) — decided 2026-07-18: validate
+  the shared capture path live before building on it · ② the **D17
+  interaction-consolidation review** — the trigger scheme (wake word + how many
+  keys, mapped how) must be settled before spec/60 encodes it. No Track D code
+  before both clear.
 - **In flight:** —
-- **Next (when unblocked):** ① draft `spec/60_dictation.md` + add `transform` to
-  spec/20 (Contract B) · ② D1 build slice: hotkey → capture → whisper → transform →
+- **Next (when unblocked):** ⓪ the D17 interaction-consolidation review (design
+  session, no code — output is a D-number + the trigger scheme) · ① draft
+  `spec/60_dictation.md` + add `transform` to spec/20 (Contract B), encoding the
+  review's scheme · ② D1 build slice: trigger → capture → whisper → transform →
   paste, cleanup included from day one (decided 2026-07-18; reuses Track G's
   `bridge/hotkeys/` module — D16) · ③ measure
   `large-v3-turbo` vs `small.en` on the 5080 (latency + error rate on dictated text)
   for the per-mode model default · ④ D2: overlay dictation states (recording + mic
-  level · transcribing · transforming · pasted) on the D13 status feed.
+  level · transcribing · transforming · pasted) on the D13 status feed · ⑤ D3:
+  rewrite mode (D17).
 - **Deferred at design time:** voice-switch into dictation ("take dictation") ·
   per-app modes (foreground-window detection) · streaming partials ·
   browser-URL / screen-OCR context blocks.

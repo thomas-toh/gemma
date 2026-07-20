@@ -197,3 +197,24 @@ dictation stand on it) · OutputPump's BT keep-alive (any Bluetooth audio, not j
 headsets) · spec/50 invariants unchanged · Contracts B/T · the wake word as the
 hands-free/away door, knowing the ask-hotkey will dominate at the desk. Nothing else
 from the eyes-free era binds the desk product.
+
+**D17 (2026-07-20): rewrite mode in principle; interaction-consolidation gate before
+Track D.** Field use of VoiceInk (review: docs/01_scoping/Reviews, 2026-07-20)
+surfaced a third interaction format Gemma lacked: **rewrite** — select text in any
+app, invoke, speak an *instruction* ("make this firmer and halve it"), and the
+selection is replaced by the transformed text. Adopted **in principle** as a Track D
+slice (D3, after dictation works): selection capture via simulated Ctrl+C round-trip
+(Windows) · spoken utterance = the instruction, selection = the content ·
+`transform()` with a rewrite-ladder contract (selection → instruction+text →
+bare text; see the review §3) · delivery = paste over the selection, user-initiated —
+the D12 boundary holds, the model never chooses to paste. **Gate (binding on Track
+D):** before any Track D build begins, a dedicated **interaction-consolidation
+review** answers "how exactly does a user interact with Gemma?" The trigger inventory
+has grown piecemeal — wake word · ask-hotkey · dictation hotkey · proposed rewrite
+trigger; VoiceInk ships three unique shortcuts for its three functions, and
+alternatives are open (one key + modifiers · press-patterns · selection-presence
+switching a shared key · a radial/pill menu on the overlay). Terms of the review:
+mode selection stays **deterministic** — no intent inference, the D12 invariant — but
+the *mapping* of gestures to modes is open, including revisiting how many distinct
+keys exist. Output: a consolidated trigger scheme recorded as its own D-number and
+encoded in `spec/60_dictation.md` (which is drafted only after the review).
