@@ -1,5 +1,5 @@
 {
-  "$comment": "Earcon vocabulary — SINGLE SOURCE OF TRUTH for ids, meanings and maxMs. Design rationale (ring-out, onset-vs-length, sound mapping) lives in spec/40 § Voice out. The bridge maps ids to sounds (M0: generated tones in bridge/audio/speak.py; later: WAV files in bridge/assets/earcons/); H2+ headsets may cache them locally.",
+  "$comment": "Earcon vocabulary — SINGLE SOURCE OF TRUTH for ids, meanings and maxMs. Design rationale (ring-out, onset-vs-length, sound mapping) lives in spec/40 § Voice out. The bridge maps ids to sounds (M0: generated tones in bridge/audio/speak.py; later: WAV files in bridge/assets/earcons/).",
   "version": "0.3.0",
   "earcons": [
     { "id": "awake",         "meaning": "wake word heard, now listening",                     "maxMs": 1100 },

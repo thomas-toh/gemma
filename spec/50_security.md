@@ -9,10 +9,11 @@
 3. **No raw audio at rest.** Untriggered audio lives only in a ≤ 3 s RAM ring buffer and
    is discarded. Triggered-session audio is processed in memory; never written to disk.
    Transcripts are logged locally and are user-purgeable in one action.
-4. **Truthful signalling.** LED states must reflect actual pipeline state; LED `listening`
-   ⇔ audio is leaving the device/being processed. No dark listening, ever.
-5. **Hardware mute is physical.** On custom builds the mute switch interrupts the mic
-   signal/power line. Software observes it (`MUTE` message); software can never override it.
+4. **Truthful signalling.** The overlay's listening indicator must reflect actual pipeline
+   state; `listening` ⇔ audio is being captured/processed. No dark listening, ever.
+5. **Mute is software (desk product).** With commodity audio gear there is no hardware mute
+   line; the tray exposes a software mute that stops capture — honestly weaker than the
+   excised headset's physical switch (spec/00 D18), and truthfully reflected by rule 4.
 6. **`local_only` flag.** Per-session; forces B2, refuses B1/B3 with a spoken error if
    unavailable. Invoked by config or the "private mode" utterance. This is the
    privileged-content switch.

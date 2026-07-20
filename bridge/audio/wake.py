@@ -27,14 +27,12 @@ from bridge.log import setup_logging
 
 log = logging.getLogger("gemma.wake")
 
-# Sample rate is a Contract-H schema constant -- load it, never hardcode (hard rule 3).
-SAMPLE_RATE = load_schemas()["messages"]["audioConstants"]["inbound"]["sampleRateHz"]
+# Sample rate is an audio schema constant -- load it, never hardcode (hard rule 3).
+SAMPLE_RATE = load_schemas()["audio"]["inbound"]["sampleRateHz"]
 
 # --- implementation choices (NOT schema/spec constants; live here, not in spec) ---
 WAKE_MODEL = "hey_jarvis"       # bundled openWakeWord model; the M0 stand-in phrase
 BLOCK_MS = 80                   # openWakeWord's native chunk = 1280 samples @ 16 kHz.
-                                # (The schema's 20 ms frame is the H2+ wire format; H0
-                                # capture is bridge-internal, so we pick 80 ms here.)
 BLOCK_SAMPLES = SAMPLE_RATE * BLOCK_MS // 1000          # 1280
 THRESHOLD = 0.5                 # ponytail: openWakeWord default; raise it if it false-fires
 

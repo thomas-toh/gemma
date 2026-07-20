@@ -37,8 +37,8 @@ log = logging.getLogger("gemma.speak")
 # per-sentence. Pure noise; real phonemizer failures still surface as errors.
 logging.getLogger("phonemizer").setLevel(logging.ERROR)
 
-# Output rate is a Contract-H schema constant -- load it, never hardcode (hard rule 3).
-SAMPLE_RATE_OUT = load_schemas()["messages"]["audioConstants"]["outbound"]["sampleRateHz"]
+# Output rate is an audio schema constant -- load it, never hardcode (hard rule 3).
+SAMPLE_RATE_OUT = load_schemas()["audio"]["outbound"]["sampleRateHz"]
 
 VOICE = "bf_emma:45,af_heart:40,bm_george:15"   # Gemma's voice (chosen by ear, 2026-07-13):
                                                 # British-led (emma dominant -> en-gb phonemes),

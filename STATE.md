@@ -27,8 +27,8 @@ Last updated: 2026-07-20
 - **Owed:** live full-loop test (both OSes) = **the M0 acceptance run** (spec/00: ×10,
   feedback < 1.5 s, first word < 4 s — per-turn latency lines print) + real-speech STT
   figures for the provisional D11 numbers (spec/00). Watch items for that run: earcon
-  ring-out bleeding into VAD on open speakers · BT A2DP↔HFP duplex behaviour (headset
-  mic use may degrade output) · barge-in false-trigger rate on speakers (knob:
+  ring-out bleeding into VAD on open speakers · BT A2DP↔HFP duplex behaviour (a BT
+  earbud's mic use may degrade its output) · barge-in false-trigger rate on speakers (knob:
   `BARGE_CHUNKS` in `orchestrator.py`).
 - **Works now (step 7):** replay harness (`tests/replay.py`) — recorded WAVs through
   the real wake/VAD/STT pipeline driving the real orchestrator with fake mic/pump/
@@ -66,18 +66,6 @@ Last updated: 2026-07-20
   Missing piece is a config source (file → panel); reuses the routing config already
   reserved in spec/20. Adapter code shape (~8 lines to promote the knobs to params)
   noted in the 2026-07-12 discussion.
-
-## Track H — Headset (Doc 03 → M3) — **PARKED (D12, 2026-07-18)**
-
-- **Parked:** project re-centred on bridge + dictation (spec/00 D12); daily audio is
-  IEMs + built-in/desk mic. Nothing was built. The plan doc
-  (`docs/03_headset/03a_track_h_plan.md`) stays DRAFT — never signed off, so never
-  frozen. Stage 2 component basket (≈£170) **not ordered — do not order.**
-  Shokz OpenSwim Pro stays as a daily headset/swim unit, never a teardown donor;
-  its one Gemma errand (verify the Hands-Free endpoint reports 16 kHz, spec/10 §3)
-  moves to Parked/someday.
-- **Un-park condition:** M0 validated + dictation (MD) solid in daily use, and the
-  hardware itch returns. Contract H and the H0–H4 ladder remain current truth.
 
 ## Track B — Brain (M0 needs B1; M2 needs B2)
 
@@ -144,19 +132,17 @@ Last updated: 2026-07-20
 
 ## Specs — spec & decision docs
 
-- **Works now:** spec/ scaffold v0.2 (Contract H v0.2.0, D10 cross-platform recorded);
+- **Works now:** spec/ scaffold v0.2 (D10 cross-platform recorded); **Contract H excised (D18) — custom headset cancelled**;
   **D11 feedback-first latency posture recorded** (spec/00, 2026-07-12: feedback < 1.5 s
   every turn; no-tool answers bounded; tool turns acknowledged, not bounded;
   generate-then-play stays); `NOTES.md` added for operational findings (routing rule
   in the preamble above); docs 01, 02, 04 frozen
 - **In flight:** —
-- **Next:** Doc 03 (headset engineering) when the hardware mood strikes
+- **Next:** —
 
 ## Parked / someday
 
-Shokz HFP check — verify the Hands-Free endpoint reports 16 kHz (spec/10 §3; was Track
-H's first bridge errand) · B3 agent-CLI adapter · H3 (BLE) and H4 (LE Audio) transports · bone-conduction
-microphone experiment (Knowles V2S200D) · earcon sound design session · per-request
+B3 agent-CLI adapter · earcon sound design session · per-request
 brain routing · wake-phrase false-accept test protocol · **LiveKit Wakeword** trial as
 an openWakeWord replacement (lower false-accept rate; contained swap behind `wake.py`) ·
 **semantic endpointing** (M1) — complete-thought detection so long composed prompts

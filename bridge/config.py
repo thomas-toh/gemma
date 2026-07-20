@@ -23,7 +23,7 @@ def schema_dir() -> Path:
 @lru_cache(maxsize=1)
 def load_schemas() -> dict[str, dict]:
     """Every spec/schemas/*.json, keyed by the filename up to the first dot
-    (tools.json -> "tools", messages.schema.json -> "messages")."""
+    (tools.json -> "tools", audio.json -> "audio")."""
     d = schema_dir()
     schemas = {
         p.name.split(".", 1)[0]: json.loads(p.read_text(encoding="utf-8"))
@@ -37,6 +37,6 @@ def load_schemas() -> dict[str, dict]:
 if __name__ == "__main__":
     # ponytail: runnable self-check — proves the loader finds and parses the schemas.
     s = load_schemas()
-    assert {"tools", "earcons", "messages"} <= set(s), sorted(s)
+    assert {"tools", "earcons", "audio"} <= set(s), sorted(s)
     assert all(isinstance(v, dict) for v in s.values()), "each schema must parse to an object"
     print(f"loaded {len(s)} schemas from {schema_dir()}: {sorted(s)}")

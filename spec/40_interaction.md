@@ -12,7 +12,7 @@ IDLE ──wake──▶ LISTENING ──end-of-speech──▶ THINKING ──�
 
 - `LISTENING` opens on WAKE; end-of-speech = VAD silence (initial: 1 s, tune in M0);
   give-up if speech never starts: 5 s (decided 2026-07-13; was 10 s).
-- `FOLLOW-UP`: 8 s window accepting speech without re-wake. Mic open, LED `listening`.
+- `FOLLOW-UP`: 8 s window accepting speech without re-wake. Mic open, overlay `listening`.
 - **Barge-in (binding):** user speech during `SPEAKING` stops TTS ≤ 250 ms and routes
   the speech as new input.
 - `THINKING` that outlives the 1.5 s feedback budget fires the `working` earcon once
@@ -125,8 +125,8 @@ rate:
 *When* each earcon fires and *whether* to speak vs. stay quiet is the orchestrator's job
 per the narration rules above — `speak.py` is only the mechanism.
 
-**Bluetooth output keep-alive (binding for BT devices).** Bluetooth links (H0 stock
-headset; H3/H4) idle during silence and glitch on the first audio after silence — a brief
+**Bluetooth output keep-alive (binding for BT devices).** Bluetooth output (AirPods, BT
+earbuds) idles during silence and glitches on the first audio after silence — a brief
 buzz at each earcon/reply onset. Wired output is unaffected. The daemon MUST hold a
 **persistent output stream** open, feeding silence between sounds, so the link never idles
 (the orchestrator's `OutputPump`). The standalone `speak.py` CLI opens/closes the device
@@ -146,11 +146,8 @@ Role and hard boundaries:
   response, and tool activity, expandable to the current session's turns (**in-memory
   only**; nothing written to disk, spec/50 unchanged). Away from the screen, earcons
   and TTS alone must still fully carry the experience — the demoted-but-binding
-  residue of eyes-free-first; a headset revival depends on it. For dictation (Track D)
-  the overlay is the *primary* feedback surface *(planned, D2)*.
-- **PC-side, not the headset.** Distinct from spec/10's "no screen on the headset"
-  exclusion — this lives on the hub machine's display, not the device. The wearer can't
-  see their own headset LED either, so the screen is the only *self*-visible surface.
+  residue of eyes-free-first (it still holds when you step away from the desk). For
+  dictation (Track D) the overlay is the *primary* feedback surface *(planned, D2)*.
 - **Carries continuous state**, which one-shot earcons can't — so it, not a sound,
   covers the awake→asleep (end-of-session) transition. This is *why* there is no
   `asleep` earcon: falling asleep is passive and a lasting state, better shown than beeped.
@@ -165,8 +162,8 @@ Architecture (D13, spec/00):
 - **Never takes focus (BINDING).** The window is non-activating (`WS_EX_NOACTIVATE` /
   Qt `WindowDoesNotAcceptFocus` + `ShowWithoutActivating`). Vital for dictation: focus
   determines where the paste lands — an overlay that steals focus misroutes the transcript.
-- **Truthful state (BINDING).** The listening indicator inherits spec/50's LED rule:
-  it must truthfully reflect whether audio is streaming.
+- **Truthful state (BINDING).** The listening indicator inherits spec/50's truthful-indicator
+  rule: it must truthfully reflect whether audio is streaming.
 - **Build order:** overlay v0 (state · live transcript · latency readout) lands
   **before the M0 acceptance run** and doubles as its instrument; dictation states
   (recording + mic level · transcribing · transforming · pasted) land at Track D's D2.

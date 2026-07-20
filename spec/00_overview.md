@@ -13,8 +13,7 @@ into the focused app, Track D). Faces: a Dynamic-Island-style **overlay** (the
 teleprompter — a separate process on the status feed, D13/D14) and **audio** (earcons +
 TTS) — redundant by design at the desk, audio alone sufficing away from the screen.
 Requested PC actions run through the **Contract T** tool registry with tiered safety
-gates (M1). The bone-conduction headset that founded the project is **parked** (D12):
-**Contract H** and the H0–H4 ladder wait intact behind a parked banner for revival.
+gates (M1).
 
 ```mermaid
 flowchart LR
@@ -22,36 +21,32 @@ flowchart LR
     G <-- "Contract B" --> B["Brain B1/B2/B3"]
     G <-- "Contract T" --> T["Tools / PC"]
     G -- "status feed (D13)" --> V["Overlay / teleprompter + audio out"]
-    H["Headset (parked, D12)"] -.-> G
 ```
 
 ## Legend — naming scheme
 
-One letter per element. The **bridge (G)** is the hub; **H/B/T** are the three things it
+One letter per element. The **bridge (G)** is the hub; **B/T** are the things it
 connects to, each over the matching Contract.
 
 | Letter | Element | Contract | Component IDs |
 |--------|---------|----------|---------------|
 | **G** | Bridge — the Gemma daemon (audio, wake, STT, TTS, orchestrator) | — (it *is* the hub) | build steps 0–7 |
-| **H** | Headset — hardware + firmware + transport **(parked, D12)** | Contract H (parked banner, spec/10) | generations **H0–H4** |
 | **B** | Brain — swappable LLM | Contract B | **B1** Claude · **B2** local · **B3** CLI |
-| **T** | Tools — registry + executor + PC actions | Contract T | safety **Tier 1–3** (spelled out — a "Tier 3" gate is never an "H3" headset) |
+| **T** | Tools — registry + executor + PC actions | Contract T | safety **Tier 1–3** |
 
 Orthogonal axes: **milestones M0–M4** (project-wide stages — see below) and the frozen
 **decision records docs 01–04**. Milestone *definitions* live in this file; the live
 per-track *sub-steps* live in `STATE.md`; the frozen M0 build order is in docs/04 §8.
 
 > **Terminology note (old → current).** The frozen docs/01–04 use earlier names and are
-> not retro-edited (hard rule 2). Current truth: headset generations **T0–T4 → H0–H4**;
-> STATE.md tracks relettered **A→G** (Bridge), **B→H** (Headset), **C→B** (Brain), with a
-> new **T** (Tools) track — so "Track A's queue" in docs/04 §8 is now Track G's.
+> not retro-edited (hard rule 2). Current truth: STATE.md tracks relettered **A→G**
+> (Bridge), **C→B** (Brain), with a new **T** (Tools) track — so "Track A's queue" in
+> docs/04 §8 is now Track G's.
 
 ## Component inventory
 
 | Component | Spec | Code location | Lands at |
 |-----------|------|---------------|----------|
-| Headset hardware (H0 stock → H2 ESP32) — **parked** | [10_contract_h](10_contract_h.md) (parked) | `firmware/` | M3 (parked, D12) |
-| Transport adapters — **parked** | [10_contract_h](10_contract_h.md) §3 (parked) | `bridge/transports/` | with a headset revival |
 | Hotkey triggers (ask-Gemma · dictation) | [40_interaction](40_interaction.md) + 60_dictation (owed) | `bridge/hotkeys/` | ask pre-M0-run (D16) · dictation at D1 |
 | Audio pipeline (wake, VAD, STT, TTS, earcons) | [40_interaction](40_interaction.md) | `bridge/audio/` | M0 |
 | Visual overlay (PC) — separate process on the status feed | [40_interaction](40_interaction.md) § Visual output | `bridge/ui/` | v0 pre-M0-run (D13) · dictation states at D2 |
@@ -71,17 +66,15 @@ Definitions only — live progress per track is in [STATE.md](../STATE.md).
 | **M0.5 — It speaks well** | A 10-prompt bank (factual · complex · list-shaped · tool-result) each renders voice-correctly *without* the sentence-count heuristic: short answers spoken whole, long → spoken TL;DR + held detail, no markdown/emoji/URL reaches TTS, numbers/units read naturally. A model-driven output contract replaces spec/40's ≤2-sentence stopgap; adapter-agnostic (B2-tolerant parse). |
 | **M1 — It acts** | "Open Spotify and play something" → `awake` earcon; audit log shows the calls; 6 starter tools |
 | **M2 — It's local** | M1 script passes with Wi-Fi unplugged (B2 brain) |
-| **M3 — On your head** *(parked, D12)* | Full loop on custom ESP32 headset (H2), on-device wake, battery > 4 h |
 | **MD — It types** *(feature milestone, parallel to the M-ladder)* | Hotkey → dictated speech lands in the focused app: ×10 consecutive dictations across ≥3 apps paste correctly after cleanup, zero answer-instead-of-transcript failures; capture in RAM; assistant loop unaffected |
-| **M4 — Experiments** | B3 adapter · bone-conduction mic · H3/H4 · per-request routing |
+| **M4 — Experiments** | B3 adapter · per-request routing |
 
 ## Fixed platform decisions
 
-Python 3.12+ / asyncio for the bridge (rationale: docs/02 §6). ESP32-S3 + C++ for the
-H2 headset. Audio: 16 kHz 16-bit mono PCM in, 24 kHz mono out (constants in
-[schemas/messages.schema.json](schemas/messages.schema.json)). Wake word: user-specified
-phrase → trained keyword model (openWakeWord on PC; microWakeWord on ESP32) — never an
-LLM, never continuous transcription. STT: faster-whisper (`small.en`), GPU where
+Python 3.12+ / asyncio for the bridge (rationale: docs/02 §6). Audio: 16 kHz 16-bit mono
+PCM in, 24 kHz mono out (constants in [schemas/audio.json](schemas/audio.json)). Wake
+word: user-specified phrase → trained keyword model (openWakeWord) — never an LLM, never
+continuous transcription. STT: faster-whisper (`small.en`), GPU where
 available (CUDA on the RTX-5080 host; CPU on Mac until a Metal engine is added).
 
 **D10 (2026-07-10): cross-platform hub.** The bridge targets **Windows 11 and macOS as
@@ -110,18 +103,14 @@ events), never a spoken mode the user must remember to enter or exit.
 earcon, first spoken word, or overlay state change; audible alone must still satisfy
 the guarantee away from the screen.)*
 
-**D12 (2026-07-18): Track H parked; dictation joins as an assistant-internal feature.**
+**D12 (2026-07-18): dictation joins as an assistant-internal feature.**
 The project re-centres on bridge + brain + tools: audio I/O runs on commodity gear
-(IEMs + built-in/desk mic) for the foreseeable future. The custom BC headset (M3) is
-**parked, not cancelled** — Contract H and the H-generations remain the design for
-whenever it un-parks; the system-in-one-paragraph above describes that end state, with
-the headset seat currently filled by stock hardware. In its place, **dictation** becomes
-a first-class feature *within* the assistant (the assistant remains primary): a global
-hotkey (hybrid — tap = toggle, hold = push-to-talk) triggers capture → STT → LLM
-cleanup ("transform, never answer") → clipboard-paste into the focused app.
-**Trigger-is-the-mode:** the wake word always means assistant, the hotkey always means
-dictation — no spoken mode-switching, no intent inference. The hotkey is Contract H's
-`BUTTON hold=push-to-talk` message arriving early via keyboard. The paste is
+(IEMs + built-in/desk mic). **Dictation** becomes a first-class feature *within* the
+assistant (the assistant remains primary): a global hotkey (hybrid — tap = toggle, hold
+= push-to-talk) triggers capture → STT → LLM cleanup ("transform, never answer") →
+clipboard-paste into the focused app. **Trigger-is-the-mode:** the wake word always
+means assistant, the hotkey always means dictation — no spoken mode-switching, no intent
+inference. The paste is
 deterministic post-processing, never a Contract-T tool — the model cannot invoke it;
 only the user's keypress does. Capture stays in RAM (spec/50 rule 3 unchanged). Full
 behaviour spec: `spec/60_dictation.md` (owed — drafted after the M0 acceptance run,
@@ -134,10 +123,9 @@ daemon: the orchestrator broadcasts JSON status events — state transitions,
 partial/final transcript, mic level, per-turn latency — over a **localhost-only**
 socket, and the overlay is a dumb subscriber rendering whatever arrives. Rationale:
 crash isolation (overlay death never touches the voice loop) · no GIL contention
-between repaints and audio/STT · renderer swappability · contract symmetry — the
-overlay is a second "headset" made of pixels, consuming the same kind of status stream
-Contract H sketches, and its listening indicator inherits spec/50's LED-truthfulness
-rule. The feed's message schema lands in `spec/schemas/` at build (hard rule 3).
+between repaints and audio/STT · renderer swappability. Its listening indicator inherits
+spec/50's truthful-indicator rule. The feed's message schema lands in `spec/schemas/` at
+build (hard rule 3).
 Renderer: **PySide6/Qt** on Windows — frameless, translucent, and **non-activating
 (BINDING, spec/40)**: the overlay must never take focus, because during dictation focus
 determines where the paste lands. A later mac renderer consumes the same feed. Build
@@ -150,12 +138,11 @@ overlay graduates from supplement to **first-class surface at the desk**: a
 teleprompter rendering the transcribed prompt, the brain's response as it streams
 (text deltas), and tool activity — expandable to the full current-session turns.
 **Eyes-free is demoted, not deleted:** away from the screen, earcons and TTS alone
-must still fully carry the experience (spec/40 amended) — a headset revival depends on
-it. **Third trigger — the ask-Gemma hotkey** (push-to-ask): trigger-is-the-mode
+must still fully carry the experience (spec/40 amended). **Third trigger — the ask-Gemma hotkey** (push-to-ask): trigger-is-the-mode
 survives because each trigger still means exactly one thing — wake word = assistant
 hands-free · dictation hotkey = dictation · ask hotkey = assistant push-to-ask. At the
 desk the ask hotkey will likely dominate the wake word (instant, zero false-accepts);
-the wake word's constituency is away-from-desk and the parked headset — accepted
+the wake word's constituency is away-from-desk — accepted
 knowingly. **History: in-memory only** — the expandable view shows the current
 session's turns from RAM; nothing is written to disk (spec/50 unchanged); revisit only
 if real use demands recall across restarts. Rendering reality: the response side can
@@ -189,14 +176,11 @@ Amends D11 as noted there. **(2) Desk-shaped M0.** The acceptance test now match
 product: ×10 ask-hotkey turns with overlay streaming + speech, plus a ×3 wake-word
 variant proving the spoken path carries alone. Consequence: the ask-hotkey (and the
 shared hotkey module) builds **before** the acceptance run — reversing D14's ordering;
-Track D's D1 now reuses Track G's hotkey plumbing, not vice versa. **(3) Contract H
-parked banner.** spec/10 keeps its content but carries a PARKED header and is out of
-current truth; the system paragraph and inventory no longer lead with the headset.
-**(4) Re-affirmed on merit:** the capture stack (wake/VAD/whisper — both doors and
-dictation stand on it) · OutputPump's BT keep-alive (any Bluetooth audio, not just
-headsets) · spec/50 invariants unchanged · Contracts B/T · the wake word as the
-hands-free/away door, knowing the ask-hotkey will dominate at the desk. Nothing else
-from the eyes-free era binds the desk product.
+Track D's D1 now reuses Track G's hotkey plumbing, not vice versa. **(3) Re-affirmed on
+merit:** the capture stack (wake/VAD/whisper — both doors and dictation stand on it) ·
+OutputPump's BT keep-alive (any Bluetooth audio) · spec/50 invariants · Contracts B/T ·
+the wake word as the hands-free/away door, knowing the ask-hotkey will dominate at the
+desk. Nothing else from the eyes-free era binds the desk product.
 
 **D17 (2026-07-20): rewrite mode in principle; interaction-consolidation gate before
 Track D.** Field use of VoiceInk (review: docs/01_scoping/Reviews, 2026-07-20)
@@ -218,3 +202,18 @@ mode selection stays **deterministic** — no intent inference, the D12 invarian
 the *mapping* of gestures to modes is open, including revisiting how many distinct
 keys exist. Output: a consolidated trigger scheme recorded as its own D-number and
 encoded in `spec/60_dictation.md` (which is drafted only after the review).
+
+**D18 (2026-07-20): Contract H excised — the custom headset is cancelled, not parked.**
+The "do I actually want to build this" test (D12's stock-hardware-first plan) came back
+negative: AirPods and IEMs deliver excellent audio, so the custom bone-conduction
+headset isn't worth building. **Contract H, the H0–H4 ladder, the transport adapters, the
+M3 milestone, and all attendant language are removed from current truth** — the design is
+preserved in git history + the frozen docs/01–04 if ever revived. Supersedes the headset
+halves of D12 (parking → cancellation), D13 ("a second headset made of pixels"), and D16
+((3) parked banner). Survivors the desk product inherited stay, reframed: the audio
+format constants (16 k / 24 k) moved from the deleted `messages.schema.json` to
+`spec/schemas/audio.json` (loaded by `wake.py` / `speak.py`); `earcons.json` (the bridge
+plays them); spec/50's truthful-indicator rule (now the overlay's indicator, not an LED);
+OutputPump's BT keep-alive (any Bluetooth audio); push-to-talk (now the hotkey).
+`spec/10_contract_h.md` and `messages.schema.json` are deleted; audio stays commodity
+(AirPods / IEMs / desk mic).

@@ -2,9 +2,8 @@
 
 Gemma is a personal prototyping project: an always-listening voice assistant +
 dictation bridge on a Windows PC, backed by swappable LLM brains (Claude API first,
-local LLM second), with a bone-conduction headset as a parked hardware ambition (D12).
-Built by Thomas — a lawyer learning to code — with AI assistance. Not a commercial
-product.
+local LLM second). Built by Thomas — a lawyer learning to code — with AI assistance.
+Not a commercial product.
 
 ## Repo map
 
@@ -17,7 +16,6 @@ NOTES.md           ← operational findings (topic-keyed, lean). NEVER required 
                      load-bearing into spec/README/code.
 spec/              ← CURRENT TRUTH of the system. Read the relevant file before working on an area.
   00_overview.md      system map + milestone status (start here)
-  10_contract_h.md    headset ↔ bridge interface
   20_contract_b.md    brain adapter interface (B1 Claude API / B2 local / B3 agent CLI)
   30_contract_t.md    tool registry + safety tiers
   40_interaction.md   session state machine, earcons, narration, latency targets
@@ -25,7 +23,6 @@ spec/              ← CURRENT TRUTH of the system. Read the relevant file befor
   schemas/            EXECUTABLE truth — JSON the code imports (never copy values into code)
 docs/              ← frozen decision records (01 scoping, 02 architecture, …). Never retro-edited.
 bridge/            ← Python daemon — Doc 04 defines it; build status in STATE.md
-firmware/          ← (future) ESP32 headset firmware — Doc 03 defines it
 ```
 
 ## Hard rules (do not relax)
@@ -45,8 +42,8 @@ firmware/          ← (future) ESP32 headset firmware — Doc 03 defines it
    tool, earcon, or message type means editing the schema file, not scattering literals.
 4. **Safety invariants (from spec/50):** no raw shell tool below Tier 3; Tier 3 requires
    spoken confirmation; every tool call is audit-logged; raw audio is never written to
-   disk; LED state must truthfully reflect audio streaming; the hardware mute switch
-   physically cuts the mic. These are design constants, not preferences.
+   disk; the overlay's listening indicator truthfully reflects audio capture. These are
+   design constants, not preferences.
 5. **Keep this file thin.** If a section here grows past a screen, it belongs in `spec/`.
 
 ## Conventions
