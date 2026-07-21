@@ -149,6 +149,9 @@ session's turns from RAM; nothing is written to disk (spec/50 unchanged); revisi
 if real use demands recall across restarts. Rendering reality: the response side can
 teleprompter-scroll from day one (brain deltas already stream); the prompt side
 appears as a block at end-of-speech until streaming STT (deferred) exists.
+*(Amended by D22: the **⌄ expandable-overlay mechanism is cut** — built, seen and rejected.
+The island carries no controls; prior prompts move to the expanded view. In-memory-only,
+response streaming and the eyes-free demotion all stand.)*
 
 **D15 (2026-07-20): prompt hygiene — shared word-replacement; LLM cleanup as a gated
 experiment.** A **deterministic word-replacement layer** (user-curated find-and-replace
@@ -277,3 +280,25 @@ door) *and* the instrumentation has produced numbers. Recorded findings: the eng
 heavy work runs in native GIL-releasing libraries; leaks are logic bugs in any
 language, bounded here by fixed buffers and discard-after-use; slow boot is model
 loading (any runtime) — answered by tray-residency, not a rewrite.
+
+**D22 (2026-07-21): the island carries no controls — the ⌄ handle is cut, everything it
+promised moves to the expanded view.** D14 gave the overlay a **⌄ handle** that expanded to
+the session's prior prompts. It was built, seen in place, and **rejected**: the tab hanging
+below the pill spoiled the line of an otherwise sleek teleprompter. **The island is now a pure
+display surface with no interactive elements at all.** Consequences: (1) prior prompts move
+into an **expanded view**, which becomes the single home for everything the island deliberately
+does not carry — prior prompts, the **full text of a long reply** (the island caps at 3 lines
+and scrolls, so this is also how spec/40's "longer answers: full text on the overlay" is
+honoured), and **copy / save / export**. Its design is explicitly NOT settled here and gets its
+own pass; recorded now because the override itself is decided and the code already reflects it
+(hard rule 1). Scope caution for that pass: copy is safe, save/export must reuse spec/50's
+transcript-logging rather than invent a second path, and "send" is an integration belonging
+behind Contract T (M1+), not a button the overlay owns. (2) Having no controls is what lets the
+island be **wholly click-through** (`WS_EX_TRANSPARENT`) so it never intercepts a click meant
+for the window beneath it — it sits over a maximised browser's tab strip. **Implementation
+warning:** do NOT reach for `QWindow.setMask()` for this; Qt documents it as an input hint but
+on Windows it is `SetWindowRgn`, which clips *painting* too (measured: island 70% painted
+before, 10% after). Per-region click-through in a single window would need `WM_NCHITTEST` →
+`HTTRANSPARENT`; unnecessary while the island has no controls, and the expanded view wants its
+own window regardless. Supersedes D14's expandable-overlay mechanism; D14's other rulings
+(in-memory only, response streaming, eyes-free demoted) stand.

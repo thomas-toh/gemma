@@ -14,7 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
@@ -84,6 +84,15 @@ class Decoder:
 CLEARS_TURN = frozenset({"listening", "thinking", "idle"})
 
 
+# Prior prompts. RAM only — spec/50 forbids writing any of this to disk.
+# NOTHING RENDERS THIS TODAY, deliberately: the ⌄ handle that used to show it was cut (D22),
+# and its replacement — the expanded view — is not built yet. Kept because that view is the
+# agreed home for prior prompts, and because collecting them is ~4 lines with a test, whereas
+# reconstructing a session's prompts after the fact is impossible (nothing is on disk).
+# ponytail: a flat cap, not a ring buffer; the process is short-lived.
+HISTORY_MAX = 50
+
+
 @dataclass
 class OverlayState:
     """What the island is currently showing. Fed by apply(); rendered by the QML layer."""
@@ -95,6 +104,13 @@ class OverlayState:
     mic: float = 0.0
     error: str = ""
     kind: str = ""
+    # Per-turn instrument readings (spec/40 targets: feedback < 1500 ms, first word < 4000 ms).
+    # status.json calls these "not user-facing chrome by default", so the overlay only shows
+    # them behind a toggle — but D13 wants them on screen for the M0 acceptance run.
+    feedback_ms: float = 0.0
+    first_word_ms: float = 0.0
+    # Survives CLEARS_TURN deliberately: the turn ends, the session's prompts do not.
+    history: list = field(default_factory=list)
 
     def apply(self, msg: dict) -> None:
         t = msg["type"]
@@ -103,10 +119,16 @@ class OverlayState:
             if self.state in CLEARS_TURN:
                 self.transcript = self.reply = self.error = self.kind = ""
                 self.done = False
+                self.feedback_ms = self.first_word_ms = 0.0
             if self.state != "listening":
                 self.mic = 0.0          # bars fall the moment the capture window closes
         elif t == "transcript":
             self.transcript = msg["text"]
+            # Only settled prompts join the history; partials (streaming STT, deferred) would
+            # otherwise pile up one entry per keystroke-equivalent.
+            if msg.get("final", True) and msg["text"]:
+                self.history.append(msg["text"])
+                del self.history[:-HISTORY_MAX]
         elif t == "response":
             self.reply += msg.get("delta", "")
             self.done = bool(msg.get("done", False))
@@ -115,7 +137,11 @@ class OverlayState:
         elif t == "error":
             self.error = msg["message"]
             self.kind = msg.get("kind", "unknown")
-        # 'latency' is instrument data, not user-facing chrome by default (status.json)
+        elif t == "latency":
+            if msg["metric"] == "feedback":
+                self.feedback_ms = float(msg["ms"])
+            elif msg["metric"] == "first_word":
+                self.first_word_ms = float(msg["ms"])
 
 
 def _selfcheck() -> None:
@@ -158,9 +184,18 @@ def _selfcheck() -> None:
     assert s.transcript == "what's the weather", "speaking must not clear the prompt"
     s.apply({"type": "response", "done": True})
     assert s.done
-    # a new turn clears the last one
+    # a new turn clears the last one — but NOT the session's prompt history
     s.apply({"type": "state", "state": "listening"})
     assert s.reply == "" and s.transcript == "" and not s.done
+    assert s.history == ["what's the weather"], s.history
+    s.apply({"type": "state", "state": "thinking"})
+    s.apply({"type": "transcript", "text": "set a timer"})
+    s.apply({"type": "transcript", "text": "partial", "final": False})   # partials excluded
+    s.apply({"type": "state", "state": "idle"})
+    assert s.history == ["what's the weather", "set a timer"], s.history
+    for i in range(HISTORY_MAX + 10):                                    # cap holds
+        s.apply({"type": "transcript", "text": f"prompt {i}"})
+    assert len(s.history) == HISTORY_MAX and s.history[-1] == f"prompt {HISTORY_MAX + 9}"
 
     # faults: the message carries the reason, and state:error must not wipe it
     s.apply({"type": "error", "message": "I can't reach my brain right now.", "kind": "unavailable"})
@@ -168,9 +203,13 @@ def _selfcheck() -> None:
     assert s.error == "I can't reach my brain right now." and s.kind == "unavailable"
     s.apply({"type": "error", "message": "no kind given"})
     assert s.kind == "unknown"                                    # schema default
-    s.apply({"type": "latency", "metric": "feedback", "ms": 900})  # ignored, must not raise
+    # latency: captured for the acceptance-run readout, and reset with the turn
+    s.apply({"type": "latency", "metric": "feedback", "ms": 900})
+    s.apply({"type": "latency", "metric": "first_word", "ms": 3400})
+    assert (s.feedback_ms, s.first_word_ms) == (900.0, 3400.0)
     s.apply({"type": "state", "state": "idle"})
     assert s.error == "" and s.state == "idle"
+    assert (s.feedback_ms, s.first_word_ms) == (0.0, 0.0), "latency must reset with the turn"
 
     print("selfcheck OK: framing survives arbitrary chunking, junk/unknown types ignored, "
           "reducer keeps the reply through SPEAKING and clears it on a new turn")

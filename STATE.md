@@ -79,8 +79,10 @@ Last updated: 2026-07-21
   Dynamic-Island **fused to the top screen edge** — bottom corners rounded, top corners flare
   **outward** into the edge (concave, drawn as a filled path); **white on black**; a **bars**
   indicator driven by the real **mic** level (audio-reactive, not decorative); typewriter text
-  (your prompt, then Gemma's reply replaces it — never stacked); **⌄ handle** expands prior
-  prompts this session (in-memory, D14). No state labels.
+  (your prompt, then Gemma's reply replaces it — never stacked). No state labels.
+  **The ⌄ handle is CUT (2026-07-21, overrides D14):** built, seen in place, and rejected — the
+  nub hanging under the pill spoiled the sleek line. Prior prompts move into the expanded view
+  instead, so the island stays a pure display surface with no controls at all.
 - **Window proven on the Windows box** (`sandbox/qml_spike/`): frameless + translucent +
   always-on-top + **non-activating** renders correctly. Windows gotchas captured in NOTES
   (long-path venv · QML-plugin PATH fix · `WS_EX_NOACTIVATE` fallback · concave-corner path).
@@ -112,7 +114,34 @@ Last updated: 2026-07-21
   M0-close gate). **First thing to settle in C3:** whether a non-activating window can host
   clicks/scrolling without ever taking focus — the ⌄ handle, the tray and the expanded view
   all depend on that answer, and the BINDING focus rule (spec/40) forbids getting it wrong.
-- **Owed (design, from 2026-07-21):** an **expanded view** — past ~3–4 lines the island stops
+- **Owed (design, 2026-07-21) — the two dead-air gaps.** The island shows the morphing status
+  word only until the transcript lands, then sits *motionless*. Two distinct problems:
+  **(7a) before the transcript appears** — STT latency, plus whether LLM cleanup gates the
+  display. Note the asymmetry Thomas drew: cleanup latency is invisible in *dictation* (you
+  wait for the paste anyway) but visible in the *assistant* path, where it delays on-screen
+  feedback. Contract P already allows having it both ways: `transcript.final:false` is
+  reserved for partials, so the raw text can show instantly and be *replaced* by the cleaned
+  version — a verbal slip ("…scratch that, 10:30") flashes then resolves, and the brain
+  ignores it either way. This is also the real reason **Parakeet** matters to Track P: whether
+  it streams partials, not its cleanup. Blocked on the Parakeet + `--clean-prompts` (D15)
+  decisions. **(7b) while the brain composes**, after the transcript is settled — the longer
+  wait, and independent of all of the above. Solvable any time; needs a cue that coexists with
+  displayed text (the status word's slot is taken by then).
+- **Settled (2026-07-21) — how the island handles the mouse.** The island is **display-only**
+  and carries no controls, so its window is stamped `WS_EX_TRANSPARENT` (plus NOACTIVATE and
+  TOPMOST): it paints in full yet is invisible to the mouse, and never intercepts a click meant
+  for the app beneath — it sits over a maximised browser's tab strip. Measured: 81% of the
+  island painted, and the pixel under it reports the window behind. **Do NOT use
+  `QWindow.setMask()` for this.** Qt documents it as an input hint, but on Windows it is
+  `SetWindowRgn`, which clips *painting* too — it clipped the island down to the ⌄ nub (70% →
+  10% painted). Both proven on this box: a window can be click-through, and a window can take
+  clicks *without* taking focus. Only *per-region* click-through in ONE window is unproven; it
+  needs `WM_NCHITTEST` → `HTTRANSPARENT` via a native event filter — and the expanded view
+  wants its own window anyway, so it may never be needed.
+- **Owed (design, from 2026-07-21; overrides D14, wants a D-number):** an **expanded view** —
+  now the single home for everything the island deliberately does not carry: **prior prompts**
+  (moved here when the ⌄ was cut), the full text of a long reply, and copy / save / export.
+  Past ~3–4 lines the island stops
   being glanceable, so a second surface shows the full turn with copy/save actions. Resolves
   spec/40's "longer answers: full text on the overlay" honestly, and gives the ⌄ handle a
   better job than history alone (so it widens D14's scope → wants its own D-number). Scope

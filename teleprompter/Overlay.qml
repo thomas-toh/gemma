@@ -37,7 +37,15 @@ Window {
     readonly property int maxLines: 3                    // island stops growing here, then scrolls
     readonly property real fadeTop: 0                    // viewport starts at the screen edge, so
                                                          // the scrolled-off line peeks through
-    readonly property real textW: openW - 2 * padSide    // FINAL layout width — text never reflows
+    // FINAL layout width — the text never reflows mid-animation. Shrinks by the gutter when
+    // the latency readout is on, so an instrument can never overlap a reply.
+    readonly property real textW: openW - 2 * padSide - latencyGutter
+    readonly property int latencyGutter: overlay.showLatency ? 96 : 0
+    // `reducedMotion` is a context property (Windows' "Show animations" setting, resolved in
+    // __main__.py). Layout transitions collapse to instant; the mic bars keep their smoothing,
+    // because they carry information and unsmoothed they read as jitter rather than as level.
+    readonly property int moveMs: reducedMotion ? 0 : Theme.durationResize
+    readonly property int scrollMs: reducedMotion ? 0 : Theme.durationScroll
     // The family arrives as the `fontFamily` context property: QML's font.family takes ONE
     // name (there is no CSS-style chain), so __main__.py walks FONT_STACK against the fonts
     // actually installed and hands in the winner. Install Instrument Sans for the real thing.
@@ -67,7 +75,10 @@ Window {
     // caret cannot twitch it. Growth stops at maxLines; past that the text scrolls.
     readonly property int shownLines: Math.max(1, Math.min(textItem.lineCount, maxLines))
     readonly property int scrolled: Math.max(0, textItem.lineCount - maxLines)
-    height: open ? baseH + (shownLines - 1) * lineBox : baseH
+    // The pill's height. Kept distinct from the window height so a future surface can hang
+    // below without every island-shaped thing re-deriving itself.
+    readonly property int islandH: open ? baseH + (shownLines - 1) * lineBox : baseH
+    height: islandH
 
     // How far the fade may reach before it would dim a real glyph. The first line's BOX starts
     // at padTop, but its ink starts lower: FixedHeight centres the natural line in the box, and
@@ -82,16 +93,20 @@ Window {
     color: "transparent"
     flags: Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
            | Qt.WindowDoesNotAcceptFocus
-    x: Math.round((Screen.width - width) / 2)
-    y: 0
+    // virtualX/Y, not 0 — Screen.width is this screen's width but x is in VIRTUAL-DESKTOP
+    // coordinates, so on a multi-monitor desktop (or the Mac with an external display, D10)
+    // omitting the origin puts the island on the wrong screen. Correct on a single display too.
+    x: Screen.virtualX + Math.round((Screen.width - width) / 2)
+    y: Screen.virtualY
 
-    Behavior on width  { NumberAnimation { duration: Theme.durationResize; easing.type: Easing.InOutCubic } }
-    Behavior on height { NumberAnimation { duration: Theme.durationResize; easing.type: Easing.InOutCubic } }
+    Behavior on width  { NumberAnimation { duration: root.moveMs; easing.type: Easing.InOutCubic } }
+    Behavior on height { NumberAnimation { duration: root.moveMs; easing.type: Easing.InOutCubic } }
 
     // ---- the silhouette ----
     Canvas {
         id: island
-        anchors.fill: parent
+        width: parent.width
+        height: root.islandH
         antialiasing: true
         onPaint: {
             var ctx = getContext("2d");
@@ -196,7 +211,8 @@ Window {
     Row {
         id: bars
         visible: root.st === "listening"
-        anchors.centerIn: parent
+        x: (root.width - width) / 2
+        y: (root.islandH - height) / 2
         height: 26
         spacing: 4
         Repeater {
@@ -224,7 +240,7 @@ Window {
         x: root.flare + root.padSide
         y: root.fadeTop
         width: Math.max(0, root.width - 2 * (root.flare + root.padSide))
-        height: Math.max(0, root.height - root.fadeTop - root.padBottom)
+        height: Math.max(0, root.islandH - root.fadeTop - root.padBottom)
         clip: true
         visible: root.open
 
@@ -235,7 +251,7 @@ Window {
             // read the island height: that dependency is what made the text jump while the
             // height animated. The island grows downward around it instead.
             y: root.padTop - root.fadeTop - root.scrolled * root.lineBox
-            Behavior on y { NumberAnimation { duration: Theme.durationScroll; easing.type: Easing.OutCubic } }
+            Behavior on y { NumberAnimation { duration: root.scrollMs; easing.type: Easing.OutCubic } }
             wrapMode: Text.WordWrap
             color: root.isError ? Theme.textMuted : Theme.textPrimary
             font.family: fontFamily             // resolved in __main__.py, not guessed here
@@ -286,6 +302,27 @@ Window {
         }
     }
 
+    // ---- latency readout: D13's instrument for the M0 acceptance run ----
+    // status.json calls this "not user-facing chrome by default", so it is off unless asked
+    // for (--latency, or the tray toggle). spec/40 targets: perceptible feedback < 1500 ms,
+    // first spoken word < 4000 ms — a reading past its target renders at full strength so a
+    // miss is obvious at a glance during the run.
+    readonly property int fbTarget: 1500
+    readonly property int fwTarget: 4000
+
+    Text {
+        visible: overlay.showLatency && (overlay.feedbackMs > 0 || overlay.firstWordMs > 0)
+        x: root.width - root.flare - root.padSide - width
+        y: root.padTop
+        color: (overlay.feedbackMs > root.fbTarget || overlay.firstWordMs > root.fwTarget)
+               ? Theme.textPrimary : Theme.textMuted
+        font.family: fontFamily
+        font.pixelSize: 11
+        text: (overlay.feedbackMs > 0 ? "fb " + Math.round(overlay.feedbackMs) + "ms" : "")
+              + (overlay.feedbackMs > 0 && overlay.firstWordMs > 0 ? "   " : "")
+              + (overlay.firstWordMs > 0 ? "word " + Math.round(overlay.firstWordMs) + "ms" : "")
+    }
+
     // cosmetic typewriter for the prompt only
     Timer {
         id: reveal
@@ -301,7 +338,7 @@ Window {
         property bool on: true
         interval: 500
         repeat: true
-        running: textItem.typing
+        running: textItem.typing && !reducedMotion
         onTriggered: on = !on
     }
     onBodyTextChanged: reveal.shown = root.isPrompt ? 0 : root.bodyText.length

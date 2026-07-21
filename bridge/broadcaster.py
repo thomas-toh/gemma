@@ -221,7 +221,13 @@ def fake_events():
             yield (0.05, m_state("error"))
             yield (2.5, m_state("idle"))
         else:
-            yield (0.6, m_state("speaking"))
+            # Instrument readings, so the overlay's latency readout is actually exercised
+            # rather than only ever being rendered for the first time during the M0 run.
+            # Deliberately straddles the spec/40 targets (feedback 1500, first word 4000) so
+            # the over-budget styling gets exercised too.
+            yield (0.1, m_latency("feedback", 1180 if turn % 2 else 1720))
+            yield (0.5, m_state("speaking"))
+            yield (0.05, m_latency("first_word", 3450 if turn % 2 else 4310))
             for word in reply.split(" "):
                 yield (0.09, m_response(delta=word + " "))
             yield (0.1, m_response(done=True))

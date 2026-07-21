@@ -16,9 +16,20 @@ class OverlayModel(QObject):
 
     changed = Signal()
 
-    def __init__(self) -> None:
+    def __init__(self, show_latency: bool = False) -> None:
         super().__init__()
         self._s = OverlayState()
+        self._show_latency = show_latency
+
+    # --- a UI preference, not feed state, so it lives here rather than in OverlayState ---
+
+    def toggle_latency(self, on: bool) -> None:
+        self._show_latency = on
+        self.changed.emit()
+
+    @Property(bool, notify=changed)
+    def showLatency(self) -> bool:
+        return self._show_latency
 
     def apply(self, msg: dict) -> None:
         self._s.apply(msg)
@@ -49,3 +60,16 @@ class OverlayModel(QObject):
     @Property(str, notify=changed)
     def error(self) -> str:
         return self._s.error
+
+    @Property(float, notify=changed)
+    def feedbackMs(self) -> float:
+        return self._s.feedback_ms
+
+    @Property(float, notify=changed)
+    def firstWordMs(self) -> float:
+        return self._s.first_word_ms
+
+    @Property(list, notify=changed)
+    def history(self) -> list:
+        """Prior prompts this session, oldest first — the ⌄ dropdown (D14). RAM only."""
+        return self._s.history
