@@ -74,6 +74,20 @@ def pick_font() -> str:
     return ""
 
 
+def check_qml_available() -> bool:
+    """PySide6 can install HALF-completed on Windows without Long Paths: `import PySide6`
+    succeeds while the deeply-nested QML module trees never extract, so the failure surfaces
+    later as a baffling "module QtQuick is not installed". That cost an hour once. Now that
+    PySide6 is a core dependency (D23) any machine can inherit it, so say so plainly."""
+    qml_dir = Path(_pyside_dir) / "qml" / "QtQuick"
+    if qml_dir.is_dir():
+        return True
+    log.error("PySide6 is installed but its QML modules are missing (%s not found).", qml_dir)
+    log.error("This is the Windows long-path half-install. Enable Long Paths, then:")
+    log.error("    python -m pip install --force-reinstall --no-cache-dir PySide6")
+    return False
+
+
 def reduced_motion() -> bool:
     """Windows' "Show animations" accessibility setting — the desktop equivalent of CSS
     `prefers-reduced-motion`, which the mockup honoured. Off => the island's transitions go
@@ -123,6 +137,9 @@ def main() -> int:
 
     # QApplication (not QGuiApplication as in the spike): C3's tray lives in QtWidgets, and
     # the BINDING non-activation is cheaper to prove against the final app class now.
+    if not check_qml_available():
+        return 2
+
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)   # the island hides at idle — that is not a quit
     load_bundled_fonts()                   # must follow QApplication, precede pick_font()

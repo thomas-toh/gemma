@@ -23,6 +23,12 @@ dependencies = [
     # step 4: TTS out. Kokoro on onnxruntime (no torch); espeakng-loader (pulled in)
     # bundles the espeak-ng phonemiser, so no manual install. Earcons need no dep.
     "kokoro-onnx",
+    # The Teleprompter (component P). NOT optional: D23 makes the UI the spine — it always
+    # carries the answer, and D20's propose-then-tap has nowhere to render without it.
+    # Needs Windows Long Paths enabled; Qt's QML module trees nest past 260 chars and the
+    # install otherwise HALF-COMPLETES SILENTLY (import works, QtQuick is missing). See
+    # teleprompter/__main__.py, which checks for that at startup and says so loudly.
+    "PySide6",
 ]
 
 [project.optional-dependencies]
@@ -30,11 +36,6 @@ dependencies = [
 # Install with:  pip install -e ".[gpu-cuda]"  -- listen.py then adds these DLLs to the
 # search path automatically. Not for macOS (use the CPU path / a future Metal engine).
 gpu-cuda = ["nvidia-cublas-cu12", "nvidia-cudnn-cu12", "nvidia-cuda-runtime-cu12"]
-# The Teleprompter front-end (component P, Track P). Optional by design: the daemon is
-# headless and runs fine without it -- it just broadcasts to nobody. Needs Windows Long
-# Paths enabled; Qt's QML module trees nest past 260 chars and the install silently
-# half-completes without it (NOTES.md).
-ui = ["PySide6"]
 
 [tool.setuptools]
 packages = ["bridge", "teleprompter"]

@@ -105,7 +105,8 @@ Last updated: 2026-07-21
   opacity-by-role, type, motion; island geometry stays local) · `__main__.py` (QApplication
   host, non-activating re-stamp on every show, bundled-font registration). **Inter is bundled**
   (`fonts/Inter-Variable.ttf`, ~0.83 MB) and registered at run time — no system install, and
-  the Mac gets the same face (D10). PySide6 is the optional `[ui]` extra; `teleprompter` joins
+  the Mac gets the same face (D10). PySide6 is a **core dependency** (D23 — the UI is the
+  spine, no longer an `[ui]` extra); `teleprompter` joins
   `[tool.setuptools] packages` with package-data for the QML + font.
   **Verified against `--fake` with no audio/mic/models**: every state renders, the 3-line cap
   scrolls, and all 8 CI selfchecks pass.
@@ -153,13 +154,11 @@ Last updated: 2026-07-21
   narrowed to match (v0.2.1): a `mic` message means a capture window (LISTENING/FOLLOW-UP) is
   open; wake-watch and barge-in deliberately emit none. The locked design stands — no mic cue
   while Gemma speaks.
-- **Owed (decision — promote to a D-number when the hotkey/settings work lands):** the
-  **"listen for me"** setting groups the always-on-mic behaviours under one user-facing
-  switch. **Off = hotkeys only** — the mic opens solely on a keypress, no wake word and no
-  barge-in (the privacy-focused posture). **On** = wake word *and* barge-in both live.
-  Touches spec/40 (barge-in's binding rule becomes conditional on the setting), spec/50
-  (posture), spec/70 (the setting itself). Not buildable until a config source exists
-  (M0-close gate); spec/40 stays accurate meanwhile because the built code is unconditional.
+- **Settled by D23 (was owed):** the **"listen for me"** switch groups the always-on-mic
+  behaviours — **off = hotkeys only** (mic opens solely on a keypress: no wake word, no
+  barge-in), **on = both live**. Default off. Recorded in D23 alongside the speech switch;
+  still needs *building*, which waits on a config source (spec/70, M0-close gate). spec/40
+  stays accurate meanwhile because the built code is unconditional.
 - **Owed (Contract P gap, from D20):** the two Teleprompter surfaces D20 introduces have no
   message type — the dictate-door **overwrite warning** (dictate invoked while text is
   selected) and the ask-door **propose-then-tap proposal** (a write-action pending a

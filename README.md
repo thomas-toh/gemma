@@ -1,8 +1,14 @@
-# Gemma bridge
+# Gemma
 
-Python daemon for Project Gemma (bone-conduction headset ↔ LLM brains). Design lives
-in `spec/` (start with `spec/00_overview.md`); current status in `STATE.md`; working
-rules in `CLAUDE.md`.
+A **UI-first desk assistant on Windows** (D23): speech and text in through two doors —
+**dictate** (words at the caret) and **ask** (the assistant) — with every answer rendered on
+the **Teleprompter**, a Dynamic-Island overlay. Two processes: `bridge/` is the headless
+daemon, `teleprompter/` is the overlay that subscribes to its status feed. Design lives in
+`spec/` (start with `spec/00_overview.md`); current status in `STATE.md`; working rules in
+`CLAUDE.md`.
+
+Speech (TTS) and the wake word are supported but **off by default** — flip them on in
+settings. The Teleprompter is not optional.
 
 ## Running (dev)
 
@@ -21,6 +27,11 @@ pip install -e ".[gpu-cuda]"      # optional: NVIDIA GPU speech-to-text (~28x fa
 
 `[gpu-cuda]` is optional and NVIDIA-only (Windows/Linux) — skip it on macOS. Without it,
 speech-to-text runs on CPU.
+
+**Windows: enable Long Paths first.** PySide6 (the Teleprompter, a core dependency since D23)
+has QML module trees nesting past 260 characters. Without Long Paths the install
+**half-completes silently** — `import PySide6` works while QtQuick is missing — so
+`python -m teleprompter` checks for this at startup and tells you how to fix it.
 
 Every new terminal — reactivate, then run:
 

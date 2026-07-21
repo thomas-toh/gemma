@@ -4,16 +4,17 @@
 
 ## The system in one paragraph
 
-Gemma is a desk assistant: the **bridge** (**G**), a Python daemon on the hub machine
-(Windows PC or Mac — D10), with two front doors and two faces (D16). Front doors: a
-global **ask-hotkey** and a **wake word** open the same assistant loop — speech → STT →
-**Contract B** to a swappable brain (B1 Claude API → B2 local LLM → B3 agent CLI) →
-answer; a second hotkey runs **dictation** (speech → transcript → transform → paste
-into the focused app, Track D). Faces: a Dynamic-Island-style **overlay** (the
-teleprompter — a separate process on the status feed, D13/D14) and **audio** (earcons +
-TTS) — redundant by design at the desk, audio alone sufficing away from the screen.
-Requested PC actions run through the **Contract T** tool registry with tiered safety
-gates (M1).
+Gemma is a **UI-first desk assistant on Windows** (D23): the **bridge** (**G**), a Python
+daemon on the hub machine (Windows PC or Mac — D10), driving one visible surface — the
+**Teleprompter** (**P**), a Dynamic-Island overlay in its own process on the status feed
+(D13/D19). Two doors (D20): a **dictate** hotkey puts speech at the caret, and an **ask**
+hotkey opens the assistant — speech → STT → **Contract B** to a swappable brain (B1 Claude
+API → B2 local LLM → B3 agent CLI) → an answer that renders on the Teleprompter, rewrites a
+selection, or calls tools. Requested PC actions run through the **Contract T** tool registry
+with tiered safety gates (M1). **Display always, speech by choice (D23):** the Teleprompter
+always carries the answer, while **TTS** and the **wake word** are supported capabilities
+behind user switches (default off, spec/70) — turn them on and Gemma speaks and answers
+hands-free; leave them off and it is a screen-and-keyboard tool.
 
 ```mermaid
 flowchart LR
@@ -63,7 +64,7 @@ Definitions only — live progress per track is in [STATE.md](../STATE.md).
 
 | Milestone | Definition (acceptance test) |
 |-----------|------------------------------|
-| **M0 — Loop closed (desk-shaped, D16)** | Ask-hotkey → question: response streams to the overlay **and** speech; perceptible feedback < 1.5 s (D11/D16), first spoken word < 4 s, ×10 consecutively · wake-word variant ×3 with the spoken path carrying alone · B1 brain, zero tools |
+| **M0 — Loop closed (UI-first, D23)** | Ask-hotkey → question: the response **streams to the Teleprompter**; perceptible feedback < 1.5 s (D11/D16), ×10 consecutively · B1 brain, zero tools. **With speech enabled** (not pass/fail for M0, measured when on): first spoken word < 4 s; **with "listen for me" enabled**: the wake word opens the same door. Supersedes D16(2)'s speech-gated shape — display is what M0 proves. |
 | **M0.5 — It speaks well** | A 10-prompt bank (factual · complex · list-shaped · tool-result) each renders voice-correctly *without* the sentence-count heuristic: short answers spoken whole, long → spoken TL;DR + held detail, no markdown/emoji/URL reaches TTS, numbers/units read naturally. A model-driven output contract replaces spec/40's ≤2-sentence stopgap; adapter-agnostic (B2-tolerant parse). |
 | **M1 — It acts** | "Open Spotify and play something" → `awake` earcon; audit log shows the calls; 6 starter tools |
 | **M2 — It's local** | M1 script passes with Wi-Fi unplugged (B2 brain) |
@@ -150,8 +151,11 @@ if real use demands recall across restarts. Rendering reality: the response side
 teleprompter-scroll from day one (brain deltas already stream); the prompt side
 appears as a block at end-of-speech until streaming STT (deferred) exists.
 *(Amended by D22: the **⌄ expandable-overlay mechanism is cut** — built, seen and rejected.
-The island carries no controls; prior prompts move to the expanded view. In-memory-only,
-response streaming and the eyes-free demotion all stand.)*
+The island carries no controls; prior prompts move to the expanded view. In-memory-only and
+response streaming stand.)*
+*(Amended by D23: "eyes-free is demoted, not deleted" is demoted one step further — audio
+away from the screen is a **capability behind a switch**, not an obligation. Speech and the
+wake word ship off by default; the Teleprompter always carries the answer.)*
 
 **D15 (2026-07-20): prompt hygiene — shared word-replacement; LLM cleanup as a gated
 experiment.** A **deterministic word-replacement layer** (user-curated find-and-replace
@@ -176,7 +180,11 @@ accumulated D12–D15 patches against the original eyes-free spec; every survivo
 survives by re-affirmation, not inertia. Rulings: **(1) Both, always.** At the desk
 every answer streams to the overlay **and** is spoken (barge-in intact) — redundant by
 design: glance or listen. Away from the screen, audio alone must still carry (D14).
-Amends D11 as noted there. **(2) Desk-shaped M0.** The acceptance test now matches the
+Amends D11 as noted there.
+*(Amended by D23: "both, always" becomes **display always, speech by choice**. The
+Teleprompter always carries the answer; TTS and the wake word are capabilities behind
+switches, default off, and neither gates the project. Ruling (2)'s M0 shape is restated
+there too — the ×3 audio-alone variant is no longer a pass/fail criterion.)* **(2) Desk-shaped M0.** The acceptance test now matches the
 product: ×10 ask-hotkey turns with overlay streaming + speech, plus a ×3 wake-word
 variant proving the spoken path carries alone. Consequence: the ask-hotkey (and the
 shared hotkey module) builds **before** the acceptance run — reversing D14's ordering;
@@ -302,3 +310,45 @@ before, 10% after). Per-region click-through in a single window would need `WM_N
 `HTTRANSPARENT`; unnecessary while the island has no controls, and the expanded view wants its
 own window regardless. Supersedes D14's expandable-overlay mechanism; D14's other rulings
 (in-memory only, response streaming, eyes-free demoted) stand.
+
+**D23 (2026-07-21): identity — a UI-first desk assistant; display always, speech by choice.**
+States plainly what the build has become, and settles the drift between a spec that made
+speech mandatory and a working intent that treats it as a feature.
+
+**Identity.** Gemma is a **UI-first desk assistant on Windows**: an STT + AI pipeline whose
+surface is the **Teleprompter**, reached through two doors — **dictate** (speech to text at the
+caret) and **ask** (the assistant, which also rewrites and calls tools). Closest kin are
+VoiceInk and Siri, but the shape is its own: dictation and assistance over one capture stack,
+one brain contract, one visible surface. This is a statement of what exists, not a change of
+direction — **D12 stands unchanged**: dictation remains a first-class feature within the
+assistant, and the assistant remains primary.
+
+**The Teleprompter is the spine.** Every answer renders on it, always. It is not optional, not
+configurable, and not a supplement: D20's propose-then-tap cannot function without it (an
+ask-door rewrite has nowhere to show its proposal), and dictation's feedback depends on it.
+Accordingly PySide6 stops being an optional `[ui]` extra and becomes a core dependency.
+
+**Speech and the wake word are demoted, not retired** — this is the substantive amendment to
+D16(1)'s "both, always". Both remain fully built and supported; both move behind user
+switches, **default off**; and **neither gates the project's success**. Out of the box Gemma is
+hotkey-driven and screen-only. Turn on **speech** and answers are spoken as well as shown; turn
+on **"listen for me"** and the always-on-mic behaviours — wake word and barge-in — come alive
+together (they are one privacy decision, not two: both open the mic without a keypress, so they
+share one switch, and the truthful-indicator rule of spec/50 rule 4 governs both). Settings
+live in spec/70.
+
+**The away-from-screen guarantee is demoted from BINDING to a supported capability.** spec/40's
+"earcons and TTS alone must still fully carry the experience" was the last load-bearing residue
+of the cancelled eyes-free/headset era (D18). Walking away and talking to Gemma still works —
+that is what speech-on and the wake word are *for* — but it is no longer an obligation the
+whole system is held to, and no longer something the acceptance test proves. This retires the
+residue without retiring the capability.
+
+**Consequences.** (a) M0's acceptance test becomes display-first: ×10 ask-hotkey turns with the
+answer streaming to the Teleprompter, feedback < 1.5 s; the spoken path is exercised only with
+speech enabled, and the ×3 "spoken path carrying alone" variant is no longer pass/fail.
+(b) spec/40's narration rules and § Visual output are reworded accordingly. (c) The parked
+"listen for me" decision is **settled here** rather than left owed. (d) D11's feedback budget is
+unaffected — "perceptible feedback" already counts an overlay state change, so a screen-only
+Gemma still meets it.
+

@@ -28,9 +28,10 @@ IDLE ──wake──▶ LISTENING ──end-of-speech──▶ THINKING ──�
   companion. Lives in the brain's system prompt (M0: the B1 adapter's placeholder;
   M0.5: the versioned persona). Chosen partly because the M0 TTS cannot act emphasis —
   the script must not demand what the voice can't perform.
-- Every answer renders in full on the overlay as it streams (D16) — the spoken channel
-  follows the rules below, redundant by design at the desk.
-- Answers ≤ 2 sentences: spoken automatically.
+- Every answer renders in full on the Teleprompter as it streams — **always** (D23). The
+  spoken channel is a capability behind a switch (**default off**, spec/70); everything below
+  applies only when speech is enabled.
+- Speech on, answers ≤ 2 sentences: spoken automatically.
 - Longer answers: full text on the overlay; the spoken channel plays `answer-ready`
   and speaks on "read it" (unchanged away-from-screen behaviour). Never lecture
   uninvited. M0.5 upgrades this to a model-tagged spoken TL;DR over displayed detail.
@@ -146,13 +147,18 @@ small pill/panel near the top of the screen — showing, at a glance, session **
 row in spec/00; the top-level `teleprompter/` package (component P, D19).
 
 Role and hard boundaries:
-- **First-class at the desk; audio must suffice away (D14).** At the desk the overlay
-  is a primary surface — a teleprompter of the transcribed prompt, the streamed
-  response, and tool activity, expandable to the current session's turns (**in-memory
-  only**; nothing written to disk, spec/50 unchanged). Away from the screen, earcons
-  and TTS alone must still fully carry the experience — the demoted-but-binding
-  residue of eyes-free-first (it still holds when you step away from the desk). For
-  dictation (Track D) the overlay is the *primary* feedback surface *(planned, D2)*.
+- **The spine, not a supplement (D23).** The Teleprompter is *the* surface: a teleprompter of
+  the transcribed prompt, the streamed response, and tool activity. It always carries the
+  answer — it is not optional or configurable, and D20's propose-then-tap cannot function
+  without it (an ask-door rewrite has nowhere to show its proposal). Prior prompts and the full
+  text of a long reply live in the **expanded view** (D22), **in-memory only** — nothing
+  written to disk (spec/50 unchanged). For dictation (Track D) it is likewise the primary
+  feedback surface *(planned, D2)*.
+- **Audio away from the screen: supported, not guaranteed (D23).** Earcons and TTS once had to
+  "fully carry the experience" away from the screen — the last load-bearing residue of the
+  cancelled eyes-free era (D18). That is now **demoted from BINDING to a capability**: turn on
+  speech and the wake word ("listen for me", spec/70) and walking away still works, but the
+  system is no longer held to it and the acceptance test no longer proves it.
 - **Carries continuous state**, which one-shot earcons can't — so it, not a sound,
   covers the awake→asleep (end-of-session) transition. This is *why* there is no
   `asleep` earcon: falling asleep is passive and a lasting state, better shown than beeped.
