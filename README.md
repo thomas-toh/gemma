@@ -16,6 +16,15 @@ Requires **Python 3.12+**. Use an isolated environment (`.venv`) so installs don
 touch the system Python — on macOS/Homebrew a system-wide `pip install` is blocked
 outright (PEP 668).
 
+> **Reality check on the Windows dev box (2026-07-21).** It currently runs *without* a venv,
+> straight into Microsoft-Store-Python user-site — so the instructions below describe the
+> recommended setup, not the machine you may be sitting at. That works, but it is why two
+> workarounds exist: the 138-char Store site-packages path is what made the PySide6 long-path
+> install fail (below), and `bridge/audio/listen.py` has to add the CUDA DLL directories to the
+> search path by hand because Store Python does not search them. A short-path venv avoids
+> both. Details in `NOTES.md`; worth reconciling when you next pay the install cost anyway
+> (fresh machine, the Mac, or packaging).
+
 First time — create the environment and install:
 
 ```bash
