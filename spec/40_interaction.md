@@ -75,17 +75,22 @@ rate) — a contained swap behind the same audio pipeline, would update spec/00.
 blocksize and detection threshold are code-level tuning (`bridge/audio/wake.py`), not
 spec constants.
 
-**Ask-Gemma hotkey (planned, D14/D16).** A push-to-ask key opens `LISTENING` directly —
-the same assistant loop with the wake phrase skipped. Third trigger under
-trigger-is-the-mode (D12/D14): wake word = assistant hands-free · dictation hotkey =
-dictation · ask hotkey = assistant push-to-ask. Builds **before** the desk-shaped M0
-acceptance run (D16), in the shared `bridge/hotkeys/` module; Track D's D1 reuses that
-plumbing.
+**Triggers — the two doors (D20; planned).** Two hotkeys, bindings in config (spec/70):
+- **Dictate** — dumb by contract: capture → word-replace (D15) → `transform` cleanup →
+  paste at the caret. Never answers, never routes. Safety rule: invoking dictate while
+  text is selected warns on the Teleprompter before pasting over it.
+- **Ask** — the assistant: utterance + context (selection · clipboard) to the brain,
+  which is the toolpicker (Contract B tool-calling over tools.json). Answers render on
+  the Teleprompter and speak (D16). Write-actions (rewrite of the selection, etc.) are
+  **propose-then-tap**: proposal on the Teleprompter, second tap of the ask key
+  applies — only a user keypress ever pastes (D12). `auto_apply` (spec/70, default
+  off) bypasses the tap knowingly.
 
-**Rewrite mode (in principle, D17; planned, Track D slice D3).** Select text → invoke
-→ speak an instruction → the selection is replaced via `transform()`. The trigger
-mapping for all Track D modes is settled by the D17 interaction-consolidation review
-before Track D builds; whatever scheme wins, mode selection stays deterministic (D12).
+Each key is hybrid: tap = toggle, hold ≥0.5 s = push-to-talk; the key is the endpoint,
+VAD only trims. The ask key opens `LISTENING` directly (wake phrase skipped); the wake
+word stays the hands-free entrance to the same door. The hotkey module builds before
+the desk-shaped M0 run (D16), shared `bridge/hotkeys/`; the dictate door reuses it.
+Rewrite is an ask *outcome*, not a mode (D20, superseding D17's separate slice).
 
 ## Speech capture & transcription (M0)
 

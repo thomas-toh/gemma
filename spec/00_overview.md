@@ -238,3 +238,42 @@ not merely flag it. Secrets stay provider-scoped in the OS credential store (spe
 per-role provider *routing* is a later concern (STATE Parked/someday), kept out of the key
 name. Supersedes the `bridge/ui/` code-path (now `teleprompter/`) in the component
 inventory and spec/40. Build sequence and progress: STATE Track P.
+
+**D20 (2026-07-21): the two-door interaction model.** The D17 interaction-consolidation
+review (held 2026-07-21) resolved to **two doors, not three modes**: **dictate** (dumb)
+and **ask** (smart), one hotkey each (bindings live in config — spec/70), hybrid
+tap-toggle / hold-PTT per key (D14). **Dictate:** capture → deterministic word-replace
+(D15) → `transform` cleanup → paste at the caret — no intelligence beyond cleanup,
+ever. Safety rule: invoking dictate while text is selected warns on the Teleprompter
+before pasting over it. **Ask:** the full assistant — utterance + context (selection,
+clipboard) go to the brain, which *is* the toolpicker: Contract B tool-calling over the
+tools.json registry routes intent (answer · rewrite · fetch · act). Answers render on
+the Teleprompter and speak (D16). **Rewrite is not a mode — it is an ask outcome**
+(supersedes D17's separate-slice framing; the selection is the content, the utterance
+is the instruction). Write-actions from the ask door are **propose-then-tap** by
+default: the proposal renders on the Teleprompter and a second tap of the ask key
+applies it — only a user keypress ever pastes (D12). An **`auto_apply`** setting
+(spec/70, present from the first config, **default off**) bypasses the tap knowingly.
+The wake word remains the hands-free second entrance to the ask door — no new mode.
+Resolves D17's gate: Track D is unblocked by this record (the M0 acceptance run
+remains its other gate).
+
+**D21 (2026-07-21): Rust port — evaluated and deferred.** An adversarial runtime
+review (external critique + counter-analysis, 2026-07-20/21) examined moving the
+engine to Rust. **Ruling: finish the app in Python first; port later, if ever —
+triggered by observable facts, not rhetoric.** The port plan is preserved so a future
+port inherits it ready-made: **back-end only, behind Contract P** — a Rust daemon
+(Tokio · `cpal` capture · ONNX runtime for STT/VAD/wake · `reqwest` streaming brains ·
+native hotkey/paste seams) publishing the same NDJSON feed on the same port, so the
+QML Teleprompter keeps working unchanged and doubles as the port's live behaviour
+oracle; same-repo Cargo workspace; the Python engine becomes the reference
+implementation. **Re-open triggers (any one):** ① measured pain — boot-time/RSS
+instrumentation (a planned Contract-P addition) shows real leak or latency problems in
+daily use · ② Gemma becomes an always-on battery-powered laptop daemon · ③ shipping
+to a second non-technical user (signed-installer era). **Anti-relitigation clause
+(binding on every session, human or AI):** no runtime/architecture re-debate until the
+Python app is feature-complete (Teleprompter C2/C3 · hotkeys · dictate door · ask
+door) *and* the instrumentation has produced numbers. Recorded findings: the engine's
+heavy work runs in native GIL-releasing libraries; leaks are logic bugs in any
+language, bounded here by fixed buffers and discard-after-use; slow boot is model
+loading (any runtime) — answered by tray-residency, not a rewrite.

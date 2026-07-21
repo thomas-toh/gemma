@@ -48,9 +48,9 @@ Last updated: 2026-07-21
   in order: ① **Teleprompter (D13/D19) — its own Track P** (front/back split): the
   Contract-P feed schema (`status.json`) and the orchestrator-side **broadcaster**
   (`bridge/broadcaster.py`) are built (Track P C1); remaining is the `teleprompter/` app
-  (front-end, Track P C2/C3) · ② **hotkey module + ask-Gemma path (D14/D16)** —
-  shared `bridge/hotkeys/` (hybrid tap-toggle / hold-PTT logic, later reused by Track
-  D's D1); ask key opens LISTENING directly · ③ the owed acceptance run, now
+  (front-end, Track P C2/C3) · ② **hotkey module — the two doors (D20)** —
+  shared `bridge/hotkeys/` (hybrid tap-toggle / hold-PTT; dictate + ask keys, bindings
+  in spec/70 config); ask key opens LISTENING directly · ③ the owed acceptance run, now
   **desk-shaped (D16)**: ×10 ask-hotkey turns (overlay streaming + speech) + ×3
   wake-word variant, latency table vs spec/40 targets · ④ the M0-close gate below.
   The acceptance run also unblocks Track D (D12 sequencing, 2026-07-18).
@@ -146,25 +146,23 @@ Last updated: 2026-07-21
   Contract-T tool · capture stays in RAM (spec/50 rule 3) · STT model is per-mode
   config — dictation is the stricter quality test · shared deterministic
   word-replacement layer (D15) runs before `transform` here and before the brain in
-  the assistant path · **rewrite mode in principle (D17):** selection + spoken
-  instruction → `transform` → paste-over; slice D3.
-- **Blocked by:** ① the M0 acceptance run (Track G) — decided 2026-07-18: validate
-  the shared capture path live before building on it · ② the **D17
-  interaction-consolidation review** — the trigger scheme (wake word + how many
-  keys, mapped how) must be settled before spec/60 encodes it. No Track D code
-  before both clear.
+  the assistant path · **rewrite (D20):** an *ask-door
+  outcome*, not a mode — propose-then-tap on the Teleprompter; `auto_apply` (spec/70,
+  default off); slice D3.
+- **Blocked by:** the M0 acceptance run (Track G) — decided 2026-07-18: validate
+  the shared capture path live before building on it. (The D17 review gate cleared
+  2026-07-21 → **D20**, the two-door model.)
 - **In flight:** —
-- **Next (when unblocked):** ⓪ the D17 interaction-consolidation review (design
-  session, no code — output is a D-number + the trigger scheme) · ① draft
-  `spec/60_dictation.md` + add `transform` to spec/20 (Contract B), encoding the
-  review's scheme · ② D1 build slice: trigger → capture → whisper → transform →
+- **Next (when unblocked):** ① draft
+  `spec/60_dictation.md` + add `transform` to spec/20 (Contract B), encoding D20's
+  two-door scheme · ② D1 build slice: trigger → capture → whisper → transform →
   paste, cleanup included from day one (decided 2026-07-18; reuses Track G's
   `bridge/hotkeys/` module — D16) · ③ measure `large-v3-turbo` vs `small.en` vs
   **Parakeet** (sherpa-onnx = torch-free ONNX path; **gated** — adopt only if a real win,
   discuss first) on the 5080 (latency + error rate on dictated text) for the per-mode
   model default · ④ D2: overlay dictation states (recording + mic
-  level · transcribing · transforming · pasted) on the D13 status feed · ⑤ D3:
-  rewrite mode (D17).
+  level · transcribing · transforming · pasted) on the D13 status feed · ⑤ D3: ask-door
+  rewrite (D20, propose-then-tap).
 - **Deferred at design time:** voice-switch into dictation ("take dictation") ·
   per-app modes (foreground-window detection) · streaming partials ·
   browser-URL / screen-OCR context blocks.
@@ -183,7 +181,9 @@ Last updated: 2026-07-21
   every turn; no-tool answers bounded; tool turns acknowledged, not bounded;
   generate-then-play stays); `NOTES.md` added for operational findings (routing rule
   in the preamble above); **Teleprompter formalised (D19): component P · Contract P ·
-  front/back split; `status.json` → v0.2.0 (+`error` message)**; docs 01, 02, 04 frozen
+  front/back split; `status.json` → v0.2.0 (+`error` message)**; **two-door
+  interaction model recorded (D20)**; **Rust port evaluated & deferred with re-open
+  triggers + anti-relitigation clause (D21)**; docs 01, 02, 04 frozen
 - **In flight:** —
 - **Next:** —
 

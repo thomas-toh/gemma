@@ -55,6 +55,9 @@ bridge/            ← Python daemon — Doc 04 defines it; build status in STAT
   `docs/01_scoping/Reviews/`, named `[YYYY-MM-DD]_[HHMM]_Review-[2-5 keyword summary].md`
   (e.g. `2026-07-18_1643_Review-gemma-voiceink-codebases.md`). Frozen like the rest of
   `docs/` (hard rule 2).
+- **Session coordination.** Before opening a design session or allocating a D-number,
+  read spec/00's decision tail and `git log -5`. One design session holds the pen at a
+  time — parallel sessions caused the D18/D19 numbering collision of 2026-07-21.
 
 ## How to work with Thomas
 
