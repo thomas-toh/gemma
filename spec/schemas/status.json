@@ -2,14 +2,15 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "gemma/overlay/status",
   "title": "Overlay status feed messages",
-  "version": "0.1.0",
-  "description": "JSON status events the orchestrator broadcasts over a localhost-only socket for the Teleprompter overlay to render (spec/00 D13, Contract P). Transport is one JSON object per line (NDJSON) on 127.0.0.1. The overlay is a dumb subscriber: it renders whatever arrives and never drives the voice loop. Protocol: receivers ignore unknown message types (log once); every message carries 'type'. The 'state' values are the overlay's own; its listening indicator inherits spec/50's truthful-indicator rule (shows 'listening' only while audio is actually being captured).",
+  "version": "0.2.0",
+  "description": "JSON status events the orchestrator broadcasts over a localhost-only socket for the Teleprompter overlay to render (spec/00 D13/D19, Contract P). Transport is one JSON object per line (NDJSON) on 127.0.0.1. The overlay is a dumb subscriber: it renders whatever arrives and never drives the voice loop. Protocol: receivers ignore unknown message types (log once); every message carries 'type'. The 'state' values are the overlay's own; its listening indicator inherits spec/50's truthful-indicator rule (shows 'listening' only while audio is actually being captured).",
   "oneOf": [
     { "$ref": "#/$defs/state" },
     { "$ref": "#/$defs/transcript" },
     { "$ref": "#/$defs/response" },
     { "$ref": "#/$defs/mic" },
-    { "$ref": "#/$defs/latency" }
+    { "$ref": "#/$defs/latency" },
+    { "$ref": "#/$defs/error" }
   ],
   "$defs": {
     "state": {
@@ -63,6 +64,17 @@
         "ms": { "type": "number", "minimum": 0 }
       },
       "required": ["type", "metric", "ms"],
+      "additionalProperties": false
+    },
+    "error": {
+      "type": "object",
+      "description": "orchestrator->overlay: why the current turn failed. Pairs with a state:'error' message (which flips the island to its fault mode); this carries the human-facing reason so the surface can explain the fault, not merely flag it. 'kind' is the Contract-B error taxonomy (spec/20: auth | rate_limit | context | unavailable | malformed_tool_call | unknown) carried as a free string for styling/affordances — receivers tolerate unknown kinds. 'message' is the one-line explanation (the same sentence spoken per spec/40 narration).",
+      "properties": {
+        "type": { "const": "error" },
+        "kind": { "type": "string", "default": "unknown" },
+        "message": { "type": "string" }
+      },
+      "required": ["type", "message"],
       "additionalProperties": false
     }
   }

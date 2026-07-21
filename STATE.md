@@ -8,7 +8,7 @@ start, update it in the same commit as the work · when a step closes, collapse 
 entry to one or two lines — durable knowledge moves out (behaviour → spec · run
 instructions → README · findings → NOTES.md · decisions → a D-number in spec/00).
 
-Last updated: 2026-07-20
+Last updated: 2026-07-21
 
 ## Track G — Bridge (Doc 04 → M0, M1, M2)
 
@@ -45,10 +45,10 @@ Last updated: 2026-07-20
   IDLE, one wake-chain.) Parked — Thomas is ideating this in a separate Fable session.
 - **In flight:** —
 - **Next:** M0 build order (docs/04 §8) complete — remaining before M0 is called done,
-  in order: ① **Teleprompter (D13) — now its own Track P** (front/back split, this
-  session): the Contract-P feed schema is committed (`status.json`); remaining is the
-  orchestrator-side **broadcaster** (back-end, here) + the `teleprompter/` app (front-end,
-  Track P) · ② **hotkey module + ask-Gemma path (D14/D16)** —
+  in order: ① **Teleprompter (D13/D19) — its own Track P** (front/back split): the
+  Contract-P feed schema (`status.json`) and the orchestrator-side **broadcaster**
+  (`bridge/broadcaster.py`) are built (Track P C1); remaining is the `teleprompter/` app
+  (front-end, Track P C2/C3) · ② **hotkey module + ask-Gemma path (D14/D16)** —
   shared `bridge/hotkeys/` (hybrid tap-toggle / hold-PTT logic, later reused by Track
   D's D1); ask key opens LISTENING directly · ③ the owed acceptance run, now
   **desk-shaped (D16)**: ×10 ask-hotkey turns (overlay streaming + speech) + ×3
@@ -66,7 +66,7 @@ Last updated: 2026-07-20
   reserved in spec/20. Adapter code shape (~8 lines to promote the knobs to params)
   noted in the 2026-07-12 discussion.
 
-## Track P — Teleprompter (front-end · Contract P) — **decided + spiked this session**
+## Track P — Teleprompter (Contract P) — **back-end built (C1); front-end next**
 
 - **Decided (2026-07-20):** the visual front-end is the **Teleprompter** (component **P**),
   a separate **PySide6 + QML** process on the **Contract P** status feed
@@ -84,15 +84,31 @@ Last updated: 2026-07-20
 - **Window proven on the Windows box** (`sandbox/qml_spike/`): frameless + translucent +
   always-on-top + **non-activating** renders correctly. Windows gotchas captured in NOTES
   (long-path venv · QML-plugin PATH fix · `WS_EX_NOACTIVATE` fallback · concave-corner path).
+- **Built (C1, this commit):** the back-end. `bridge/broadcaster.py` — crash-isolated
+  localhost NDJSON publisher on Contract P (`publish()` never blocks/raises; a busy port
+  disables it; overlay = reconnecting client, daemon = always-up server) + a scripted
+  `--fake` driver (drives the whole overlay with **no audio/mic/models**) + `--selfcheck`
+  (validates the wire against `status.json`; CI-wired — the first Gemma test to exercise
+  its full wire path in CI). Orchestrator seam: state/transcript/response-delta/mic-RMS/
+  latency/error mirrored off `_ev`, broadcaster started in `run()`; unstarted (inert) under
+  replay. Contract P gained an **`error`** message (`kind` + `message`). **D19** recorded
+  (spec/00) — Teleprompter = P · Contract P · front/back split. Selfchecks green; socket
+  wire + crash-isolation verified live.
 - **In flight:** —
-- **Next — build the `teleprompter/` app:** ① Python host + QML island (all states, bars from
-  the `mic` feed, transcript/reply render, ⌄ expand/history) · ② `QSystemTrayIcon` tray
-  (alive-icon + Quit + a **Groq API-key field** → credential store via `keyring`, spec/50) ·
-  ③ the orchestrator-side **broadcaster** (crash-isolated localhost publisher on Contract P) +
-  a scripted **fake-feed driver** (testable, no audio) · ④ PySide6 as an optional `[ui]` dep.
-  Full settings surface deferred (`spec/70`, M0-close gate).
-- **Owed:** a decision record (D-number) formalising Teleprompter = P · Contract P · the
-  front/back split — write it with the first `teleprompter/` commit (hard rule 1).
+- **Next — the `teleprompter/` front-end:** **C2** — Python host (non-activating window
+  ported from `sandbox/qml_spike/`) + QML island (all states, bars from the `mic` feed,
+  transcript/reply typewriter) rendering the `--fake` feed with no audio/models · **C3** —
+  `QSystemTrayIcon` tray (alive-icon + Quit + Groq key field → `keyring` `("gemma","groq")`)
+  + ⌄ expand/history (in-memory, D14). PySide6 becomes an optional `[ui]` dep and
+  `teleprompter` joins `[tool.setuptools] packages` at C2. Full settings surface still
+  deferred (`spec/70`, M0-close gate).
+- **Owed (decision, from the C1 review 2026-07-21):** barge-in mic vs spec/50's truthful
+  indicator. During SPEAKING the mic is hot (barge-in) but the feed emits `mic` only during
+  `_capture`, so `status.json`'s absolute "present ⇔ audio is being captured" overstates the
+  code. Resolve either by **narrowing the schema wording** (treat barge-in monitoring like
+  the already-accepted always-on wake-watch, keeping the locked design's no-mic-during-
+  speaking) or by **emitting `mic` in `_speak`** (strictest reading — then C2 owes a "mic
+  live" cue beyond the mockup). Not a functional bug; doc-vs-code precision.
 
 ## Track B — Brain (M0 needs B1; M2 needs B2)
 
@@ -166,14 +182,21 @@ Last updated: 2026-07-20
   **D11 feedback-first latency posture recorded** (spec/00, 2026-07-12: feedback < 1.5 s
   every turn; no-tool answers bounded; tool turns acknowledged, not bounded;
   generate-then-play stays); `NOTES.md` added for operational findings (routing rule
-  in the preamble above); docs 01, 02, 04 frozen
+  in the preamble above); **Teleprompter formalised (D19): component P · Contract P ·
+  front/back split; `status.json` → v0.2.0 (+`error` message)**; docs 01, 02, 04 frozen
 - **In flight:** —
 - **Next:** —
 
 ## Parked / someday
 
-B3 agent-CLI adapter · earcon sound design session · per-request
-brain routing · wake-phrase false-accept test protocol · **LiveKit Wakeword** trial as
+B3 agent-CLI adapter · earcon sound design session · **multi-provider brain registry +
+per-role routing** — config exposes an *enabled* provider/model set (user picks which of
+Groq / OpenAI / Anthropic / … to make available, each keyed by its credential-store
+entry); every role — assistant brain · dictation cleanup · rewrite — routes to one enabled
+provider, per-task sub-routing possible (short → Groq, long → Haiku); credentials stay
+provider-scoped (one key each), routing lives in spec/20's reserved routing config +
+spec/70 settings; first slice = the M0-close settings gate (2026-07-21) ·
+wake-phrase false-accept test protocol · **LiveKit Wakeword** trial as
 an openWakeWord replacement (lower false-accept rate; contained swap behind `wake.py`) ·
 **semantic endpointing** (M1) — complete-thought detection so long composed prompts
 aren't cut off, the real fix beyond the silence timer (spec/40) ·

@@ -23,3 +23,4 @@ jobs:
       - run: python -m bridge.audio.speak --selfcheck
       - run: python -m bridge.brains.claude --selfcheck
       - run: python -m bridge.orchestrator --selfcheck
+      - run: python -m bridge.broadcaster --selfcheck

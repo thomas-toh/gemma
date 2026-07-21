@@ -1,6 +1,6 @@
 # Spec 40 — Interaction model
 
-**Last reconciled: 2026-07-20** · Build progress: [STATE.md](../STATE.md) (Track G) · Earcon ids: [schemas/earcons.json](schemas/earcons.json)
+**Last reconciled: 2026-07-21** · Build progress: [STATE.md](../STATE.md) (Tracks G · P) · Earcon ids: [schemas/earcons.json](schemas/earcons.json)
 
 ## State machine (orchestrator: `bridge/orchestrator.py`)
 
@@ -132,13 +132,13 @@ buzz at each earcon/reply onset. Wired output is unaffected. The daemon MUST hol
 (the orchestrator's `OutputPump`). The standalone `speak.py` CLI opens/closes the device
 per sound, so it exhibits the glitch by design — it disappears under the warm stream.
 
-## Visual output — PC overlay (D13; v0 planned, pre-M0-run)
+## Visual output — the Teleprompter (component P; D13/D19; v0 planned, pre-M0-run)
 
 A supplementary on-screen indicator on the hub PC: a Dynamic-Island-style overlay — a
 small pill/panel near the top of the screen — showing, at a glance, session **state**
 (pulsing dot = awake/listening · spinner = thinking · gone = asleep), the current
 **response text**, and small **status icons** (mute, tool activity, error). Component
-row in spec/00; `bridge/ui/` when built.
+row in spec/00; the top-level `teleprompter/` package (component P, D19).
 
 Role and hard boundaries:
 - **First-class at the desk; audio must suffice away (D14).** At the desk the overlay
@@ -155,10 +155,11 @@ Role and hard boundaries:
 Architecture (D13, spec/00):
 - **Separate process on a status feed.** The overlay never runs inside the daemon. The
   orchestrator broadcasts JSON status events — state transitions, partial/final
-  transcript, mic level, per-turn latency — over a **localhost-only** socket; the
-  overlay subscribes and renders what arrives. Feed message schema lands in
-  `spec/schemas/` at build (hard rule 3). Renderer: **PySide6/Qt** frameless translucent
-  pill on Windows; a later mac renderer consumes the same feed.
+  transcript, mic level, per-turn latency, faults — over a **localhost-only** socket
+  (`bridge/broadcaster.py`); the overlay subscribes and renders what arrives. Feed
+  message schema: `spec/schemas/status.json` (Contract P, hard rule 3). Renderer:
+  **PySide6/Qt (QML)** frameless translucent pill on Windows; a later mac renderer
+  consumes the same feed.
 - **Never takes focus (BINDING).** The window is non-activating (`WS_EX_NOACTIVATE` /
   Qt `WindowDoesNotAcceptFocus` + `ShowWithoutActivating`). Vital for dictation: focus
   determines where the paste lands — an overlay that steals focus misroutes the transcript.

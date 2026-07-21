@@ -32,6 +32,9 @@ from bridge.audio.listen import (
 from bridge.audio.speak import VOICE, OutputPump, synth, tone_samples
 from bridge.brains.base import Done, Error, Session, TextDelta, ToolCall
 from bridge.brains.claude import DEFAULT_MODEL, ClaudeBrain
+from bridge.broadcaster import (
+    Broadcaster, m_error, m_latency, m_mic, m_response, m_state, m_transcript,
+)
 from bridge.log import setup_logging
 
 log = logging.getLogger("gemma.orchestrator")
@@ -43,6 +46,9 @@ BARGE_CHUNKS = 4       # sustained speech chunks (~128 ms) to call it a barge-in
                        # low-latency pump the cut lands ≤ 250 ms (spec/40 binding).
                        # ponytail: also the echo-tolerance knob on open speakers (headset
                        # output is the design target); raise it if TTS self-triggers.
+MIC_LEVEL_REF = 6000.0  # int16 RMS mapped to a full overlay bar (Contract P 'mic' level).
+                        # ponytail: calibration knob — mic-dependent; raise if the bars peg,
+                        # lower if they barely move (the physical world needs tuning).
 
 
 def sentences(text: str) -> int:
@@ -83,15 +89,18 @@ class BargeIn:
         return self.run >= self.chunks
 
 
-async def _collect(brain, session: Session, utterance: str) -> tuple[str, str | None]:
+async def _collect(brain, session: Session, utterance: str,
+                   on_delta=None) -> tuple[str, str | None]:
     """Drive one Contract-B turn; return (reply_text, error_kind_or_None).
-    Generate-then-play (D11): the full reply is needed before TTS, so deltas are
-    only streamed to the console."""
+    Generate-then-play (D11): the full reply is needed before TTS, so deltas are only
+    streamed to the console and, via on_delta, to the overlay teleprompter (D14)."""
     parts: list[str] = []
     err: str | None = None
     async for ev in brain.converse(session, utterance, []):   # M0: zero tools
         if isinstance(ev, TextDelta):
             parts.append(ev.text)
+            if on_delta:
+                on_delta(ev.text)
             print(ev.text, end="", flush=True)
         elif isinstance(ev, ToolCall):   # impossible with zero tools; loud if it happens
             log.warning("ignoring tool call %r at M0", ev.name)
@@ -134,11 +143,12 @@ def latency_table(trace) -> str:
 
 class Orchestrator:
     def __init__(self, silence_ms: int = SILENCE_MS, voice: str = VOICE,
-                 model: str = DEFAULT_MODEL, brain=None):
+                 model: str = DEFAULT_MODEL, brain=None, broadcaster=None):
         self.silence_chunks = (silence_ms + VAD_CHUNK_MS - 1) // VAD_CHUNK_MS
         self.voice = voice
         self.brain = brain or ClaudeBrain(model=model)   # injectable: replay's fake brain
         self.synth = synth                               # injectable: replay fakes TTS
+        self.bc = broadcaster or Broadcaster()           # Contract P feed; unstarted in replay
         self.trace: list[tuple[float, str, str]] = []    # (t, event, detail) — latency_table
         self.session = Session(id="boot")
         self.held: str | None = None            # long answer awaiting "read it"
@@ -149,20 +159,40 @@ class Orchestrator:
         self.mic = None
         self.vad: SileroVAD | None = None
 
+    # orchestrator event -> Contract P 'state' (bridge/broadcaster.py, spec/schemas/status.json).
+    # 'listening' is emitted by _capture (mic open); 'speaking'/'error' by _speak (its `state`
+    # arg — so an error apology dwells in fault mode, not a bare reply view). 'speak' is
+    # trace-only here.
+    _EVENT_STATE = {"thinking": "thinking", "idle": "idle"}
+
     def _ev(self, event: str, detail: str = "", show: str | None = None) -> None:
-        """Trace an event (the harness asserts on these) and print its console line."""
+        """Trace an event (the harness asserts on these), mirror it to the overlay feed
+        (Contract P), and print its console line."""
         self.trace.append((time.perf_counter(), event, detail))
+        self._broadcast(event, detail)
         if show is not None:
             print(show)
+
+    def _broadcast(self, event: str, detail: str) -> None:
+        """Best-effort overlay mirror of a traced event. publish() never blocks/raises."""
+        state = self._EVENT_STATE.get(event)
+        if state:
+            self.bc.publish(m_state(state))
+        elif event == "transcript":
+            self.bc.publish(m_transcript(detail))
 
     # --- feedback bookkeeping (D11: something audible < 1.5 s after end of speech) ---
 
     def _mark_audible(self, what: str) -> None:
+        # ponytail: this check-then-set races the working-timer thread — worst case a
+        # duplicate 'feedback' latency line (debug-only, spec/40); not worth a lock for an
+        # instrument reading, and the pre-existing double-log is equally benign.
         self.working.cancel()                   # no-op if it already fired
         if not self.audible:
             self.audible = True
-            log.info("audible feedback (%s) %.0f ms after end of speech",
-                     what, (time.perf_counter() - self.t_eos) * 1000)
+            ms = (time.perf_counter() - self.t_eos) * 1000
+            self.bc.publish(m_latency("feedback", ms))
+            log.info("audible feedback (%s) %.0f ms after end of speech", what, ms)
 
     def _working_ping(self) -> None:
         # Timer thread — pump.play is thread-safe. THINKING outlived the feedback
@@ -185,6 +215,15 @@ class Orchestrator:
         if n:
             self.mic.read(n)
 
+    @staticmethod
+    def _mic_level(samples) -> float:
+        """RMS of an int16 mic chunk mapped to [0,1] — drives the overlay bars while a
+        capture window is open (spec/50 truthful indicator). Whether barge-in monitoring
+        during SPEAKING should emit it too is an open decision (STATE, Track P)."""
+        import numpy as np
+        rms = float(np.sqrt(np.mean(samples.astype(np.float32) ** 2)))
+        return min(1.0, rms / MIC_LEVEL_REF)
+
     def _capture(self, preroll=None, nospeech_ms: int = NOSPEECH_MS, seed=None):
         """One utterance by VAD. Returns float32 mono audio, or None if nothing said.
         seed = chunks already heard (a barge-in trigger) — the turn starts mid-speech,
@@ -201,10 +240,13 @@ class Orchestrator:
         for s in seed or []:
             captured.append(s)
             eos.update(True)
+        self.bc.publish(m_state("listening"))       # island -> bars (mic open)
         while True:
             chunk, _ = self.mic.read(VAD_CHUNK)
             samples = chunk[:, 0]
             captured.append(samples)
+            if self.bc.started:                     # skip the RMS work when the feed is disabled
+                self.bc.publish(m_mic(self._mic_level(samples)))
             if eos.update(self.vad.prob(samples) >= VAD_THRESHOLD):
                 break
         if eos.total >= eos.max_chunks:
@@ -229,19 +271,26 @@ class Orchestrator:
 
         text = transcribe(audio)
         if not text:
+            self.bc.publish(m_error("I didn't catch that.", "no_transcript"))
             self._ping("error")                 # narration rules: the pipeline broke
             self._ev("no-transcript", show="(no transcript)")
-            return self._followup()
+            return self._followup()             # mic re-opens -> _capture emits state:listening
         self._ev("transcript", text, show=f"> {text}")
 
         if self.held and wants_readback(text):
             held, self.held = self.held, None
             return self._speak(self.synth(held, self.voice))
 
-        reply, err = asyncio.run(_collect(self.brain, self.session, text))
+        reply, err = asyncio.run(_collect(
+            self.brain, self.session, text,
+            on_delta=lambda d: self.bc.publish(m_response(delta=d)),
+        ))
         if err or not reply:
+            kind = err or "unknown"
+            self.bc.publish(m_error(spoken_error(kind), kind))
             self._ping("error")
-            return self._speak(self.synth(spoken_error(err or "unknown"), self.voice))
+            return self._speak(self.synth(spoken_error(kind), self.voice), state="error")
+        self.bc.publish(m_response(done=True))  # reply text complete on the overlay
 
         self.session.history += [{"role": "user", "content": text},
                                  {"role": "assistant", "content": reply}]
@@ -253,16 +302,20 @@ class Orchestrator:
             return self._followup()
         return self._speak(self.synth(reply, self.voice))
 
-    def _speak(self, samples):
+    def _speak(self, samples, state: str = "speaking"):
         """SPEAKING: play via the pump while watching the mic — user speech cuts TTS
-        ≤ 250 ms and becomes the next utterance (spec/40, binding)."""
+        ≤ 250 ms and becomes the next utterance (spec/40, binding). `state` is the overlay
+        mode shown while playing — 'speaking' normally, 'error' while reading an apology so
+        the island dwells in fault mode instead of a bare reply view."""
         self._flush_mic()
         self.vad.reset()
+        self.bc.publish(m_state(state))
         self.pump.play(samples)
         self._ev("speak")
         self._mark_audible("speech")
-        log.info("first spoken word %.0f ms after end of speech",
-                 (time.perf_counter() - self.t_eos) * 1000)
+        first_word_ms = (time.perf_counter() - self.t_eos) * 1000
+        self.bc.publish(m_latency("first_word", first_word_ms))
+        log.info("first spoken word %.0f ms after end of speech", first_word_ms)
         barge = BargeIn()
         recent: deque = deque(maxlen=barge.chunks)
         while self.pump.playing():
@@ -333,6 +386,8 @@ class Orchestrator:
         import openwakeword.utils
         from openwakeword.model import Model
 
+        self.bc.start()                          # Contract P feed up (crash-isolated; a busy
+                                                 # port just disables it — never fatal)
         t0 = time.perf_counter()
         log.info("warm-up: loading wake, VAD, STT and TTS models...")
         openwakeword.utils.download_models([WAKE_MODEL])

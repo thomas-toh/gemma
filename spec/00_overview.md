@@ -1,6 +1,6 @@
 # Spec 00 — System overview & status
 
-**Last reconciled: 2026-07-20** · Build progress: [STATE.md](../STATE.md) · Decisions record: [docs/02](../docs/02_architecture/02_system_architecture.md)
+**Last reconciled: 2026-07-21** · Build progress: [STATE.md](../STATE.md) · Decisions record: [docs/02](../docs/02_architecture/02_system_architecture.md)
 
 ## The system in one paragraph
 
@@ -25,7 +25,7 @@ flowchart LR
 
 ## Legend — naming scheme
 
-One letter per element. The **bridge (G)** is the hub; **B/T** are the things it
+One letter per element. The **bridge (G)** is the hub; **B/T/P** are the things it
 connects to, each over the matching Contract.
 
 | Letter | Element | Contract | Component IDs |
@@ -33,6 +33,7 @@ connects to, each over the matching Contract.
 | **G** | Bridge — the Gemma daemon (audio, wake, STT, TTS, orchestrator) | — (it *is* the hub) | build steps 0–7 |
 | **B** | Brain — swappable LLM | Contract B | **B1** Claude · **B2** local · **B3** CLI |
 | **T** | Tools — registry + executor + PC actions | Contract T | safety **Tier 1–3** |
+| **P** | Teleprompter — on-screen overlay (separate process) | Contract P | status feed ([schemas/status.json](schemas/status.json)) |
 
 Orthogonal axes: **milestones M0–M4** (project-wide stages — see below) and the frozen
 **decision records docs 01–04**. Milestone *definitions* live in this file; the live
@@ -49,7 +50,7 @@ per-track *sub-steps* live in `STATE.md`; the frozen M0 build order is in docs/0
 |-----------|------|---------------|----------|
 | Hotkey triggers (ask-Gemma · dictation) | [40_interaction](40_interaction.md) + 60_dictation (owed) | `bridge/hotkeys/` | ask pre-M0-run (D16) · dictation at D1 |
 | Audio pipeline (wake, VAD, STT, TTS, earcons) | [40_interaction](40_interaction.md) | `bridge/audio/` | M0 |
-| Visual overlay (PC) — separate process on the status feed | [40_interaction](40_interaction.md) § Visual output | `bridge/ui/` | v0 pre-M0-run (D13) · dictation states at D2 |
+| **Teleprompter** (P) — overlay, separate process on the status feed | [40_interaction](40_interaction.md) § Visual output | `teleprompter/` | v0 pre-M0-run (D13/D19) · dictation states at D2 |
 | Orchestrator (state machine) | [40_interaction](40_interaction.md) | `bridge/orchestrator.py` | M0 (build step 6) |
 | Brain adapters | [20_contract_b](20_contract_b.md) | `bridge/brains/` | B1 at M0 · B2 at M2 · B3 at M4 |
 | Tool registry + executor | [30_contract_t](30_contract_t.md) + [schemas/tools.json](schemas/tools.json) | `bridge/tools/` | M1 |
@@ -217,3 +218,23 @@ plays them); spec/50's truthful-indicator rule (now the overlay's indicator, not
 OutputPump's BT keep-alive (any Bluetooth audio); push-to-talk (now the hotkey).
 `spec/10_contract_h.md` and `messages.schema.json` are deleted; audio stays commodity
 (AirPods / IEMs / desk mic).
+
+**D19 (2026-07-21): the Teleprompter formalised — component P, Contract P, front/back
+split.** The on-screen overlay is named the **Teleprompter** and lettered **component P**
+in the naming scheme (legend above); the localhost status feed it subscribes to is
+**Contract P** (`spec/schemas/status.json`). Architecture (D13 restated as a contract):
+the system splits front/back. The **back-end** is the headless `bridge/` daemon, which
+owns a **crash-isolated broadcaster** (`bridge/broadcaster.py`) publishing Contract-P
+messages as NDJSON over a localhost-only TCP socket (127.0.0.1, the docs/04 §5 reserved
+port 8990). The **front-end** is a new top-level **`teleprompter/`** package (PySide6 +
+QML) — a dumb subscriber that renders whatever arrives and never drives the voice loop.
+**Crash-isolation is by construction:** the broadcaster's `publish()` never blocks and
+never raises, and a busy port just disables the feed, so a slow, absent, or dead overlay
+(or the broadcaster itself) can neither stall nor crash the orchestrator. The always-up
+daemon is the server; the overlay is the reconnecting client. Contract P gains an
+**`error`** message (`kind` + human-facing `message`) so the surface can explain a fault,
+not merely flag it. Secrets stay provider-scoped in the OS credential store (spec/50 rule
+10): the tray's cleanup-engine field writes the Groq key under `("gemma","groq")` —
+per-role provider *routing* is a later concern (STATE Parked/someday), kept out of the key
+name. Supersedes the `bridge/ui/` code-path (now `teleprompter/`) in the component
+inventory and spec/40. Build sequence and progress: STATE Track P.
