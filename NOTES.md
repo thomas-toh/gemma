@@ -52,3 +52,22 @@ history.
   2026-07-18 VoiceInk review), due before tools/streaming land. If real parallel
   pure-Python compute ever appears, Python 3.13+ has an optional free-threaded (no-GIL)
   build — not needed here.
+
+## PySide6 (Teleprompter front-end) on this box
+
+- **Install hits the Windows long-path limit** (same wall as torch): PySide6_Addons has
+  deeply-nested Qt paths > 260 chars. Sidestep with a **short-path venv** — the spike uses
+  `sandbox/.venv`. It otherwise falls back to **Store Python 3.13 user-site** (no project
+  `.venv` exists), whose base path is already ~140 chars, which is why the limit bites.
+  Thomas is enabling Windows Long Paths (registry + reboot); after that a normal project
+  venv installs fine and PySide6 can become an optional `[ui]` dep.
+- **QML plugin DLL search:** Qt's plugin loader does NOT search the PySide6 package dir, so
+  `qtquick2plugin.dll` fails with "module could not be found." Fix (same class as the CUDA-DLL
+  quirk): add `os.path.dirname(PySide6.__file__)` to `PATH` before importing the Qt
+  submodules — see `sandbox/qml_spike/overlay.py`.
+- **Window recipe (proven on this box):** frameless + translucent + always-on-top +
+  non-activating = flags `FramelessWindowHint | WindowStaysOnTopHint | Tool |
+  WindowDoesNotAcceptFocus` + transparent `Window` color, plus a native `WS_EX_NOACTIVATE`
+  ctypes fallback on the HWND (the pure Qt flag is spotty on Windows).
+- The concave top-corner "flare" is a filled `Canvas` path (QML `border-radius` only rounds
+  inward); bottom corners use normal radius. Reference shape: `sandbox/qml_spike/Overlay.qml`.

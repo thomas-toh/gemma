@@ -45,11 +45,10 @@ Last updated: 2026-07-20
   IDLE, one wake-chain.) Parked — Thomas is ideating this in a separate Fable session.
 - **In flight:** —
 - **Next:** M0 build order (docs/04 §8) complete — remaining before M0 is called done,
-  in order: ① **overlay v0 (D13)** — status broadcaster in the orchestrator (localhost
-  JSON feed: state · partial/final transcript · **brain text deltas (D14 teleprompter)**
-  · mic level · per-turn latency; schema file first, hard rule 3) + `bridge/ui/`
-  PySide6 pill (non-activating — BINDING, spec/40), testable against scripted fake
-  events with no audio running · ② **hotkey module + ask-Gemma path (D14/D16)** —
+  in order: ① **Teleprompter (D13) — now its own Track P** (front/back split, this
+  session): the Contract-P feed schema is committed (`status.json`); remaining is the
+  orchestrator-side **broadcaster** (back-end, here) + the `teleprompter/` app (front-end,
+  Track P) · ② **hotkey module + ask-Gemma path (D14/D16)** —
   shared `bridge/hotkeys/` (hybrid tap-toggle / hold-PTT logic, later reused by Track
   D's D1); ask key opens LISTENING directly · ③ the owed acceptance run, now
   **desk-shaped (D16)**: ×10 ask-hotkey turns (overlay streaming + speech) + ×3
@@ -66,6 +65,34 @@ Last updated: 2026-07-20
   Missing piece is a config source (file → panel); reuses the routing config already
   reserved in spec/20. Adapter code shape (~8 lines to promote the knobs to params)
   noted in the 2026-07-12 discussion.
+
+## Track P — Teleprompter (front-end · Contract P) — **decided + spiked this session**
+
+- **Decided (2026-07-20):** the visual front-end is the **Teleprompter** (component **P**),
+  a separate **PySide6 + QML** process on the **Contract P** status feed
+  (`spec/schemas/status.json`, committed). Front/back split: back-end = `bridge/` (headless
+  daemon — broadcasts the feed + reads config/keys); front-end = a new top-level
+  `teleprompter/` package, a dumb subscriber. QML chosen over QWebView/Electron — the only
+  lightweight non-Chromium cross-platform option, stays in Python, cleanest non-activation
+  (research this session).
+- **Design locked** (blueprint: `sandbox/teleprompter-mockup.html`, gitignored): a solid-black
+  Dynamic-Island **fused to the top screen edge** — bottom corners rounded, top corners flare
+  **outward** into the edge (concave, drawn as a filled path); **white on black**; a **bars**
+  indicator driven by the real **mic** level (audio-reactive, not decorative); typewriter text
+  (your prompt, then Gemma's reply replaces it — never stacked); **⌄ handle** expands prior
+  prompts this session (in-memory, D14). No state labels.
+- **Window proven on the Windows box** (`sandbox/qml_spike/`): frameless + translucent +
+  always-on-top + **non-activating** renders correctly. Windows gotchas captured in NOTES
+  (long-path venv · QML-plugin PATH fix · `WS_EX_NOACTIVATE` fallback · concave-corner path).
+- **In flight:** —
+- **Next — build the `teleprompter/` app:** ① Python host + QML island (all states, bars from
+  the `mic` feed, transcript/reply render, ⌄ expand/history) · ② `QSystemTrayIcon` tray
+  (alive-icon + Quit + a **Groq API-key field** → credential store via `keyring`, spec/50) ·
+  ③ the orchestrator-side **broadcaster** (crash-isolated localhost publisher on Contract P) +
+  a scripted **fake-feed driver** (testable, no audio) · ④ PySide6 as an optional `[ui]` dep.
+  Full settings surface deferred (`spec/70`, M0-close gate).
+- **Owed:** a decision record (D-number) formalising Teleprompter = P · Contract P · the
+  front/back split — write it with the first `teleprompter/` commit (hard rule 1).
 
 ## Track B — Brain (M0 needs B1; M2 needs B2)
 
@@ -96,7 +123,9 @@ Last updated: 2026-07-20
   push-to-talk; **the key is the endpoint** — release/second-press stops capture, VAD
   only trims edges, never the assistant loop's 1 s silence cut) · cleanup via a new
   Contract-B verb **`transform(text, instructions)`** ("rewrite, never answer" — port
-  VoiceInk's enhancement prompt; B1 does cleanup now, B2 inherits it at M2) ·
+  VoiceInk's enhancement prompt). Cleanup engine chosen this session = **Groq** (cloud,
+  fast/cheap; Groq API key → credential store; revises D15's local-model note); STT/TTS
+  stay local ·
   delivery = clipboard + synthetic Ctrl+V, deterministic and user-initiated, never a
   Contract-T tool · capture stays in RAM (spec/50 rule 3) · STT model is per-mode
   config — dictation is the stricter quality test · shared deterministic
@@ -114,9 +143,10 @@ Last updated: 2026-07-20
   `spec/60_dictation.md` + add `transform` to spec/20 (Contract B), encoding the
   review's scheme · ② D1 build slice: trigger → capture → whisper → transform →
   paste, cleanup included from day one (decided 2026-07-18; reuses Track G's
-  `bridge/hotkeys/` module — D16) · ③ measure
-  `large-v3-turbo` vs `small.en` on the 5080 (latency + error rate on dictated text)
-  for the per-mode model default · ④ D2: overlay dictation states (recording + mic
+  `bridge/hotkeys/` module — D16) · ③ measure `large-v3-turbo` vs `small.en` vs
+  **Parakeet** (sherpa-onnx = torch-free ONNX path; **gated** — adopt only if a real win,
+  discuss first) on the 5080 (latency + error rate on dictated text) for the per-mode
+  model default · ④ D2: overlay dictation states (recording + mic
   level · transcribing · transforming · pasted) on the D13 status feed · ⑤ D3:
   rewrite mode (D17).
 - **Deferred at design time:** voice-switch into dictation ("take dictation") ·
