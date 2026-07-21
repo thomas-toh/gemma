@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "gemma/overlay/status",
   "title": "Overlay status feed messages",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "JSON status events the orchestrator broadcasts over a localhost-only socket for the Teleprompter overlay to render (spec/00 D13/D19, Contract P). Transport is one JSON object per line (NDJSON) on 127.0.0.1. The overlay is a dumb subscriber: it renders whatever arrives and never drives the voice loop. Protocol: receivers ignore unknown message types (log once); every message carries 'type'. The 'state' values are the overlay's own; its listening indicator inherits spec/50's truthful-indicator rule (shows 'listening' only while audio is actually being captured).",
   "oneOf": [
     { "$ref": "#/$defs/state" },
@@ -36,7 +36,7 @@
     },
     "response": {
       "type": "object",
-      "description": "orchestrator->overlay: one chunk of the brain's reply as it streams (the teleprompter, D14). The overlay appends 'delta' to the current reply; 'done':true marks the reply complete. A 'state' message resets the reply for the next turn.",
+      "description": "orchestrator->overlay: one chunk of the brain's reply as it streams (the teleprompter, D14). The overlay appends 'delta' to the current reply; 'done':true marks the reply complete. Clearing: a 'state' that starts a new turn ('listening', 'thinking') or ends the session ('idle') clears the reply and any fault; 'speaking' and 'error' deliberately do NOT — the reply streams in during THINKING and the island flips to SPEAKING while it is read, so clearing there would blank the text exactly as the user starts reading it.",
       "properties": {
         "type": { "const": "response" },
         "delta": { "type": "string", "default": "" },
@@ -47,7 +47,7 @@
     },
     "mic": {
       "type": "object",
-      "description": "orchestrator->overlay: mic input level in [0,1], emitted while capturing — drives the listening bars and IS the spec/50 truthful-streaming indicator (present <=> audio is being captured). High-frequency and droppable; the overlay must not infer 'listening' from anything else.",
+      "description": "orchestrator->overlay: mic input level in [0,1], emitted while a capture window is open (LISTENING / FOLLOW-UP) — drives the listening bars and is the spec/50 truthful indicator for those windows: whenever a capture window is open a 'mic' message is present, and the overlay must not infer 'listening' from anything else. Always-on-mic monitoring — the wake-word watch at IDLE and barge-in detection during SPEAKING — is a separate, user-gated category that deliberately emits no 'mic' (both are governed together by the 'listen for me' setting, spec/70); so the island shows no mic cue while Gemma speaks. High-frequency and droppable.",
       "properties": {
         "type": { "const": "mic" },
         "level": { "type": "number", "minimum": 0, "maximum": 1 }

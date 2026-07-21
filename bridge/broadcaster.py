@@ -198,9 +198,13 @@ def fake_events():
          "It's clear over Tokyo right now, about 18 degrees with light winds."),
         ("Set a timer for ten minutes.",
          "Timer set for ten minutes. I'll chime when it's up."),
+        # deliberately long: exercises the overlay's line cap, scroll and top fade
         ("Summarise the email from the leasing agent.",
-         "The agent confirms the lease renews at the current rent; they need your "
-         "signature by Friday."),
+         "The agent confirms the lease renews at the current rent and they need your "
+         "signature by Friday, with the deposit cleared the following week. They also "
+         "want a copy of your insurance certificate and the signed inventory schedule "
+         "before move-in, so the managing agent can release the keys on the morning of "
+         "the handover."),
     ]
     turn = 0
     while True:

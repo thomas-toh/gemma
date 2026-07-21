@@ -1,0 +1,64 @@
+"""Contract P subscriber: a QTcpSocket on the localhost feed, framed by teleprompter.decode
+and pushed into the OverlayModel.
+
+The daemon is the always-up server and the overlay is the client that comes and goes
+(spec/00 D19), so this reconnects quietly forever — starting the overlay before the daemon,
+or restarting the daemon under it, both just work.
+"""
+from __future__ import annotations
+
+import logging
+
+from PySide6.QtCore import QObject, QTimer
+from PySide6.QtNetwork import QAbstractSocket, QTcpSocket
+
+from teleprompter.decode import HOST, PORT, Decoder
+
+log = logging.getLogger("gemma.teleprompter")
+
+RECONNECT_MS = 1000
+MIC_IDLE_MS = 250   # no mic frame for this long -> bars fall. spec/50's truthful indicator
+                    # is implemented by construction here: the bars follow live 'mic'
+                    # messages, never an inferred state (so a mute upstream drops them).
+
+
+class Feed(QObject):
+    def __init__(self, model, host: str = HOST, port: int = PORT) -> None:
+        super().__init__()
+        self._model = model
+        self._host, self._port = host, port
+        self._dec = Decoder()
+
+        self._sock = QTcpSocket(self)
+        self._sock.readyRead.connect(self._on_ready)
+        self._sock.connected.connect(lambda: log.info("feed connected (%s:%d)", host, port))
+        self._sock.disconnected.connect(self._on_closed)
+        self._sock.errorOccurred.connect(lambda _err: self._on_closed())
+
+        self._retry = QTimer(self)
+        self._retry.setSingleShot(True)
+        self._retry.timeout.connect(self._connect)
+
+        self._mic_idle = QTimer(self)
+        self._mic_idle.setSingleShot(True)
+        self._mic_idle.setInterval(MIC_IDLE_MS)
+        self._mic_idle.timeout.connect(lambda: self._model.set_mic(0.0))
+
+        self._connect()
+
+    def _connect(self) -> None:
+        if self._sock.state() == QAbstractSocket.SocketState.UnconnectedState:
+            self._sock.connectToHost(self._host, self._port)
+
+    def _on_ready(self) -> None:
+        for msg in self._dec.feed(bytes(self._sock.readAll().data())):
+            self._model.apply(msg)
+            if msg["type"] == "mic":
+                self._mic_idle.start()
+
+    def _on_closed(self) -> None:
+        # Deaf -> the island goes away rather than freezing on a stale frame.
+        self._model.apply({"type": "state", "state": "idle"})
+        self._sock.abort()
+        if not self._retry.isActive():
+            self._retry.start(RECONNECT_MS)

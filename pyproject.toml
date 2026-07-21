@@ -30,6 +30,16 @@ dependencies = [
 # Install with:  pip install -e ".[gpu-cuda]"  -- listen.py then adds these DLLs to the
 # search path automatically. Not for macOS (use the CPU path / a future Metal engine).
 gpu-cuda = ["nvidia-cublas-cu12", "nvidia-cudnn-cu12", "nvidia-cuda-runtime-cu12"]
+# The Teleprompter front-end (component P, Track P). Optional by design: the daemon is
+# headless and runs fine without it -- it just broadcasts to nobody. Needs Windows Long
+# Paths enabled; Qt's QML module trees nest past 260 chars and the install silently
+# half-completes without it (NOTES.md).
+ui = ["PySide6"]
 
 [tool.setuptools]
-packages = ["bridge"]
+packages = ["bridge", "teleprompter"]
+
+# The QML and the bundled font are loaded from disk relative to the package, so a non-editable
+# install has to carry them too.
+[tool.setuptools.package-data]
+teleprompter = ["*.qml", "fonts/*.ttf"]

@@ -94,21 +94,49 @@ Last updated: 2026-07-21
   replay. Contract P gained an **`error`** message (`kind` + `message`). **D19** recorded
   (spec/00) — Teleprompter = P · Contract P · front/back split. Selfchecks green; socket
   wire + crash-isolation verified live.
-- **In flight:** —
-- **Next — the `teleprompter/` front-end:** **C2** — Python host (non-activating window
-  ported from `sandbox/qml_spike/`) + QML island (all states, bars from the `mic` feed,
-  transcript/reply typewriter) rendering the `--fake` feed with no audio/models · **C3** —
-  `QSystemTrayIcon` tray (alive-icon + Quit + Groq key field → `keyring` `("gemma","groq")`)
-  + ⌄ expand/history (in-memory, D14). PySide6 becomes an optional `[ui]` dep and
-  `teleprompter` joins `[tool.setuptools] packages` at C2. Full settings surface still
-  deferred (`spec/70`, M0-close gate).
-- **Owed (decision, from the C1 review 2026-07-21):** barge-in mic vs spec/50's truthful
-  indicator. During SPEAKING the mic is hot (barge-in) but the feed emits `mic` only during
-  `_capture`, so `status.json`'s absolute "present ⇔ audio is being captured" overstates the
-  code. Resolve either by **narrowing the schema wording** (treat barge-in monitoring like
-  the already-accepted always-on wake-watch, keeping the locked design's no-mic-during-
-  speaking) or by **emitting `mic` in `_speak`** (strictest reading — then C2 owes a "mic
-  live" cue beyond the mockup). Not a functional bug; doc-vs-code precision.
+- **Built (C2, this commit) — the front-end renders live.** `teleprompter/`: `decode.py`
+  (Qt-free NDJSON framing + reducer; `--selfcheck`, now CI-wired) · `model.py` (thin QObject
+  over it) · `feed.py` (QTcpSocket + reconnect + a mic watchdog, so the bars follow live `mic`
+  frames rather than inferred state) · `Overlay.qml` (island silhouette from the spike;
+  mic-driven bars; prompt typewriter; morphing status word; 3-line cap with glide-scroll and a
+  top fade) · `Theme.qml` + `qmldir` (**design tokens** — a `pragma Singleton`: colour,
+  opacity-by-role, type, motion; island geometry stays local) · `__main__.py` (QApplication
+  host, non-activating re-stamp on every show, bundled-font registration). **Inter is bundled**
+  (`fonts/Inter-Variable.ttf`, ~0.83 MB) and registered at run time — no system install, and
+  the Mac gets the same face (D10). PySide6 is the optional `[ui]` extra; `teleprompter` joins
+  `[tool.setuptools] packages` with package-data for the QML + font.
+  **Verified against `--fake` with no audio/mic/models**: every state renders, the 3-line cap
+  scrolls, and all 8 CI selfchecks pass.
+- **Next — C3:** `QSystemTrayIcon` tray (alive-icon + Quit + Groq key field → `keyring`
+  `("gemma","groq")`) + the ⌄ expand. Full settings surface still deferred (`spec/70`,
+  M0-close gate). **First thing to settle in C3:** whether a non-activating window can host
+  clicks/scrolling without ever taking focus — the ⌄ handle, the tray and the expanded view
+  all depend on that answer, and the BINDING focus rule (spec/40) forbids getting it wrong.
+- **Owed (design, from 2026-07-21):** an **expanded view** — past ~3–4 lines the island stops
+  being glanceable, so a second surface shows the full turn with copy/save actions. Resolves
+  spec/40's "longer answers: full text on the overlay" honestly, and gives the ⌄ handle a
+  better job than history alone (so it widens D14's scope → wants its own D-number). Scope
+  caution: copy is safe; save/export must reuse spec/50's transcript-logging mechanism rather
+  than invent a second one; "send" is an integration and belongs behind Contract T (M1+), not
+  a button the overlay owns. `maxLines` is already a single knob, config-bound at spec/70.
+- **Resolved (2026-07-21, from the C1 review):** barge-in detection is the **same species as
+  the wake-word watch** — "always-on mic", not a capture window. `status.json`'s `mic` wording
+  narrowed to match (v0.2.1): a `mic` message means a capture window (LISTENING/FOLLOW-UP) is
+  open; wake-watch and barge-in deliberately emit none. The locked design stands — no mic cue
+  while Gemma speaks.
+- **Owed (decision — promote to a D-number when the hotkey/settings work lands):** the
+  **"listen for me"** setting groups the always-on-mic behaviours under one user-facing
+  switch. **Off = hotkeys only** — the mic opens solely on a keypress, no wake word and no
+  barge-in (the privacy-focused posture). **On** = wake word *and* barge-in both live.
+  Touches spec/40 (barge-in's binding rule becomes conditional on the setting), spec/50
+  (posture), spec/70 (the setting itself). Not buildable until a config source exists
+  (M0-close gate); spec/40 stays accurate meanwhile because the built code is unconditional.
+- **Owed (Contract P gap, from D20):** the two Teleprompter surfaces D20 introduces have no
+  message type — the dictate-door **overwrite warning** (dictate invoked while text is
+  selected) and the ask-door **propose-then-tap proposal** (a write-action pending a
+  confirming keypress). Neither fits `response` (a streamed reply, not something pending),
+  `error` (a fault), or the `state` enum. Add each when its producer lands — hotkey module
+  (Track G ②) and dictate/rewrite (Track D) — deliberately **not** built speculatively at C2.
 
 ## Track B — Brain (M0 needs B1; M2 needs B2)
 
