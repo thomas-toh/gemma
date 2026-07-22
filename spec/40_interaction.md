@@ -97,10 +97,18 @@ spec constants.
   applies — only a user keypress ever pastes (D12). `auto_apply` (spec/70, default
   off) bypasses the tap knowingly.
 
-Each key is hybrid: tap = toggle, hold ≥0.5 s = push-to-talk; the key is the endpoint,
-VAD only trims. The ask key opens `LISTENING` directly (wake phrase skipped); the wake
-word stays the hands-free entrance to the same door. The hotkey module builds before
-the desk-shaped M0 run (D16), shared `bridge/hotkeys/`; the dictate door reuses it.
+Each key is hybrid: tap = toggle, hold ≥ 0.5 s = push-to-talk; **the key is the
+endpoint** — a second tap or the release ends capture, and the 1 s silence cut does not.
+Two exits survive it: nothing-said (5 s) and the 30 s runaway cap. `auto_end` (spec/70,
+default off) restores the silence cut on a keyed turn for one-tap use (D20, refined
+2026-07-22 — the flat "the key is the endpoint" now carries this knob).
+
+The ask key opens `LISTENING` directly (wake phrase skipped); the wake word stays the
+hands-free entrance to the same door. Shared module `bridge/hotkeys.py`, which the
+dictate door reuses. Combos are registered **narrowly with the OS** (Win32
+`RegisterHotKey`) rather than through a keyboard hook — see spec/50 rule 11; the
+consequence is a per-OS seam, and **macOS is unbuilt** (Carbon `RegisterEventHotKey`),
+where the wake word remains the only entrance. Bindings live in config (spec/70).
 Rewrite is an ask *outcome*, not a mode (D20, superseding D17's separate slice).
 
 ## Speech capture & transcription (M0)

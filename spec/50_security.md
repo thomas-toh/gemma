@@ -1,6 +1,6 @@
 # Spec 50 — Security & privacy posture
 
-**Status: BINDING (design constants, not preferences)** · Last reconciled: 2026-07-10 · Rationale: docs/01 §7, docs/02 §7
+**Status: BINDING (design constants, not preferences)** · Last reconciled: 2026-07-22 · Rationale: docs/01 §7, docs/02 §7
 
 1. **Tool containment is the defence, not model cleverness.** Assume everything a brain
    reads (web, files, screen contents) is hostile (prompt injection is unsolved).
@@ -33,3 +33,11 @@
     A session-scoped env var is an accepted fallback (CI, one-off shells). Every key
     is dedicated to this project and carries a monthly spend cap set in the provider
     console — the cap, not the hiding place, bounds the blast radius.
+11. **No keystroke stream** (decided 2026-07-22). The two doors (spec/40) register their
+    combos with the OS (Win32 `RegisterHotKey`), which delivers *only* those combos and
+    consumes them. The obvious alternative — a system-wide low-level keyboard hook, what
+    `pynput` and friends install — would put every keystroke on the machine through
+    Gemma's process, which is the same posture problem as rule 3 in a different medium.
+    Key *state* may be queried for the key we registered (release detection); nothing
+    else is observed. The macOS peer, when built, uses Carbon `RegisterEventHotKey` for
+    the same reason.

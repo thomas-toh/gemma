@@ -1,6 +1,6 @@
 # Spec 70 — Settings & configuration · **STUB (planned)**
 
-**Last reconciled: 2026-07-20** · Build progress: [STATE.md](../STATE.md) (M0-close gate) · Decisions: [spec/00](00_overview.md)
+**Last reconciled: 2026-07-22** · Build progress: [STATE.md](../STATE.md) (M0-close gate) · Decisions: [spec/00](00_overview.md)
 
 > **This file is a STUB.** The architecture in §2 is decided (2026-07-20); the settings
 > **line-item inventory** (§3) and open questions (§4) are being developed in a separate
@@ -40,7 +40,11 @@ types / defaults / validation:
   (`--silence-ms`) · wake phrase · TTS voice/speed.
 - **Assistant:** `--clean-prompts` toggle (D15) · the deterministic word-replacement table
   editing (D15).
-- **Triggers:** ask-hotkey and dictation-hotkey bindings (D14 / D16).
+- **Triggers:** ask-hotkey and dictation-hotkey bindings (D14 / D16) — combo strings
+  (`ctrl+alt+1` / `ctrl+alt+2` today; parsed by `bridge/hotkeys.py`, env
+  `GEMMA_HOTKEY_ASK` / `GEMMA_HOTKEY_DICTATE` until this file's config source exists) ·
+  **`auto_end`** (default off): end a keyed turn on VAD silence as well, so one tap is
+  enough instead of two (`--auto-end`; spec/40 §Triggers).
 - *(add more as they surface)*
 
 ## 4. Open questions (OWED)

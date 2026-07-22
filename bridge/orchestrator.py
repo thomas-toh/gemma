@@ -35,6 +35,7 @@ from bridge.brains.claude import DEFAULT_MODEL, ClaudeBrain
 from bridge.broadcaster import (
     Broadcaster, m_error, m_latency, m_mic, m_response, m_state, m_transcript,
 )
+from bridge.hotkeys import Hotkeys
 from bridge.log import setup_logging
 
 log = logging.getLogger("gemma.orchestrator")
@@ -52,6 +53,23 @@ BARGE_CHUNKS = 4       # sustained speech chunks (~128 ms) to call it a barge-in
 MIC_LEVEL_REF = 6000.0  # int16 RMS mapped to a full overlay bar (Contract P 'mic' level).
                         # ponytail: calibration knob — mic-dependent; raise if the bars peg,
                         # lower if they barely move (the physical world needs tuning).
+
+
+def capture_over(fired: bool, eos: EndOfSpeech, keyed: bool, auto_end: bool) -> bool:
+    """Should a capture stop, given what the VAD just decided? (D20)
+
+    On a keyed turn **the key is the endpoint**: the 1 s silence cut no longer ends the
+    turn, so you can pause mid-thought and the mic stays yours until you tap or release.
+    Two of `EndOfSpeech`'s three exits survive a key endpoint — "you never said anything"
+    and the 30 s runaway cap — and its bare `fired` flag cannot tell the three apart, so
+    they are re-read off `eos` here. `auto_end` (spec/70) puts the silence cut back for
+    people who would rather not tap twice.
+    """
+    if not fired:
+        return False
+    if not keyed or auto_end:
+        return True
+    return not eos.speech_started or eos.total >= eos.max_chunks
 
 
 def sentences(text: str) -> int:
@@ -140,9 +158,12 @@ def latency_table(trace) -> str:
 
 class Orchestrator:
     def __init__(self, silence_ms: int = SILENCE_MS, voice: str = VOICE,
-                 model: str = DEFAULT_MODEL, brain=None, broadcaster=None):
+                 model: str = DEFAULT_MODEL, brain=None, broadcaster=None,
+                 auto_end: bool = False, hotkeys=None):
         self.silence_chunks = (silence_ms + VAD_CHUNK_MS - 1) // VAD_CHUNK_MS
         self.voice = voice
+        self.auto_end = auto_end                 # spec/70: end a keyed turn on VAD silence too
+        self.hk = hotkeys                        # None under replay/selfcheck: wake word only
         self.brain = brain or ClaudeBrain(model=model)   # injectable: replay's fake brain
         self.synth = synth                               # injectable: replay fakes TTS
         self.bc = broadcaster or Broadcaster()           # Contract P feed; unstarted in replay
@@ -220,10 +241,11 @@ class Orchestrator:
         rms = float(np.sqrt(np.mean(samples.astype(np.float32) ** 2)))
         return min(1.0, rms / MIC_LEVEL_REF)
 
-    def _capture(self, preroll=None, nospeech_ms: int = NOSPEECH_MS, seed=None):
+    def _capture(self, preroll=None, nospeech_ms: int = NOSPEECH_MS, seed=None, door=None):
         """One utterance by VAD. Returns float32 mono audio, or None if nothing said.
         seed = chunks already heard (a barge-in trigger) — the turn starts mid-speech,
-        so the VAD keeps its warm state."""
+        so the VAD keeps its warm state. door = the hotkey that opened this capture, which
+        then owns the endpoint (D20, `capture_over`); None on a wake-word turn."""
         import numpy as np
 
         if seed is None:
@@ -243,7 +265,10 @@ class Orchestrator:
             captured.append(samples)
             if self.bc.started:                     # skip the RMS work when the feed is disabled
                 self.bc.publish(m_mic(self._mic_level(samples)))
-            if eos.update(self.vad.prob(samples) >= VAD_THRESHOLD):
+            fired = eos.update(self.vad.prob(samples) >= VAD_THRESHOLD)
+            if door is not None and door.end.is_set():
+                break                               # the key is the endpoint (D20)
+            if capture_over(fired, eos, door is not None, self.auto_end):
                 break
         if eos.total >= eos.max_chunks:
             log.warning("hit the %d s utterance cap — transcribing what we have",
@@ -337,6 +362,23 @@ class Orchestrator:
             wake_model.predict(zero)
         wake_model.reset()
 
+    def _pressed(self):
+        """The ask door if its hotkey just opened a capture, else None. Also drains the
+        dictate door: it is registered so the binding is proven end to end, but its
+        pipeline is Track D's and does not exist yet."""
+        if self.hk is None:
+            return None
+        d = self.hk.doors.get("dictate")
+        if d is not None and d.start.is_set():
+            d.start.clear()
+            d.end.clear()
+            log.info("dictate hotkey pressed — that door is not built yet (Track D)")
+        ask = self.hk.doors.get("ask")
+        if ask is not None and ask.start.is_set():
+            ask.start.clear()           # `end` is the module's to clear, on the next press
+            return ask
+        return None
+
     def serve(self, mic, pump, wake_model) -> None:
         """The IDLE→wake→turn-chain loop against a mic, pump and wake model — real
         devices from run(), fakes from the replay harness (tests/replay.py)."""
@@ -355,22 +397,28 @@ class Orchestrator:
             if blank_at is not None and time.perf_counter() >= blank_at:
                 blank_at = None
                 self._ev("idle", show="[idle]")
-            if not any(s >= THRESHOLD for s in wake_model.predict(frame).values()):
+            # Two entrances to the same door (D20): the ask hotkey and the wake phrase.
+            door = self._pressed()
+            if door is None and not any(s >= THRESHOLD
+                                        for s in wake_model.predict(frame).values()):
                 continue
             t_wake = time.perf_counter()
             if blank_at is not None:            # a new turn supersedes the dwell: clear the
                 blank_at = None                 # old answer BEFORE the mic opens, so the
                 self._ev("idle", show="[idle]")  # island never shows bars over stale text
-            self._ev("wake", show="[wake] listening...")
+            # One trace event for both entrances: latency_table's wake->awake column is the
+            # press->indication measurement too (spec/40 has a row for each; same interval).
+            entry = "key" if door else "phrase"
+            self._ev("wake", entry, show=f"[{'ask key' if door else 'wake'}] listening...")
             pump.play(tone_samples("awake"))    # < 300 ms: enqueued immediately
             self._ev("earcon", "awake")
-            log.info("awake earcon %.0f ms after wake detect",
-                     (time.perf_counter() - t_wake) * 1000)
+            log.info("awake earcon %.0f ms after %s", (time.perf_counter() - t_wake) * 1000,
+                     "keypress" if door else "wake detect")
             # ponytail: fresh history each wake-chain — whether it should persist
             # across wakes is an open question (parked; STATE), so it dies at IDLE.
             self.session = Session(id=time.strftime("%H%M%S"))
 
-            utt = self._capture(preroll=list(ring)[-PREROLL_BLOCKS:])
+            utt = self._capture(preroll=list(ring)[-PREROLL_BLOCKS:], door=door)
             ring.clear()
             if utt is None:
                 self._ev("nothing-heard", show="[nothing heard]")
@@ -399,7 +447,12 @@ class Orchestrator:
         with OutputPump() as pump, \
              sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="int16",
                             blocksize=0) as mic:
-            log.info("ready — say '%s' (Ctrl-C to stop)", WAKE_MODEL.replace("_", " "))
+            # After warm-up, so a press during the 22 s model load cannot queue a turn
+            # that fires the instant we start serving.
+            self.hk = self.hk or Hotkeys()
+            self.hk.start()
+            log.info("ready — press %s or say '%s' (Ctrl-C to stop)",
+                     self.hk.doors["ask"].combo, WAKE_MODEL.replace("_", " "))
             self.serve(mic, pump, wake_model)
 
 
@@ -413,6 +466,25 @@ def _selfcheck() -> None:
     assert sentences("no terminator") == 0            # still spoken: 0 <= 2
     assert sentences("Wait... sure.") == 2            # a '...' run counts once
 
+
+    # capture endpoint (D20): the key owns a keyed turn; the wake path is unchanged
+    spoke = EndOfSpeech(silence_chunks=2, max_chunks=100, nospeech_chunks=3)
+    for f in (True, False):                           # speech, then a silence run
+        spoke.update(f)
+    assert capture_over(True, spoke, keyed=False, auto_end=False)   # wake: silence ends it
+    assert not capture_over(True, spoke, keyed=True, auto_end=False)  # keyed: it does not
+    assert capture_over(True, spoke, keyed=True, auto_end=True)     # unless auto_end is on
+    assert not capture_over(False, spoke, keyed=False, auto_end=False)  # VAD hasn't fired
+
+    quiet = EndOfSpeech(silence_chunks=2, max_chunks=100, nospeech_chunks=3)
+    assert not any(quiet.update(False) for _ in range(2))
+    assert quiet.update(False)                        # nothing said at all -> give up,
+    assert capture_over(True, quiet, keyed=True, auto_end=False)     # even on a keyed turn
+
+    capped = EndOfSpeech(silence_chunks=99, max_chunks=4, nospeech_chunks=99)
+    assert not any(capped.update(True) for _ in range(3))
+    assert capped.update(True)                        # 30 s runaway cap survives a key
+    assert capture_over(True, capped, keyed=True, auto_end=False)
 
     # barge-in: only sustained speech triggers
     b = BargeIn(chunks=4)
@@ -434,7 +506,7 @@ def _selfcheck() -> None:
     assert "100" in lines[1] and "1200" in lines[1] and "2500" in lines[1], lines[1]
     assert lines[2].count("800") == 2 and "-" in lines[2], lines[2]
 
-    print("selfcheck OK: speak/hold split, barge-in counter, "
+    print("selfcheck OK: speak/hold split, capture endpoint, barge-in counter, "
           "error lines, latency table")
 
 
@@ -448,11 +520,13 @@ def main() -> None:
     ap.add_argument("--voice", default=VOICE, help=f"Kokoro voice (default {VOICE})")
     ap.add_argument("--model", default=DEFAULT_MODEL,
                     help=f"brain model id (default {DEFAULT_MODEL}; env GEMMA_BRAIN_MODEL)")
+    ap.add_argument("--auto-end", action="store_true",
+                    help="end a hotkey turn on VAD silence too, instead of a second tap (spec/70)")
     args = ap.parse_args()
     if args.selfcheck:
         _selfcheck()
         return
-    orch = Orchestrator(args.silence_ms, args.voice, args.model)
+    orch = Orchestrator(args.silence_ms, args.voice, args.model, auto_end=args.auto_end)
     try:
         orch.run()
     except KeyboardInterrupt:

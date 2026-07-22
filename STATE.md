@@ -14,12 +14,13 @@ Last updated: 2026-07-22
 
 Track P's island is built and live: real turns render end to end (wake word → STT → B1 →
 Teleprompter → TTS). The renderer's defects from the first live run are fixed and guarded by
-`python -m teleprompter.overlay_check`. **The agreed next action is the hotkey module.**
+`python -m teleprompter.overlay_check`. **The hotkey module is now built too** (`ctrl+alt+1`
+opens the ask door), so the acceptance run is unblocked and is the next action.
 
 | # | Action | Track | Why now |
 |---|--------|-------|---------|
-| 1 | **Hotkey module — the two doors (D20)** | G ② | On the critical path. Hotkey is now the PRIMARY input (wake word demoted), so the acceptance run cannot test the real input path until this exists. |
-| 2 | M0 acceptance run, desk-shaped (D16) | G ③ | ×10 ask-hotkey turns + ×3 wake-word. Blocked by 1. Also unblocks Track D. |
+| 1 | **M0 acceptance run, desk-shaped (D16)** | G ③ | ×10 ask-hotkey turns + ×3 wake-word. Now unblocked — the real input path exists. Also unblocks Track D. |
+| 2 | Answer dismissal + backstop (below) | P | The hotkey already dismisses (a press supersedes the dwell); Esc / close affordance and the length-scaled backstop are still owed. |
 | 3 | M0-close gate — settings surface | G ④ | Thomas's gate, beyond docs/04 §8. |
 
 **Fixed 2026-07-22 (late) — the held-answer wipe.** A long answer was erased milliseconds
@@ -34,6 +35,37 @@ mic CLOSED; the wake watch runs throughout, and a new wake supersedes the dwell 
 old answer *before* the mic opens. **"read it" readback is retired** with it; whether anything
 speaks a long answer on request folds into the TTS switch decision (spec/70, with "listen to
 me"). The hold itself survives and now means SHOWN, not spoken.
+
+**OPEN BUG (2026-07-22, found immediately after the fix above) — the dwell is too short, and
+measured from the wrong clock.** A long answer is blanked mid-reveal: `ANSWER_DWELL_S` is 8 s,
+inherited from the old `FOLLOWUP_MS`, but that was a *speech* window, not a *reading* one. A
+278-token answer is ~200 words, and the island reveals at ~9 words/s — **~20 s just to finish
+typing**, so `idle` fires while text is still arriving. Same shape as the bug it replaced: the
+daemon decides when to blank, but only the overlay knows how much text is left to show and how
+long it takes to read. Options, cheapest first: ① scale the dwell to reply length
+(`max(8, words / 2.5)`) — one line, daemon-side, no contract change; ② start the dwell when the
+reply *finishes revealing* rather than when the brain finishes; ③ move the blank decision to
+the overlay entirely, which is the only party that knows the reveal state. ② and ③ need a
+Contract P change. **Decide with the reveal rate itself** — 90 ms/word may simply be too slow
+for long answers, and the expanded view (parked below) is the other half of this answer.
+
+**Direction chosen (Thomas, 2026-07-22): dismissal, not a timer.** The answer stays up until
+the user dismisses it — clicking outside the island, or closing it — which gets better once
+the hotkey exists (pressing it starts a new turn, which already clears). Constraints to design
+against, not around: ① the island is `WS_EX_TRANSPARENT`, so it currently cannot receive a
+click at all, and since the fixed-frame refactor the window is mostly empty space — making it
+clickable naively would swallow clicks meant for the app beneath. Per-region hit-testing
+(`WM_NCHITTEST` → `HTTRANSPARENT`, native event filter) is the real prerequisite, still
+unproven here, and the **expanded view needs the same thing** — build once, serve both.
+② "Click *outside*" has no cheap form: the window never takes focus, so there is no focus-loss
+event, and detecting a click elsewhere means a system-wide low-level mouse hook — heavy, and
+an awkward thing for a privacy-postured assistant to install. Hotkey, Esc, or an on-island
+close affordance all avoid it. ③ Keep a **generous length-scaled backstop** regardless: with
+purely manual dismissal, walking away mid-answer leaves an always-on-top island over
+everything indefinitely.
+**Partly discharged 2026-07-22 by the hotkey:** an ask-key press supersedes the dwell exactly
+as a wake does, so there is now a real dismissal gesture. Still owed: Esc / an on-island close,
+and the generous length-scaled backstop (`ANSWER_DWELL_S` is still a flat 8 s).
 
 Parked, not blocking, pick up by mood:
 
@@ -93,6 +125,23 @@ Two open questions owed a decision:
   (windows-latest) — **deviation from docs/04 §7:** replay does NOT run in CI because
   the WAVs (Thomas's voice) are deliberately untracked (`tests/replay/wav/`,
   gitignored; copy the folder to the Mac clone by hand).
+- **Works now (step ②, this commit): the hotkey module — the two doors (D20).**
+  `bridge/hotkeys.py` (a module, not the package spec/40 named): combo-string parser
+  (`ctrl+alt+1` ask · `ctrl+alt+2` dictate; env `GEMMA_HOTKEY_ASK`/`_DICTATE` until spec/70's
+  config source exists — a binding with no modifier is rejected, it would be swallowed
+  everywhere you type) → Win32 `RegisterHotKey` + a `GetMessageW` pump on a daemon thread →
+  per-door `start`/`end` events. Hybrid per key: tap-toggle, or hold ≥ 0.5 s for push-to-talk
+  with the release as the endpoint. **Narrow registration, no keyboard hook** — the reason is
+  now spec/50 rule 11; the cost is a per-OS seam and **macOS is unbuilt** (Carbon
+  `RegisterEventHotKey`), where the wake word stays the only entrance.
+  Orchestrator: `_pressed()` makes the ask key a second entrance to the same door in the IDLE
+  loop (same earcon, same dwell-supersede, ~80 ms poll — inside the 300 ms target), and
+  `capture_over()` implements the endpoint rule — **the key ends a keyed turn, not the 1 s
+  silence cut**; nothing-said and the 30 s cap still do. `--auto-end` (spec/70, default off)
+  puts the silence cut back for one-tap use. The **dictate door is registered but unwired** —
+  a press logs and does nothing; its pipeline is Track D's.
+  Proven: selfcheck (parsing, tap-toggle, hold-PTT, stale-end clearing — CI-wired) plus a
+  live run driving `ctrl+alt+1` through `SendInput`, confirming the OS actually delivers.
 - **Owed:** ① record the 5 case WAVs (`python -m tests.replay --record <name>`,
   scripts in cases.json) and run 5/5 green on the PC, later on the Mac (D10 parity) ·
   ② the **M0 acceptance run** — ×10 consecutive live turns, latency table vs spec/00
@@ -104,9 +153,8 @@ Two open questions owed a decision:
   in order: ① ~~**Teleprompter (D13/D19) — its own Track P**~~ **DONE** — C1 (feed schema +
   broadcaster), C2 (the island) and C3 (tray, instrument) are all built and proven against
   live turns; remaining Teleprompter work is polish and is parked under Track P, not blocking
-  · ② **hotkey module — the two doors (D20)** —
-  shared `bridge/hotkeys/` (hybrid tap-toggle / hold-PTT; dictate + ask keys, bindings
-  in spec/70 config); ask key opens LISTENING directly · ③ the owed acceptance run, now
+  · ② ~~**hotkey module — the two doors (D20)**~~ **DONE** (above) — ask key wired, dictate
+  key registered but unwired (Track D), macOS unbuilt · ③ the owed acceptance run, now
   **desk-shaped (D16)**: ×10 ask-hotkey turns (overlay streaming + speech) + ×3
   wake-word variant, latency table vs spec/40 targets · ④ the M0-close gate below.
   The acceptance run also unblocks Track D (D12 sequencing, 2026-07-18).
@@ -183,6 +231,23 @@ Two open questions owed a decision:
      ~1 s warm but **6 s cold**, so the dwell is wildly inconsistent. **Fix:** a minimum dwell
      before the reply may replace the prompt (keeps the locked design's "never stacked").
      Same family as the 7a/7b gaps below.
+     **Sharpened 2026-07-22 (live, hotkey turn): the prompt is cut off mid-typing.** Asked "Can
+     you say how many states there are in the US and interesting facts about 3 of them" — the
+     prompt began revealing and the reply replaced it before it finished. *Mechanism, confirmed
+     in code:* `Overlay.qml`'s `bodyText` is `reply !== "" ? reply : transcript`, so the FIRST
+     delta flips it; `onBodyTextChanged`'s prefix test then sees a non-prefix and resets
+     `reveal.shown = 0`. **The dwell is not too short — there is none.** *Quantified:* the
+     reveal is 90 ms/word (`Theme.durationWord`), so an N-word prompt needs N × 90 ms; that
+     18-word prompt needed ~1.6 s against a ~1 s warm first token, so ~11 of 18 words showed.
+     Any prompt past **~11 words** loses its tail when warm; cold turns complete, which is why
+     this read as inconsistent. **Consequence for the fix above: a minimum *time* dwell does
+     not solve it** — any dwell shorter than the reveal truncates the same way. The invariant
+     is *finish revealing → then dwell → then swap*.
+     **The three timing bugs are one bug.** Prompt flash, this truncation, and the answer-dwell
+     blanking (handoff, above) all have the same root: **content swaps are driven by producer
+     events while only the overlay knows how much text is left to reveal.** Decide it once in
+     the 7a/7b review rather than three times — the answer is likely a reveal-aware gate the
+     overlay owns, which is also option ③ of the dwell bug.
   4. **The latency readout is ugly.** Styling — folds into the static-screens pass, but now a
      confirmed complaint rather than a hypothetical.
 - **First real latency figures (2026-07-22)** — partially discharges the owed D11 numbers:

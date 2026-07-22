@@ -25,6 +25,8 @@ jobs:
       - run: python -m bridge.brains.claude --selfcheck
       - run: python -m bridge.orchestrator --selfcheck
       - run: python -m bridge.broadcaster --selfcheck
+      # Parsing + the tap/hold machine only; RegisterHotKey itself is proven live on the box.
+      - run: python -m bridge.hotkeys --selfcheck
       # The Teleprompter's Qt-free half. PySide6 is an optional [ui] extra and is NOT installed
       # here (and QML needs a display), so the renderer can't be tested in CI — but the framing
       # and the reducer deliberately import no Qt, and that is where the sharp edges are.
