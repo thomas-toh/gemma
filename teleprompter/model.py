@@ -71,5 +71,6 @@ class OverlayModel(QObject):
 
     @Property(list, notify=changed)
     def history(self) -> list:
-        """Prior prompts this session, oldest first — the ⌄ dropdown (D14). RAM only."""
+        """Prior prompts this session, oldest first — for the expanded view (D22, which
+        superseded D14's ⌄ caret). No consumer yet; RAM only, never written to disk."""
         return self._s.history

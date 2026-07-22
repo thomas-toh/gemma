@@ -45,4 +45,8 @@ QtObject {
     readonly property int durationResize: 340        // pill open/close
     readonly property int durationScroll: 200        // teleprompter glide
     readonly property int durationBars: 90           // mic bar smoothing
+    readonly property int durationFade: 220          // the island's entrance / exit
+    // One WORD per tick, not one character: this is a teleprompter to be read, not a chat
+    // stream to be skimmed. Matched to the scripted feed's cadence, which read well.
+    readonly property int durationWord: 90
 }

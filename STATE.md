@@ -8,7 +8,7 @@ start, update it in the same commit as the work · when a step closes, collapse 
 entry to one or two lines — durable knowledge moves out (behaviour → spec · run
 instructions → README · findings → NOTES.md · decisions → a D-number in spec/00).
 
-Last updated: 2026-07-21
+Last updated: 2026-07-22
 
 ## Track G — Bridge (Doc 04 → M0, M1, M2)
 
@@ -110,11 +110,58 @@ Last updated: 2026-07-21
   `[tool.setuptools] packages` with package-data for the QML + font.
   **Verified against `--fake` with no audio/mic/models**: every state renders, the 3-line cap
   scrolls, and all 8 CI selfchecks pass.
-- **Next — C3:** `QSystemTrayIcon` tray (alive-icon + Quit + Groq key field → `keyring`
-  `("gemma","groq")`) + the ⌄ expand. Full settings surface still deferred (`spec/70`,
-  M0-close gate). **First thing to settle in C3:** whether a non-activating window can host
-  clicks/scrolling without ever taking focus — the ⌄ handle, the tray and the expanded view
-  all depend on that answer, and the BINDING focus rule (spec/40) forbids getting it wrong.
+- **Built (C3, `299fc46`):** tray (painted alive-icon · Quit · Groq key → `keyring`
+  `("gemma","groq")` · latency toggle) · latency readout · reduced motion · multi-monitor fix.
+  The ⌄ was built and then **cut** (D22). Focus question **answered**: a non-activating window
+  *can* take clicks without taking focus, and `WS_EX_TRANSPARENT` makes the island fully
+  click-through while still painting — `setMask()` must NOT be used, it clips painting too.
+- **OWED — fixes from the first live run (2026-07-22).** First real turns ever rendered
+  (wake word → STT → B1 → Teleprompter → TTS). It works end to end; these are the defects:
+  1. ~~**The reply appears as a block, not typed.**~~ **FIXED.** Prompt *and* reply now reveal
+     through one paced typewriter, so it no longer matters how a brain chunks its stream. One
+     WORD per tick (`Theme.durationWord`), not one character: character pacing read as a chat
+     stream being skimmed rather than a teleprompter to be read.
+  2. ~~**The pill snaps into existence on wake.**~~ **FIXED.** `entrance` fades the window in
+     and out, bound to the state rather than toggled by hand.
+  3. **The prompt flashes for ~1 s and is gone** — ugly and janky. *Measured:* the brain takes
+     ~1 s warm but **6 s cold**, so the dwell is wildly inconsistent. **Fix:** a minimum dwell
+     before the reply may replace the prompt (keeps the locked design's "never stacked").
+     Same family as the 7a/7b gaps below.
+  4. **The latency readout is ugly.** Styling — folds into the static-screens pass, but now a
+     confirmed complaint rather than a hypothetical.
+- **First real latency figures (2026-07-22)** — partially discharges the owed D11 numbers:
+  real-speech STT on GPU **273–603 ms** (vs 33 ms on the synthetic clip) · perceptible feedback
+  **1404–1417 ms** every turn (always the `working` earcon — the brain never beats the 1.4 s
+  timer) · first spoken word **2787 / 3328 / 3563 ms** warm, but **9142 ms on the first
+  (cold-connection) turn**, the only breach of D11's 4 s and a cold-start artefact · warm-up
+  22.1 s with the CUDA JIT cached.
+- **Renderer hardening (2026-07-22).** The silhouette moved from `Canvas` to `Shape`
+  (`CurveRenderer`): Canvas repainted *asynchronously*, so a freshly wrapped line rendered over
+  the desktop until the black caught up. An adversarial pass over the result then found two
+  more, both now fixed: the reveal gated on the island's **growth but not its scroll**, so past
+  three lines words landed while the text was still sliding; and the latency readout reserved a
+  guessed 96px gutter for a reading that measures **140px**, so the instrument would have sat
+  on the reply during the acceptance run — it is now measured from the font.
+- **The window no longer animates (2026-07-22).** Live symptom: after an animation the right
+  edge finished rendering visibly later than the left. Cause: the *window itself* was resizing,
+  and a native resize lands a frame apart from the scene graph, so newly exposed area painted
+  late; separately the silhouette was drawn at its TARGET height while the window animated
+  toward it, clipping its own bottom corners mid-growth. The window is now a **fixed
+  transparent frame** and the island animates inside it. Depends on `WS_EX_TRANSPARENT` — the
+  frame is mostly empty space and would otherwise swallow clicks across all of it.
+  The silhouette is now a **Rectangle plus two flares** rather than one eight-segment path:
+  the flares never change size, so nothing re-tessellates during an animation. Verified
+  pixel-identical to the old path bar 0.22% of pixels, all on the two bottom radii, where
+  Rectangle antialiases slightly smoother.
+  New: `python -m teleprompter.overlay_check` — the renderer's offline check, on Qt's
+  `offscreen` platform so it needs no display. Every assertion in it was verified to FAIL when
+  its bug is reintroduced. **Not yet in CI:** PySide6 is an optional `[ui]` extra and CI does
+  not install it; `checks.yml`'s note that "QML needs a display" is now wrong. Decide whether
+  the pipeline should carry the UI extra.
+- **Open question raised by D23:** are **earcons** gated by the speech switch, or always on?
+  They are not TTS, and the `working` earcon is currently the only thing meeting D11's 1.5 s
+  budget on the audio side — with speech off, the overlay's `thinking` state carries it alone
+  (which it does, per D16's "perceptible"). Decide when the switch is built.
 - **Owed (design, 2026-07-21) — the two dead-air gaps.** The island shows the morphing status
   word only until the transcript lands, then sits *motionless*. Two distinct problems:
   **(7a) before the transcript appears** — STT latency, plus whether LLM cleanup gates the

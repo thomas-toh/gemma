@@ -2,11 +2,13 @@
 // window recipe + concave-corner path proven in sandbox/qml_spike/ (see NOTES.md).
 //
 // Solid black, fused to the top screen edge: bottom corners round inward, top corners flare
-// OUTWARD into the edge. The silhouette is a filled Canvas path because Rectangle (like CSS
-// border-radius) only rounds inward — the outward flares need a real path.
+// OUTWARD into the edge. Built as a plain Rectangle plus two small flare pieces — only the
+// outward flares need a real path, because Rectangle (like CSS border-radius) rounds inward.
 //
-// Everything here is driven by `model` (teleprompter/model.py); the island never talks back.
+// Everything here is driven by the `overlay` context property (teleprompter/model.py); the
+// island renders what arrives and never talks back (Contract P, D19).
 import QtQuick
+import QtQuick.Shapes
 import QtQuick.Window
 import teleprompter                            // Theme — the design tokens (Theme.qml)
 
@@ -40,12 +42,18 @@ Window {
     // FINAL layout width — the text never reflows mid-animation. Shrinks by the gutter when
     // the latency readout is on, so an instrument can never overlap a reply.
     readonly property real textW: openW - 2 * padSide - latencyGutter
-    readonly property int latencyGutter: overlay.showLatency ? 96 : 0
+    // Measured from the font, at the WIDEST reading it can ever show (both readings appear at
+    // once during the acceptance run). A guessed constant undersized it; sizing to the CURRENT
+    // reading would reflow the reply every time a number arrived.
+    readonly property string latencyWidest: "fb 88888ms   word 88888ms"
+    readonly property int latencyGutter:
+        overlay.showLatency ? Math.ceil(latencyFm.advanceWidth(latencyWidest)) + 16 : 0
     // `reducedMotion` is a context property (Windows' "Show animations" setting, resolved in
     // __main__.py). Layout transitions collapse to instant; the mic bars keep their smoothing,
     // because they carry information and unsmoothed they read as jitter rather than as level.
     readonly property int moveMs: reducedMotion ? 0 : Theme.durationResize
     readonly property int scrollMs: reducedMotion ? 0 : Theme.durationScroll
+    readonly property int fadeMs: reducedMotion ? 0 : Theme.durationFade
     // The family arrives as the `fontFamily` context property: QML's font.family takes ONE
     // name (there is no CSS-style chain), so __main__.py walks FONT_STACK against the fonts
     // actually installed and hands in the winner. Install Instrument Sans for the real thing.
@@ -56,7 +64,6 @@ Window {
     readonly property bool isError: overlay.error !== ""
     readonly property string bodyText: isError ? overlay.error
                                      : (overlay.reply !== "" ? overlay.reply : overlay.transcript)
-    readonly property bool isPrompt: !isError && overlay.reply === "" && overlay.transcript !== ""
     // Two sizes, nothing else: LISTENING is the minimised pill with the wave; every other
     // visible state — thinking, prompt, reply, fault — is the standard width, with the status
     // word or the text sitting in the SAME left-aligned slot, so the handoff from
@@ -68,17 +75,60 @@ Window {
     readonly property bool open: bodyText !== "" || st === "thinking"
                                  || st === "speaking" || st === "error"
 
-    readonly property int bodyW: open ? openW : compactW
-    width: bodyW + 2 * flare                     // flares live outside the body
+    // The WINDOW never moves or resizes: a fixed, fully transparent, click-through frame at the
+    // island's largest possible size, with the island animating INSIDE it. Animating the window
+    // means native move/resize operations that land a frame apart from the scene graph — newly
+    // exposed area paints late, and the silhouette can be clipped mid-growth. Keep it fixed.
+    //
+    // DEPENDS on WS_EX_TRANSPARENT (stamped in __main__.py): the frame is mostly empty space, and
+    // without that style it would swallow clicks across all of it. Never remove one alone.
+    width: openW + 2 * flare                     // widest the island can ever be
+    height: baseH + (maxLines - 1) * lineBox     // tallest it can ever be
+    readonly property int islandW: (open ? openW : compactW) + 2 * flare
     // A single line is ALWAYS exactly baseH, and each extra line adds exactly one whole line
-    // box — so the bottom gap stays padBottom no matter how many lines show, and the blinking
-    // caret cannot twitch it. Growth stops at maxLines; past that the text scrolls.
-    readonly property int shownLines: Math.max(1, Math.min(textItem.lineCount, maxLines))
-    readonly property int scrolled: Math.max(0, textItem.lineCount - maxLines)
-    // The pill's height. Kept distinct from the window height so a future surface can hang
-    // below without every island-shaped thing re-deriving itself.
+    // box, so the bottom gap stays padBottom however many lines show. Growth stops at
+    // maxLines; past that the text scrolls instead.
+    readonly property int shownLines: Math.max(1, Math.min(measure.lineCount, maxLines))
+    readonly property int scrolled: Math.max(0, measure.lineCount - maxLines)
+    // Where the next word ends (space included). Drives the measurer, so growth runs one word
+    // ahead of what is on screen.
+    function wordEnd(from) {
+        if (from >= bodyText.length)
+            return bodyText.length;
+        var i = bodyText.indexOf(" ", from);
+        return i < 0 ? bodyText.length : i + 1;
+    }
+    readonly property int pendingEnd: wordEnd(reveal.shown)
+    // The pill's TARGET size. `animW`/`animH` are the live, animating values every visual is
+    // drawn from — one pair of numbers, so the silhouette, the text, the bars and the readout
+    // cannot disagree about where the island is on any given frame.
     readonly property int islandH: open ? baseH + (shownLines - 1) * lineBox : baseH
-    height: islandH
+    property real animW: islandW
+    property real animH: islandH
+    Behavior on animW { NumberAnimation { duration: root.moveMs; easing.type: Easing.InOutCubic } }
+    Behavior on animH { NumberAnimation { duration: root.moveMs; easing.type: Easing.InOutCubic } }
+    // Centred in the fixed frame. Both edges therefore move by the same amount in the same
+    // frame — the asymmetry came from this being a native window move racing a native resize.
+    readonly property real islandX: (width - animW) / 2
+
+    // Measures the text INCLUDING the word about to appear, so the island can finish growing
+    // before that word is revealed rather than the word landing on a box still catching up.
+    // Never drawn, and deliberately NOT inside the viewport — it is layout arithmetic, not
+    // part of the clipped content.
+    // Every layout property is taken FROM textItem, never restated: if the two ever wrapped
+    // differently, lineCount would describe a layout that is not on screen and the gate below
+    // would silently let words land early.
+    Text {
+        id: measure
+        objectName: "measure"           // reached by name from the self-check
+        visible: false
+        width: textItem.width
+        wrapMode: textItem.wrapMode
+        font: textItem.font
+        lineHeight: textItem.lineHeight
+        lineHeightMode: textItem.lineHeightMode
+        text: root.bodyText.substring(0, root.pendingEnd)
+    }
 
     // How far the fade may reach before it would dim a real glyph. The first line's BOX starts
     // at padTop, but its ink starts lower: FixedHeight centres the natural line in the box, and
@@ -89,7 +139,8 @@ Window {
     readonly property real fadeH: Math.max(4, inkTop - 0.5)   // ~16px at 18/1.3
 
     // idle = asleep = gone (spec/40, status.json). The tray, not the island, says "alive".
-    visible: st !== "idle"
+    visible: st !== "idle" || entrance > 0.01
+    opacity: entrance
     color: "transparent"
     flags: Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
            | Qt.WindowDoesNotAcceptFocus
@@ -99,37 +150,70 @@ Window {
     x: Screen.virtualX + Math.round((Screen.width - width) / 2)
     y: Screen.virtualY
 
-    Behavior on width  { NumberAnimation { duration: root.moveMs; easing.type: Easing.InOutCubic } }
-    Behavior on height { NumberAnimation { duration: root.moveMs; easing.type: Easing.InOutCubic } }
+    // Fades the whole window rather than wrapping the contents in a transformed Item: the
+    // visuals are interleaved with the declarations they depend on, so wrapping reparents those
+    // too and every `root.<prop>` breaks. `visible` lingers so the fade-out can finish.
+    property real entrance: st === "idle" ? 0 : 1
+    Behavior on entrance {
+        NumberAnimation { duration: root.fadeMs; easing.type: Easing.OutCubic }
+    }
 
-    // ---- the silhouette ----
-    Canvas {
-        id: island
-        width: parent.width
-        height: root.islandH
-        antialiasing: true
-        onPaint: {
-            var ctx = getContext("2d");
-            var W = width, H = height, F = root.flare, R = root.botR;
-            var bl = F, br = W - F;              // body spans [flare, W-flare]
-            ctx.reset();
-            ctx.beginPath();
-            ctx.moveTo(0, 0);                    // outer top-left, on the screen edge
-            ctx.lineTo(W, 0);                    // across the top edge
-            ctx.quadraticCurveTo(br, 0, br, F);  // top-right: flare outward into the edge
-            ctx.lineTo(br, H - R);
-            ctx.quadraticCurveTo(br, H, br - R, H);   // bottom-right: convex round
-            ctx.lineTo(bl + R, H);
-            ctx.quadraticCurveTo(bl, H, bl, H - R);   // bottom-left: convex round
-            ctx.lineTo(bl, F);
-            ctx.quadraticCurveTo(bl, 0, 0, 0);   // top-left: flare outward into the edge
-            ctx.closePath();
-            ctx.fillStyle = Theme.surface;
-            ctx.fill();
+    // ---- the silhouette: a plain box, with the two flares stuck on the sides ----
+    // The moving part is a plain Rectangle — cheap, and antialiased without help. The only real
+    // curves are the two flares, and those NEVER change size: the island grows and shrinks around
+    // them, so they only move. Nothing re-tessellates during an animation.
+    Rectangle {
+        id: slab
+        x: root.islandX + root.flare        // the flares live outside the body, one on each side
+        width: root.animW - 2 * root.flare
+        height: root.animH
+        color: Theme.surface
+        // Fused to the top screen edge, so only the bottom corners are round. Per-corner radius
+        // is a Rectangle feature (Qt 6.7+) — no path needed for the convex half of the shape.
+        bottomLeftRadius: root.botR
+        bottomRightRadius: root.botR
+        topLeftRadius: 0
+        topRightRadius: 0
+    }
+
+    // The flares: concave fillets that flow outward from the body into the screen edge. These
+    // DO need a real path — Rectangle (like CSS border-radius) can only round inward.
+    // A Repeater rather than two hand-written Shapes: mirrored geometry written twice is
+    // geometry that can be edited once, and the two sides would silently stop matching.
+    Repeater {
+        model: 2                                       // 0 = left flare, 1 = right
+        Shape {
+            id: flare
+            required property int index
+            readonly property bool isLeft: index === 0
+            // Local coords, an 18x18 box: `ox` is the edge against the screen corner, `bx` the
+            // edge against the body. Naming them makes one path serve both mirrorings.
+            readonly property real ox: isLeft ? 0 : root.flare
+            readonly property real bx: isLeft ? root.flare : 0
+
+            x: isLeft ? slab.x - root.flare : slab.x + slab.width
+            y: 0
+            width: root.flare
+            height: root.flare
+            antialiasing: true
+            // CurveRenderer, not the default GeometryRenderer: the latter antialiases by
+            // multisampling the window surface, and this window is frameless/translucent with
+            // no MSAA, so the curve came out hard-edged and pixellated.
+            preferredRendererType: Shape.CurveRenderer
+            ShapePath {
+                fillColor: Theme.surface
+                strokeWidth: 0
+                strokeColor: "transparent"
+                startX: flare.ox                                    // the screen corner
+                startY: 0
+                PathLine { x: flare.bx; y: 0 }                      // along the top edge
+                PathLine { x: flare.bx; y: root.flare }             // down the body's side
+                PathQuad {                                          // and back out, concave
+                    controlX: flare.bx; controlY: 0
+                    x: flare.ox;        y: 0
+                }
+            }
         }
-        // the path depends on the box, so repaint whenever it changes
-        onWidthChanged: requestPaint()
-        onHeightChanged: requestPaint()
     }
 
     // ---- thinking: a morphing status word ----
@@ -139,60 +223,50 @@ Window {
     // wipe carries itself. Words describe TRANSCRIBING, because that is the phase this covers:
     // it shows from end-of-speech until the transcript lands, then the prompt takes the slot.
     readonly property bool loaderOn: st === "thinking" && bodyText === ""
-    readonly property var loaderWords: [
-        "transcribing", "deciphering", "decoding", "parsing",
-        "untangling", "interpreting", "unpicking", "resolving",
-    ]
-    property string loaderText: ""
-    property string sweepFrom: ""
-    property string sweepTo: ""
-    property int sweepAt: 0
-    property string lastWord: ""
-    property bool sweeping: false
 
-    // The bare word only — the ellipsis is static punctuation appended at render. If it took
-    // part in the wipe, a longer outgoing word would leave its own "…" trailing for one tick
-    // and you'd see "Interpreting……". (Alfred hides that behind its block caret; we have none.)
-    function labelFor(w) { return w.charAt(0).toUpperCase() + w.slice(1) }
-
-    function nextWord() {
-        var w = lastWord;
-        while (w === lastWord && loaderWords.length > 1)
-            w = loaderWords[Math.floor(Math.random() * loaderWords.length)];
-        lastWord = w;
-        sweepFrom = loaderText;
-        sweepTo = labelFor(w);
-        sweepAt = 0;
-        sweeping = true;
-    }
-
-    onLoaderOnChanged: {
-        hold.stop();
-        if (loaderOn) {
-            loaderText = "";
-            lastWord = "";
-            nextWord();
-        } else {
-            sweeping = false;
-            loaderText = "";
-        }
-    }
-
-
+    // The wipe's state lives ON the timer that drives it, like the typewriter's `reveal.shown`
+    // below, rather than as loose mutable properties on the Window. Only `shown` is read outside.
     Timer {                                   // the wipe: one column per tick
         id: sweep
+        objectName: "sweep"                   // reached by name from the self-check
+        property var words: [
+            "transcribing", "deciphering", "decoding", "parsing",
+            "untangling", "interpreting", "unpicking", "resolving",
+        ]
+        property string shown: ""             // the settled-or-mid-wipe word, bare
+        property string wordFrom: ""
+        property string wordTo: ""
+        property int at: 0
+        property string last: ""
+        property bool active: false
+
+        // The bare word only — the ellipsis is static punctuation appended at render. If it
+        // took part in the wipe, a longer outgoing word would leave its own "…" trailing for a
+        // tick and you'd see "Interpreting……". (Alfred hides that behind its block caret.)
+        function labelFor(w) { return w.charAt(0).toUpperCase() + w.slice(1) }
+
+        function next() {
+            var w = last;
+            while (w === last && words.length > 1)
+                w = words[Math.floor(Math.random() * words.length)];
+            last = w;
+            wordFrom = shown;
+            wordTo = labelFor(w);
+            at = 0;
+            active = true;
+        }
+
         interval: 28
         repeat: true
-        running: root.loaderOn && root.sweeping
+        running: root.loaderOn && active
         onTriggered: {
-            var span = Math.max(root.sweepFrom.length, root.sweepTo.length);
-            if (root.sweepAt < span) {
-                root.loaderText = root.sweepTo.slice(0, root.sweepAt)
-                                + root.sweepFrom.slice(root.sweepAt);
-                root.sweepAt++;
+            var span = Math.max(wordFrom.length, wordTo.length);
+            if (at < span) {
+                shown = wordTo.slice(0, at) + wordFrom.slice(at);
+                at++;
             } else {
-                root.loaderText = root.sweepTo;   // settled: rests until the next word
-                root.sweeping = false;
+                shown = wordTo;               // settled: rests until the next word
+                active = false;
                 hold.restart();
             }
         }
@@ -201,8 +275,18 @@ Window {
     Timer {                                   // dwell on a settled word
         id: hold
         interval: 1500
-        repeat: false
-        onTriggered: if (root.loaderOn) root.nextWord()
+        onTriggered: if (root.loaderOn) sweep.next()
+    }
+
+    onLoaderOnChanged: {
+        hold.stop();
+        sweep.shown = "";
+        if (loaderOn) {
+            sweep.last = "";
+            sweep.next();
+        } else {
+            sweep.active = false;
+        }
     }
 
     // ---- listening: bars driven by the real mic level ----
@@ -211,8 +295,8 @@ Window {
     Row {
         id: bars
         visible: root.st === "listening"
-        x: (root.width - width) / 2
-        y: (root.islandH - height) / 2
+        x: root.islandX + (root.animW - width) / 2
+        y: (root.animH - height) / 2
         height: 26
         spacing: 4
         Repeater {
@@ -237,15 +321,16 @@ Window {
     // never changes mid-animation and the height animates once, straight to its target.
     Item {
         id: viewport
-        x: root.flare + root.padSide
+        x: root.islandX + root.flare + root.padSide
         y: root.fadeTop
-        width: Math.max(0, root.width - 2 * (root.flare + root.padSide))
-        height: Math.max(0, root.islandH - root.fadeTop - root.padBottom)
+        width: Math.max(0, root.animW - 2 * (root.flare + root.padSide))
+        height: Math.max(0, root.animH - root.fadeTop - root.padBottom)
         clip: true
         visible: root.open
 
         Text {
             id: textItem
+            objectName: "body"              // the reveal/scroll self-check reaches it by name
             width: root.textW               // FINAL width, never the animating one
             // Top-anchored at a fixed offset and scrolled by whole lines. Deliberately does NOT
             // read the island height: that dependency is what made the text jump while the
@@ -259,13 +344,9 @@ Window {
             font.weight: Theme.fontWeight
             lineHeight: root.lineBox
             lineHeightMode: Text.FixedHeight    // pixels, not a multiple of natural height
-            // The reply streams in as real deltas, so it types itself. Only the prompt —
-            // which lands as one block at end-of-speech (D14) — gets a cosmetic reveal.
-            // The caret rides inside the string so it stays put on wrapped lines.
-            readonly property bool typing: root.isPrompt && reveal.shown < root.bodyText.length
-            text: root.isPrompt
-                  ? root.bodyText.substring(0, reveal.shown) + (typing && blink.on ? "▌" : "")
-                  : root.bodyText
+            // EVERYTHING reveals here, prompt and reply alike — never raw. Brain deltas arrive as
+            // a few fat chunks, so leaning on them to pace the text renders it as a block.
+            text: root.bodyText.substring(0, reveal.shown)
         }
 
         // The morphing status word occupies the SAME slot the prompt will land in — same left
@@ -275,7 +356,7 @@ Window {
             visible: root.loaderOn
             x: 0
             y: root.padTop - root.fadeTop
-            text: root.loaderText ? root.loaderText + "…" : ""
+            text: sweep.shown ? sweep.shown + "…" : ""
             color: Theme.textMuted                  // a status word, not content
             font.family: fontFamily
             font.pixelSize: Theme.fontSize
@@ -310,9 +391,13 @@ Window {
     readonly property int fbTarget: 1500
     readonly property int fwTarget: 4000
 
+    FontMetrics { id: latencyFm; font: latencyText.font }
+
     Text {
+        id: latencyText
+        objectName: "latency"           // reached by name from the self-check
         visible: overlay.showLatency && (overlay.feedbackMs > 0 || overlay.firstWordMs > 0)
-        x: root.width - root.flare - root.padSide - width
+        x: root.islandX + root.animW - root.flare - root.padSide - width
         y: root.padTop
         color: (overlay.feedbackMs > root.fbTarget || overlay.firstWordMs > root.fwTarget)
                ? Theme.textPrimary : Theme.textMuted
@@ -323,23 +408,35 @@ Window {
               + (overlay.firstWordMs > 0 ? "word " + Math.round(overlay.firstWordMs) + "ms" : "")
     }
 
-    // cosmetic typewriter for the prompt only
+    // The typewriter, for prompt AND reply. Two cases have to be told apart:
+    //   GROWS  — a reply delta appends to what is already there: keep typing from where we are.
+    //   CHANGES — a new prompt, or the reply replacing the prompt: start over from zero.
+    // A prefix test distinguishes them without the model having to say which happened.
+    property string revealedFrom: ""
+    onBodyTextChanged: {
+        var grew = bodyText.length >= revealedFrom.length
+                   && bodyText.substring(0, revealedFrom.length) === revealedFrom;
+        if (!grew)
+            reveal.shown = 0;
+        revealedFrom = bodyText;
+    }
+
     Timer {
         id: reveal
         property int shown: 0
-        interval: 12
+        interval: Theme.durationWord
         repeat: true
-        running: root.isPrompt && shown < root.bodyText.length
-        onTriggered: shown = Math.min(shown + 1, root.bodyText.length)
+        running: shown < root.bodyText.length
+        onTriggered: {
+            // Hold the word back until the island has FINISHED moving — BOTH the height and the
+            // scroll. `measure` already counts the pending word, so islandH and the scroll offset
+            // are the targets. Gating only growth let words land mid-scroll past three lines.
+            var targetY = root.padTop - root.fadeTop - root.scrolled * root.lineBox;
+            if (Math.abs(root.animH - root.islandH) > 0.5
+                    || Math.abs(textItem.y - targetY) > 0.5)
+                return;
+            reveal.shown = root.pendingEnd;
+        }
     }
 
-    Timer {                                       // caret blink while the prompt reveals
-        id: blink
-        property bool on: true
-        interval: 500
-        repeat: true
-        running: textItem.typing && !reducedMotion
-        onTriggered: on = !on
-    }
-    onBodyTextChanged: reveal.shown = root.isPrompt ? 0 : root.bodyText.length
 }
