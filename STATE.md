@@ -10,6 +10,36 @@ instructions → README · findings → NOTES.md · decisions → a D-number in 
 
 Last updated: 2026-07-22
 
+## Handoff — start here (2026-07-22)
+
+Track P's island is built and live: real turns render end to end (wake word → STT → B1 →
+Teleprompter → TTS). The renderer's defects from the first live run are fixed and guarded by
+`python -m teleprompter.overlay_check`. **The agreed next action is the hotkey module.**
+
+| # | Action | Track | Why now |
+|---|--------|-------|---------|
+| 1 | **Hotkey module — the two doors (D20)** | G ② | On the critical path. Hotkey is now the PRIMARY input (wake word demoted), so the acceptance run cannot test the real input path until this exists. |
+| 2 | M0 acceptance run, desk-shaped (D16) | G ③ | ×10 ask-hotkey turns + ×3 wake-word. Blocked by 1. Also unblocks Track D. |
+| 3 | M0-close gate — settings surface | G ④ | Thomas's gate, beyond docs/04 §8. |
+
+Parked, not blocking, pick up by mood:
+
+- **Prompt dwell** (owed fix 3 below) — the prompt still flashes for ~1 s. Pairs with the
+  **7a/7b dead-air gaps**; same underlying problem, so do them together.
+- **Expanded view** — design session first, and it **wants its own D-number** (it widens D14).
+- **Latency readout styling** (owed fix 4) — deferred to a static-screens design pass.
+- **Contract P gap (D20)** — dictate overwrite-warning + propose-then-tap messages, unbuilt.
+- **Launcher option C2** — Job Object lifetime tie; **needs D24** (amends D13/D19's isolation
+  rationale and D10's two-seam limit), and daemon-death must become visible in the tray.
+
+Two open questions owed a decision:
+
+- **Earcons** — gated by the speech switch, or always on? (see D23 note under Track P)
+- **CI and the renderer** — `overlay_check` is NOT wired in. PySide6 is a core dependency
+  (D23) but `checks.yml` still calls it an optional `[ui]` extra and claims QML "needs a
+  display", which is **wrong**: it runs headless under `QT_QPA_PLATFORM=offscreen`. Decide
+  whether CI carries it. Recommended yes — every bug this week was in the renderer.
+
 ## Track G — Bridge (Doc 04 → M0, M1, M2)
 
 - **Works now:** steps 0–6 built and `--selfcheck`-green. `bridge/`: `config.py`
@@ -45,10 +75,10 @@ Last updated: 2026-07-22
   IDLE, one wake-chain.) Parked — Thomas is ideating this in a separate Fable session.
 - **In flight:** —
 - **Next:** M0 build order (docs/04 §8) complete — remaining before M0 is called done,
-  in order: ① **Teleprompter (D13/D19) — its own Track P** (front/back split): the
-  Contract-P feed schema (`status.json`) and the orchestrator-side **broadcaster**
-  (`bridge/broadcaster.py`) are built (Track P C1); remaining is the `teleprompter/` app
-  (front-end, Track P C2/C3) · ② **hotkey module — the two doors (D20)** —
+  in order: ① ~~**Teleprompter (D13/D19) — its own Track P**~~ **DONE** — C1 (feed schema +
+  broadcaster), C2 (the island) and C3 (tray, instrument) are all built and proven against
+  live turns; remaining Teleprompter work is polish and is parked under Track P, not blocking
+  · ② **hotkey module — the two doors (D20)** —
   shared `bridge/hotkeys/` (hybrid tap-toggle / hold-PTT; dictate + ask keys, bindings
   in spec/70 config); ask key opens LISTENING directly · ③ the owed acceptance run, now
   **desk-shaped (D16)**: ×10 ask-hotkey turns (overlay streaming + speech) + ×3
