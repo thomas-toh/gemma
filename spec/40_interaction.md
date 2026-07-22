@@ -12,9 +12,14 @@ IDLE ──wake──▶ LISTENING ──end-of-speech──▶ THINKING ──�
 
 - `LISTENING` opens on WAKE; end-of-speech = VAD silence (initial: 1 s, tune in M0);
   give-up if speech never starts: 5 s (decided 2026-07-13; was 10 s).
-- **Answer dwell**: when a turn ends, the answer stays on the island for 8 s before `IDLE`
-  blanks it — the mic is CLOSED throughout and the wake watch runs, so a new wake supersedes
-  the dwell (clearing the old answer *before* the mic opens). This replaced an 8 s FOLLOW-UP
+- **Answer dwell**: when a turn ends, the answer stays on the island before `IDLE` blanks it —
+  **8 s floor, scaled by reply length** (0.45 s/word), because the island *reveals* text at a
+  fixed rate and a flat timer blanked long answers while they were still typing. The mic is
+  CLOSED throughout and the wake watch runs, so a new turn supersedes the dwell. **Binding:
+  opening a capture window clears the previous turn first** — whichever entrance opens it
+  (wake · ask key · barge-in · a keypress mid-reply), the island must never show the mic bars
+  over a stale answer. The dwell is only the walked-away backstop; dismissal is the intended
+  exit (STATE, Track P). This replaced an 8 s FOLLOW-UP
   window that accepted speech without re-wake: because it held the mic open it had to publish
   `listening` (spec/50 rule 4 — no dark listening), and `listening` ended the previous turn,
   so it erased the answer it existed to let you respond to. Removing it makes every

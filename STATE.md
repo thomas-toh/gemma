@@ -19,9 +19,13 @@ opens the ask door), so the acceptance run is unblocked and is the next action.
 
 | # | Action | Track | Why now |
 |---|--------|-------|---------|
-| 1 | **M0 acceptance run, desk-shaped (D16)** | G ③ | ×10 ask-hotkey turns + ×3 wake-word. Now unblocked — the real input path exists. Also unblocks Track D. |
-| 2 | Answer dismissal + backstop (below) | P | The hotkey already dismisses (a press supersedes the dwell); Esc / close affordance and the length-scaled backstop are still owed. |
-| 3 | M0-close gate — settings surface | G ④ | Thomas's gate, beyond docs/04 §8. |
+| 1 | **Debug & refactor session** | G · P | Thomas's call: disjointed bits + suspected bugs, then the debugger. Two same-root bugs already found today (entrances diverging). Start from the decided items below: the abort seam is built, Esc is built but **unverified live**. |
+| 2 | M0-close gate — settings surface | G ④ | Thomas's gate, beyond docs/04 §8. The last thing between here and M0 closed — the acceptance test itself has PASSED. |
+| 3 | 7a/7b review — the three timing bugs | P | One root cause; the dwell handoff to the overlay (option ③) is the decided shape. |
+
+**M0's acceptance test has PASSED** (2026-07-22, details under Track G). M0 is not *closed* —
+Thomas's settings-surface gate stands — but the loop is proven. **Track D is unblocked**
+(D12 sequencing, 2026-07-18: validate the shared capture path live before building on it).
 
 **Fixed 2026-07-22 (late) — the held-answer wipe.** A long answer was erased milliseconds
 after arriving. Root cause: `listening` meant two things — "the user asked for the mic" and
@@ -64,8 +68,78 @@ close affordance all avoid it. ③ Keep a **generous length-scaled backstop** re
 purely manual dismissal, walking away mid-answer leaves an always-on-top island over
 everything indefinitely.
 **Partly discharged 2026-07-22 by the hotkey:** an ask-key press supersedes the dwell exactly
-as a wake does, so there is now a real dismissal gesture. Still owed: Esc / an on-island close,
-and the generous length-scaled backstop (`ANSWER_DWELL_S` is still a flat 8 s).
+as a wake does, so there is now a real dismissal gesture. **Constraint ③ built the same day:**
+`answer_dwell()` = 8 s floor + 0.45 s/word (reveal cost at 90 ms/word, plus reading room), so
+the 200-word answer that blanked at 8 s now holds ~90 s. **Still owed: Esc / an on-island
+close** — which needs the `WM_NCHITTEST` per-region hit-testing of constraint ①, shared with
+the expanded view.
+
+**Fixed 2026-07-22 (live, during acceptance-run setup) — bars drawn over a stale answer.**
+Symptom (Thomas): press the ask key while a reply is showing and the wave appears *alongside*
+the old text instead of dismissing it. **Not the hotkey.** Reproduced against a recorded turn:
+the trigger is **barge-in** — pressing then speaking over the reply trips it, and barge-in
+opens its capture from inside `_speak()`, publishing `listening` with no `idle` first. The
+turn-clear lived in `serve()`, so only the two entrances *there* got it; the two that open
+from `_speak()` skipped it. Root cause was structural, so the fix is a **refactor: the clear
+moved into `_capture()`** — the one place capture windows actually open — and is now a binding
+invariant in spec/40 (`state` sequence `speaking → idle → listening`). Guarded by an
+orchestrator selfcheck, verified to FAIL when the line is removed.
+**Second half, same report:** a press *during* a reply used to sit queued until the turn
+finished playing, so it looked like nothing happened. `_speak()` now polls the ask key and
+treats it as a deliberate barge-in — cut TTS, clear, open the mic. **Still queued:** a press
+while the *brain is streaming*, because `_collect()` owns that window inside asyncio; needs
+cancellation there, noted in code.
+**Coverage gap this exposed:** removing the wake cases (above) took `wake_barge` with them —
+so barge-in, where this bug lived, now has **no replay case at all**, and the new
+key-interrupt path has none either. Both want a case; the key-interrupt one *can* be a keyed
+case (unlike barge-in) if the harness can script a second press mid-reply.
+
+**Decided 2026-07-22 (Thomas), for the refactor session — the dismiss key and the abort seam.**
+① **Esc dismisses the Teleprompter**, registered **only while the island is showing**. Bare Esc
+must NEVER be registered permanently: `RegisterHotKey` *consumes* its combo system-wide, so a
+standing Esc binding would break Esc in every other app (dialogs, autocomplete, fullscreen,
+vim). `parse_binding` already rejects modifier-less bindings and should keep doing so —
+dynamic registration is the exemption, not a relaxation. Cost, eyes open: `RegisterHotKey`
+must run on the message-pump thread, so register/unregister needs `PostThreadMessage`
+marshalling against a blocking `GetMessageW`, plus the race where the island hides mid-press.
+Neither a keyboard hook (spec/50 rule 11) nor a QML key handler (the island is
+`WS_EX_NOACTIVATE`, never focused) is available.
+② **Dismiss = full abort of the turn**, not just a blank: LISTENING drops the capture,
+SPEAKING cuts TTS, **THINKING cancels the in-flight brain call**. That makes the **asyncio
+cancellation seam in `_collect()` load-bearing** — it is the same missing capability as
+"a press while the brain is streaming still queues" (above). One seam, two callers.
+③ **Consequence for the dwell — the estimate is measuring the wrong thing.** The dwell already
+starts *after* the brain and TTS finish, so it is not covering response latency; it is blindly
+estimating **reveal** time (90 ms/word) plus reading time, which is why it needs 0.45 s/word
+and lands at ~90 s for a long answer. The clock should start when the reply **finishes
+revealing**, making the knob a legible "N seconds after it finishes appearing". **Contract P is
+one-way** (spec/70: no control channel back), so the overlay cannot report reveal-completion
+upstream — which rules out option ② of the dwell bug and selects **option ③: the overlay owns
+the blank decision**. It needs no reverse channel and it is the only party that knows the
+reveal state. This is also the 7a/7b answer for the other two timing bugs.
+
+**Fixed 2026-07-22 — the stuck ask door (found by Thomas within minutes of Esc landing).**
+Press `ctrl+alt+1`, then Esc: the next `ctrl+alt+1` logged `ask: closed (tap)` and opened
+nothing, so it took two presses to get going again. Cause: `Door.open` is the module's
+tap-toggle flag, Esc aborted the turn in the *orchestrator*, and the module never heard — so
+the next press was read as the closing tap. **Wider than the symptom:** it bit every capture
+ending without a second press — the no-speech give-up, the 30 s cap, and **`--auto-end`, which
+was therefore comprehensively broken** (VAD ends the capture, `open` stays set, every other
+press swallowed). Fix: `Door.close()`, called from `_capture()`'s `finally` so no exit path
+can skip it, plus `Hotkeys.reset()` on the dismiss unwind. Guarded; verified to FAIL when
+reverted.
+
+**THE PATTERN — three bugs, one root, all on 2026-07-22.** ① barge-in opened a capture without
+clearing the turn · ② key-interrupt opened a turn without the entrance ritual (no `wake` trace,
+no `awake` earcon — it silently cost 60% of the acceptance run's press-latency readings) ·
+③ a capture could end without the door that opened it being told. Every one is **the same
+shape: a fact that lives in two places either side of a seam, and one side not being told.**
+Each fix moved the fact to the single place that owns it — the clear into `_capture()`, the
+entrance into `_enter()`, the toggle into `Door.close()`. **This is the brief for the refactor
+session:** hunt remaining duplicated state across the daemon/module/overlay seams rather than
+individual misbehaviours. Known candidates: `self.shown` (daemon guesses what the island
+displays) · `blank_at` (daemon times a reveal it cannot see — already decided to move to the
+overlay, option ③) · `Door.open` vs orchestrator capture state (fixed, but the class remains).
 
 Parked, not blocking, pick up by mood:
 
@@ -112,7 +186,27 @@ Two open questions owed a decision:
   speak, follow-up window, barge-in, working-earcon timer, ≤2-sentence speak/hold
   heuristic, per-turn latency logs). Cross-platform per D10 (step 2 verified live on
   both OSes). Run instructions: `README.md` · GPU setup, benchmarks, quirks: `NOTES.md`.
-- **Owed:** live full-loop test (both OSes) = **the M0 acceptance run** (spec/00: ×10,
+- **M0 ACCEPTANCE RUN — PASSED, 2026-07-22 (PC).** ×10 consecutive ask-hotkey turns, answers
+  streaming to the Teleprompter, B1, zero tools. **spec/00's M0 criterion — perceptible
+  feedback < 1.5 s ×10 — is met 10/10: 1403–1413 ms.**
+  **Read that column honestly:** every reading is 1403–1413 because `WORKING_AFTER_S` is 1.4 s.
+  The brain produced nothing audible before the earcon on ANY turn, so the metric passes *by
+  construction* — raise the constant to 1.6 and it fails. It measures our timer, not Gemma's
+  speed. D11 designed exactly this (feedback beats speed), but the number is not evidence of
+  latency and should not be quoted as if it were.
+  **First spoken word** (measured, not pass/fail post-D23): 7/10 under the 4 s target · median
+  ≈ 3320 ms · min 2704 · max 5992. Breaches: turn 1 **4681** (cold-start artefact — but a big
+  improvement on the 9142 ms of the previous run), turn 4 **4631**, turn 10 **5992**. Turns 4
+  and 10 are NOT cold and are unexplained — the outstanding question from this run.
+  **Press → `awake` earcon: 1 ms** against a 300 ms target.
+  **Instrument defect found by the run and fixed the same day:** only 4 of 10 turns recorded a
+  press→indication figure. Six turns were deliberate **key-interrupts** (Thomas pressing the
+  ask key mid-reply), and that path opened its capture from `_speak()` without the entrance
+  ritual — no `wake` trace event, and no `awake` earcon either, so a key-interrupt was also
+  silently unacknowledged. **Second bug from one root** (the first being barge-in skipping the
+  turn-clear): capture-opening paths diverging from the common entrance. Fixed structurally —
+  `_enter()` now carries the entrance for `serve()` and the key-interrupt alike.
+- **Owed:** live full-loop test on the **Mac** (D10 parity); the PC run is done (spec/00: ×10,
   feedback < 1.5 s, first word < 4 s — per-turn latency lines print) + real-speech STT
   figures for the provisional D11 numbers (spec/00). Watch items for that run: earcon
   ring-out bleeding into VAD on open speakers · BT A2DP↔HFP duplex behaviour (a BT
@@ -120,7 +214,7 @@ Two open questions owed a decision:
   `BARGE_CHUNKS` in `orchestrator.py`).
 - **Works now (step 7):** replay harness (`tests/replay.py`) — recorded WAVs through
   the real wake/VAD/STT pipeline driving the real orchestrator with fake mic/pump/
-  brain/TTS; 5 cases defined in `tests/replay/cases.json`; per-turn latency table
+  brain/TTS; **6 cases, redesigned 2026-07-22 for the two doors** (below); per-turn latency table
   (also printed when a live session ends). Selfcheck CI on GitHub Actions
   (windows-latest) — **deviation from docs/04 §7:** replay does NOT run in CI because
   the WAVs (Thomas's voice) are deliberately untracked (`tests/replay/wav/`,
@@ -142,7 +236,30 @@ Two open questions owed a decision:
   a press logs and does nothing; its pipeline is Track D's.
   Proven: selfcheck (parsing, tap-toggle, hold-PTT, stale-end clearing — CI-wired) plus a
   live run driving `ctrl+alt+1` through `SendInput`, confirming the OS actually delivers.
-- **Owed:** ① record the 5 case WAVs (`python -m tests.replay --record <name>`,
+- **Replay cases rebuilt for the two doors (2026-07-22, Thomas).** The old suite was 4/5
+  wake-first — designed when the wake word was primary. D16 demoted it, so the suite now
+  mirrors the desk shape: cases carry a **`trigger`** (`key` · `wake` · `none`) and the keyed
+  ones drive the real `Door` objects — no Win32, no keyboard, because a Door is two Events and
+  that is the whole interface. **A keyed case's WAV is recorded between two real presses**
+  (`_record_keyed`, which dogfoods `bridge/hotkeys.py`), so the clip *is* the capture window
+  and its end *is* the endpoint — no invented per-case timestamp. New: **`key_long_pause`**,
+  the case that only exists post-D20 — a deliberate 2–3 s pause mid-question, which the wake
+  word would cut and the key must not; it is the only real-speech test of `capture_over`.
+  Dropped `wake_long` (superseded). **The three wake-word cases were then removed entirely**
+  (Thomas, same day): D23 makes "listen for me" default OFF, and off means no wake word *and*
+  no barge-in — so all three tested an opt-in config, `ambient` included (a false-accept test
+  is meaningless when nothing is listening). The always-on-mic regression story gets designed
+  *with* the switch rather than kept alive around it; barge-in returns as a **wake** case then,
+  since it needs speech after the endpoint. Old definitions are in git; the WAVs are already
+  recorded and left on disk (gitignored) so a revisit costs no re-recording.
+  Suite is now 4 keyed cases: `key_short` · `key_long_pause` · `key_hold` · `key_silence`.
+- **RESULT (2026-07-22): 4/4 green on the PC, all four transcripts verbatim.** Both endpoint
+  modes are now proven on real speech: **`key_long_pause`** (deliberate 2–3 s pause, 12.75 s
+  captured in one turn) validates `capture_over` — under the wake word the 1 s silence cut
+  would have truncated it — and **`key_hold`** exercises push-to-talk, which had never run on
+  real speech before. (Replay latency figures are harness figures — cold STT load, fake brain,
+  fake TTS — not acceptance-run numbers.)
+- **Owed:** ① ~~record the case WAVs and run green on the PC~~ **DONE**; Mac parity (D10) owed (`python -m tests.replay --record <name>`,
   scripts in cases.json) and run 5/5 green on the PC, later on the Mac (D10 parity) ·
   ② the **M0 acceptance run** — ×10 consecutive live turns, latency table vs spec/00
   targets · ③ real-speech STT figures for the provisional D11 numbers.
@@ -155,8 +272,11 @@ Two open questions owed a decision:
   live turns; remaining Teleprompter work is polish and is parked under Track P, not blocking
   · ② ~~**hotkey module — the two doors (D20)**~~ **DONE** (above) — ask key wired, dictate
   key registered but unwired (Track D), macOS unbuilt · ③ the owed acceptance run, now
-  **desk-shaped (D16)**: ×10 ask-hotkey turns (overlay streaming + speech) + ×3
-  wake-word variant, latency table vs spec/40 targets · ④ the M0-close gate below.
+  **desk-shaped**: ×10 ask-hotkey turns (overlay streaming + speech), latency table vs
+  spec/40 targets · ④ the M0-close gate below. **No wake-word turns** (Thomas,
+  2026-07-22) — this line had gone stale against spec/00: D23 already superseded D16(2),
+  making the wake word a conditional clause ("with 'listen for me' enabled", default off)
+  rather than a ×3 pass/fail variant. Same reasoning that removed the wake replay cases.
   The acceptance run also unblocks Track D (D12 sequencing, 2026-07-18).
 - **Post-M0 (D14/D15):** overlay expandable session view (in-memory only) ·
   word-replacement layer wired into the assistant path · `--clean-prompts` experiment
@@ -373,9 +493,10 @@ Two open questions owed a decision:
   the assistant path · **rewrite (D20):** an *ask-door
   outcome*, not a mode — propose-then-tap on the Teleprompter; `auto_apply` (spec/70,
   default off); slice D3.
-- **Blocked by:** the M0 acceptance run (Track G) — decided 2026-07-18: validate
-  the shared capture path live before building on it. (The D17 review gate cleared
-  2026-07-21 → **D20**, the two-door model.)
+- **UNBLOCKED 2026-07-22:** the M0 acceptance run passed, discharging the 2026-07-18 condition
+  (validate the shared capture path live before building on it). The dictate key is already
+  registered (`ctrl+alt+2`) and logs on press; only its pipeline is missing.
+  (The D17 review gate cleared 2026-07-21 → **D20**, the two-door model.)
 - **In flight:** —
 - **Next (when unblocked):** ① draft
   `spec/60_dictation.md` + add `transform` to spec/20 (Contract B), encoding D20's

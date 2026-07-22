@@ -41,10 +41,16 @@ from bridge.log import setup_logging
 log = logging.getLogger("gemma.orchestrator")
 
 # --- interaction timings (spec/40) ---
-ANSWER_DWELL_S = 8.0   # how long the answer stays on the island after a turn ends. The mic
-                       # is CLOSED throughout — this replaced the old 8 s follow-up window,
-                       # which held the mic open and so had to publish `listening`, wiping
-                       # the very answer it existed to let you respond to.
+ANSWER_DWELL_S = 8.0   # FLOOR for how long the answer stays on the island after a turn ends.
+                       # The mic is CLOSED throughout — this replaced the old 8 s follow-up
+                       # window, which held the mic open and so had to publish `listening`,
+                       # wiping the very answer it existed to let you respond to.
+ANSWER_DWELL_PER_WORD_S = 0.45  # ...and the per-word scaling on top of that floor. 8 s was
+                       # inherited from a SPEECH window and blanked long answers mid-reveal:
+                       # the island types at 90 ms/word, so a 200-word answer needs ~20 s
+                       # before it has even finished appearing. 0.45 = that reveal cost plus
+                       # room to actually read it. Deliberately generous — this is only the
+                       # walked-away backstop; a keypress dismisses (STATE, Track P).
 WORKING_AFTER_S = 1.4  # 'working' earcon if nothing audible yet — just inside D11's 1.5 s
 BARGE_CHUNKS = 4       # sustained speech chunks (~128 ms) to call it a barge-in; with the
                        # low-latency pump the cut lands ≤ 250 ms (spec/40 binding).
@@ -53,6 +59,13 @@ BARGE_CHUNKS = 4       # sustained speech chunks (~128 ms) to call it a barge-in
 MIC_LEVEL_REF = 6000.0  # int16 RMS mapped to a full overlay bar (Contract P 'mic' level).
                         # ponytail: calibration knob — mic-dependent; raise if the bars peg,
                         # lower if they barely move (the physical world needs tuning).
+
+
+def answer_dwell(reply: str) -> float:
+    """How long an answer stays on the island once the turn ends. Scales with length
+    because the island *reveals* at a fixed rate — a flat timer blanks a long answer
+    while it is still typing itself out (STATE, Track P)."""
+    return max(ANSWER_DWELL_S, len(reply.split()) * ANSWER_DWELL_PER_WORD_S)
 
 
 def capture_over(fired: bool, eos: EndOfSpeech, keyed: bool, auto_end: bool) -> bool:
@@ -91,6 +104,13 @@ def spoken_error(kind: str) -> str:
     return SPOKEN_ERRORS.get(kind, "Something went wrong on my end.")
 
 
+class Dismissed(Exception):
+    """The dismiss key was pressed — unwind the turn from wherever we are. Raised by any
+    state that waits (capture, speaking) and by a brain call the abort seam cut short; the
+    single handler in serve() does the tidying, so no state has to know how to clean up
+    after the others."""
+
+
 class BargeIn:
     """Sustained-speech detector for interrupting TTS: N consecutive speech chunks mean
     the user is talking over us — one cough or echo blip must not cut the reply."""
@@ -102,6 +122,32 @@ class BargeIn:
     def update(self, is_speech: bool) -> bool:
         self.run = self.run + 1 if is_speech else 0
         return self.run >= self.chunks
+
+
+async def _wait_flag(flag) -> None:
+    """Bridge a threading.Event into asyncio. ponytail: a 50 ms poll, not a proper
+    loop-aware primitive — the flag is set from the hotkey pump thread, and 50 ms is far
+    inside human reaction time for a dismiss."""
+    while not flag.is_set():
+        await asyncio.sleep(0.05)
+
+
+async def _drive(brain, session: Session, utterance: str, on_delta=None,
+                 abort=None) -> tuple[str, str | None]:
+    """Run one brain turn, racing it against the dismiss signal. This is THE abort seam:
+    without it a dismiss could not interrupt THINKING, which is exactly when you most want
+    to bail (a misheard prompt, a question you have thought better of). Cancelling the task
+    closes the stream, so the HTTP request is dropped rather than drained."""
+    turn = asyncio.create_task(_collect(brain, session, utterance, on_delta))
+    if abort is None:
+        return await turn
+    watch = asyncio.create_task(_wait_flag(abort))
+    done, pending = await asyncio.wait({turn, watch}, return_when=asyncio.FIRST_COMPLETED)
+    for p in pending:
+        p.cancel()
+    if turn in done:
+        return turn.result()
+    return "", "aborted"
 
 
 async def _collect(brain, session: Session, utterance: str,
@@ -169,6 +215,7 @@ class Orchestrator:
         self.bc = broadcaster or Broadcaster()           # Contract P feed; unstarted in replay
         self.trace: list[tuple[float, str, str]] = []    # (t, event, detail) — latency_table
         self.session = Session(id="boot")
+        self.shown = ""                         # last thing left on the island -> its dwell
         self.audible = True                     # has this turn produced sound yet?
         self.working = threading.Timer(0, lambda: None)
         self.t_eos = time.perf_counter()        # spec/40 clock: VAD declared the turn over
@@ -180,7 +227,9 @@ class Orchestrator:
     # 'listening' is emitted by _capture (mic open); 'speaking'/'error' by _speak (its `state`
     # arg — so an error apology dwells in fault mode, not a bare reply view). 'speak' is
     # trace-only here.
-    _EVENT_STATE = {"thinking": "thinking", "idle": "idle"}
+    # 'dismissed' maps to idle: it blanks the island and, through _publish_state, hands the
+    # bare Esc binding back to the rest of the system.
+    _EVENT_STATE = {"thinking": "thinking", "idle": "idle", "dismissed": "idle"}
 
     def _ev(self, event: str, detail: str = "", show: str | None = None) -> None:
         """Trace an event (the harness asserts on these), mirror it to the overlay feed
@@ -194,9 +243,35 @@ class Orchestrator:
         """Best-effort overlay mirror of a traced event. publish() never blocks/raises."""
         state = self._EVENT_STATE.get(event)
         if state:
-            self.bc.publish(m_state(state))
+            self._publish_state(state)
         elif event == "transcript":
             self.bc.publish(m_transcript(detail))
+
+    def _publish_state(self, name: str) -> None:
+        """Publish a Contract P state — and keep the dismiss key armed in step with it.
+
+        Esc is a BARE binding, so it is taken from the rest of the system only while the
+        island is on screen and handed straight back at `idle`. Routing every state change
+        through here is what makes that automatic: there is no state that can show the
+        island without arming Esc, or hide it while still holding the key hostage."""
+        self.bc.publish(m_state(name))
+        if self.hk is not None:
+            self.hk.arm("dismiss", name != "idle")
+
+    def _dismissed(self) -> bool:
+        """Has dismiss been pressed since we last looked? Consumes the signal."""
+        flag = self._abort_flag()
+        if flag is not None and flag.is_set():
+            flag.clear()
+            return True
+        return False
+
+    def _abort_flag(self):
+        """The dismiss door's Event, or None when there are no hotkeys (replay, tests)."""
+        if self.hk is None:
+            return None
+        door = self.hk.doors.get("dismiss")
+        return door.start if door is not None else None
 
     # --- feedback bookkeeping (D11: something audible < 1.5 s after end of speech) ---
 
@@ -258,13 +333,36 @@ class Orchestrator:
         for s in seed or []:
             captured.append(s)
             eos.update(True)
-        self.bc.publish(m_state("listening"))       # island -> bars (mic open)
+        # BINDING INVARIANT: opening a capture window clears the previous turn first — the
+        # island must never show bars over a stale answer. This lives HERE, not in the
+        # callers, because capture windows open from two places: serve() (wake or ask key)
+        # and _speak() (barge-in, and a keypress mid-reply). The barge-in path used to skip
+        # it, which is exactly how bars ended up drawn over the last reply.
+        # Redundant when already idle — the reducer treats idle->idle as a no-op.
+        self._ev("idle")                            # CLEARS_TURN (teleprompter/decode.py)
+        self._dismissed()                           # drop a stale press from a past turn
+        self._publish_state("listening")            # island -> bars (mic open)
+        try:
+            return self._capture_loop(eos, captured, door)
+        finally:
+            # However this capture ended, the door that opened it is no longer open — the
+            # orchestrator is the authority on that, not the press counter (Door.close()).
+            if door is not None:
+                door.close()
+
+    def _capture_loop(self, eos, captured: list, door):
+        """The mic loop itself. Split out only so _capture() can guarantee door.close()
+        on every exit — including the Dismissed unwind."""
+        import numpy as np
+
         while True:
             chunk, _ = self.mic.read(VAD_CHUNK)
             samples = chunk[:, 0]
             captured.append(samples)
             if self.bc.started:                     # skip the RMS work when the feed is disabled
                 self.bc.publish(m_mic(self._mic_level(samples)))
+            if self._dismissed():
+                raise Dismissed
             fired = eos.update(self.vad.prob(samples) >= VAD_THRESHOLD)
             if door is not None and door.end.is_set():
                 break                               # the key is the endpoint (D20)
@@ -296,19 +394,26 @@ class Orchestrator:
             self.bc.publish(m_error("I didn't catch that.", "no_transcript"))
             self._ping("error")                 # narration rules: the pipeline broke
             self._ev("no-transcript", show="(no transcript)")
+            self.shown = ""                     # nothing to read: the dwell floor is enough
             return None                         # ends the chain; the wake watch resumes
         self._ev("transcript", text, show=f"> {text}")
 
-        reply, err = asyncio.run(_collect(
+        reply, err = asyncio.run(_drive(
             self.brain, self.session, text,
             on_delta=lambda d: self.bc.publish(m_response(delta=d)),
+            abort=self._abort_flag(),
         ))
+        if err == "aborted":
+            self._dismissed()                   # consume the signal the race saw
+            raise Dismissed
         if err or not reply:
             kind = err or "unknown"
             self.bc.publish(m_error(spoken_error(kind), kind))
             self._ping("error")
+            self.shown = spoken_error(kind)     # the apology is what dwells
             return self._speak(self.synth(spoken_error(kind), self.voice), state="error")
         self.bc.publish(m_response(done=True))  # reply text complete on the overlay
+        self.shown = reply                      # what the island is displaying -> its dwell
 
         self.session.history += [{"role": "user", "content": text},
                                  {"role": "assistant", "content": reply}]
@@ -329,7 +434,7 @@ class Orchestrator:
         the island dwells in fault mode instead of a bare reply view."""
         self._flush_mic()
         self.vad.reset()
-        self.bc.publish(m_state(state))
+        self._publish_state(state)
         self.pump.play(samples)
         self._ev("speak")
         self._mark_audible("speech")
@@ -342,6 +447,20 @@ class Orchestrator:
             chunk, _ = self.mic.read(VAD_CHUNK)
             samples_in = chunk[:, 0]
             recent.append(samples_in)
+            # The ask key is the deliberate version of a barge-in: it cuts the reply and
+            # takes the floor immediately. Without this the press only landed once the turn
+            # had finished playing, so pressing it to dismiss an answer appeared to do
+            # nothing. ponytail: covers SPEAKING only — a press while the brain is still
+            # streaming still waits, because _collect() owns that window inside asyncio.
+            # Add cancellation there if the wait is felt.
+            if self._dismissed():
+                raise Dismissed                 # stop talking; serve() cuts the pump
+            keyed = self._pressed()
+            if keyed is not None:
+                t0 = time.perf_counter()
+                self.pump.cut()
+                self._enter(keyed, t0)          # same entrance as serve(): traced + earcon
+                return self._capture(door=keyed)
             if barge.update(self.vad.prob(samples_in) >= VAD_THRESHOLD):
                 self.pump.cut()
                 self._ev("barge-in", show="[barge-in]")
@@ -361,6 +480,21 @@ class Orchestrator:
         for _ in range(BUFFER_BLOCKS):          # ~3 s of silence: full window turnover
             wake_model.predict(zero)
         wake_model.reset()
+
+    def _enter(self, door, t0: float) -> None:
+        """The entrance ritual, wherever a turn is opened from: trace the entrance so the
+        latency table can measure press/wake -> indication (spec/40), and sound the `awake`
+        earcon so the press is audibly acknowledged.
+
+        Every path that opens a turn goes through here. The two that did NOT are how the
+        barge-in path came to draw bars over a stale answer, and how key-interrupt turns
+        came to have no press-latency reading at all — 60% of the first acceptance run."""
+        self._ev("wake", "key" if door else "phrase",
+                 show=f"[{'ask key' if door else 'wake'}] listening...")
+        self.pump.play(tone_samples("awake"))    # < 300 ms: enqueued immediately
+        self._ev("earcon", "awake")
+        log.info("awake earcon %.0f ms after %s", (time.perf_counter() - t0) * 1000,
+                 "keypress" if door else "wake detect")
 
     def _pressed(self):
         """The ask door if its hotkey just opened a capture, else None. Also drains the
@@ -403,29 +537,35 @@ class Orchestrator:
                                         for s in wake_model.predict(frame).values()):
                 continue
             t_wake = time.perf_counter()
-            if blank_at is not None:            # a new turn supersedes the dwell: clear the
-                blank_at = None                 # old answer BEFORE the mic opens, so the
-                self._ev("idle", show="[idle]")  # island never shows bars over stale text
-            # One trace event for both entrances: latency_table's wake->awake column is the
-            # press->indication measurement too (spec/40 has a row for each; same interval).
-            entry = "key" if door else "phrase"
-            self._ev("wake", entry, show=f"[{'ask key' if door else 'wake'}] listening...")
-            pump.play(tone_samples("awake"))    # < 300 ms: enqueued immediately
-            self._ev("earcon", "awake")
-            log.info("awake earcon %.0f ms after %s", (time.perf_counter() - t_wake) * 1000,
-                     "keypress" if door else "wake detect")
+            blank_at = None                     # a new turn supersedes the dwell; _capture()
+                                                # does the clearing, for every entrance alike
+            self._enter(door, t_wake)
             # ponytail: fresh history each wake-chain — whether it should persist
             # across wakes is an open question (parked; STATE), so it dies at IDLE.
             self.session = Session(id=time.strftime("%H%M%S"))
 
-            utt = self._capture(preroll=list(ring)[-PREROLL_BLOCKS:], door=door)
-            ring.clear()
-            if utt is None:
-                self._ev("nothing-heard", show="[nothing heard]")
-            while utt is not None:              # the turn chain: barge-ins
-                utt = self._turn(utt)
+            try:
+                utt = self._capture(preroll=list(ring)[-PREROLL_BLOCKS:], door=door)
+                ring.clear()
+                if utt is None:
+                    self._ev("nothing-heard", show="[nothing heard]")
+                while utt is not None:          # the turn chain: barge-ins
+                    utt = self._turn(utt)
+            except Dismissed:
+                # One handler for every state (spec/40): whatever was in flight — an open
+                # mic, a streaming brain call, TTS mid-sentence — stops here.
+                self.working.cancel()
+                pump.cut()
+                self.shown = ""
+                if self.hk is not None:
+                    self.hk.reset()             # no door left mid-toggle by the abandon
+                self._ev("dismissed", show="[dismissed]")
+                self._flush_wake(wake_model)
+                blank_at = None                 # nothing left on the island to dwell
+                continue
             self._flush_wake(wake_model)        # else the old phrase re-triggers
-            blank_at = time.perf_counter() + ANSWER_DWELL_S   # leave the answer up to be read
+            # Leave the answer up long enough to reveal AND read (a keypress cuts it short).
+            blank_at = time.perf_counter() + answer_dwell(self.shown)
 
     def run(self) -> None:
         import numpy as np
@@ -454,6 +594,17 @@ class Orchestrator:
             log.info("ready — press %s or say '%s' (Ctrl-C to stop)",
                      self.hk.doors["ask"].combo, WAKE_MODEL.replace("_", " "))
             self.serve(mic, pump, wake_model)
+
+
+class FakeReply:
+    """A Contract-B brain that answers instantly — selfcheck only."""
+
+    def __init__(self, text: str):
+        self.text = text
+
+    async def converse(self, session, utterance, tools):
+        yield TextDelta(self.text)
+        yield Done()
 
 
 def _selfcheck() -> None:
@@ -485,6 +636,55 @@ def _selfcheck() -> None:
     assert not any(capped.update(True) for _ in range(3))
     assert capped.update(True)                        # 30 s runaway cap survives a key
     assert capture_over(True, capped, keyed=True, auto_end=False)
+
+    # answer dwell scales with what is on screen, and never dips under the floor
+    assert answer_dwell("") == ANSWER_DWELL_S
+    assert answer_dwell("Yes.") == ANSWER_DWELL_S                  # short: floor wins
+    assert answer_dwell("word " * 200) > 20                        # must outlast the reveal
+    assert answer_dwell("word " * 200) > answer_dwell("word " * 50)
+
+    # BINDING INVARIANT: a capture window clears the previous turn BEFORE the mic opens,
+    # whichever entrance opened it. Regressing this draws the mic bars over the last reply
+    # (it did: the barge-in path skipped the clear, which lived in serve()).
+    import numpy as np
+
+    class _Rec:                                       # stands in for the Contract P feed
+        started = False
+        def __init__(self): self.states = []
+        def publish(self, m):
+            if m.get("type") == "state":
+                self.states.append(m["state"])
+
+    class _SilentMic:
+        read_available = 0
+        def read(self, n): return np.zeros((n, 1), dtype=np.int16), False
+
+    class _QuietVad:
+        def reset(self): pass
+        def prob(self, s): return 0.0
+
+    probe = Orchestrator(brain=object(), broadcaster=_Rec())
+    probe.mic, probe.vad = _SilentMic(), _QuietVad()
+    assert probe._capture(nospeech_ms=64) is None      # silence -> gives up, no transcript
+    assert probe.bc.states[:2] == ["idle", "listening"], probe.bc.states
+
+    # the abort seam: a dismiss must cut a brain call that is still streaming, not wait it
+    # out. A brain that never yields stands in for "slow first token" — the hardest case.
+    class _Hanging:
+        async def converse(self, session, utterance, tools):
+            await asyncio.sleep(30)
+            yield TextDelta("should never arrive")   # pragma: no cover
+
+    flag = threading.Event()
+    threading.Timer(0.15, flag.set).start()
+    t0 = time.perf_counter()
+    reply, err = asyncio.run(_drive(_Hanging(), Session(id="t"), "hi", abort=flag))
+    assert (reply, err) == ("", "aborted"), (reply, err)
+    assert time.perf_counter() - t0 < 5, "abort must not wait for the brain"
+
+    # with no abort flag the same call runs normally (replay/selfcheck path)
+    reply, err = asyncio.run(_drive(FakeReply("Fine."), Session(id="t"), "hi"))
+    assert (reply, err) == ("Fine.", None), (reply, err)
 
     # barge-in: only sustained speech triggers
     b = BargeIn(chunks=4)

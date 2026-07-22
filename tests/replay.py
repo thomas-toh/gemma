@@ -27,6 +27,7 @@ from pathlib import Path
 from bridge.audio.listen import SileroVAD, _silero_model_path
 from bridge.audio.wake import SAMPLE_RATE, WAKE_MODEL
 from bridge.brains.base import Done, TextDelta
+from bridge.hotkeys import Hotkeys
 from bridge.orchestrator import Orchestrator, latency_table
 
 HERE = Path(__file__).resolve().parent / "replay"
@@ -44,13 +45,18 @@ class ReplayExhausted(Exception):
 
 class FakeMic:
     """Serves a recorded clip through the mic interface, then silence — until an
-    audio-time budget runs out, which ends the scenario."""
+    audio-time budget runs out, which ends the scenario.
 
-    def __init__(self, clip16):
+    `on_exhausted` fires once when the clip runs dry. For a key case that is the second
+    keypress: the WAV was recorded between two real presses, so the clip ending IS the
+    endpoint — no invented per-case timestamp."""
+
+    def __init__(self, clip16, on_exhausted=None):
         import numpy as np
         self._clip = clip16.astype(np.int16)
         self._pos = 0
         self._budget = len(clip16) + IDLE_BUDGET_S * SAMPLE_RATE
+        self._on_exhausted = on_exhausted
 
     read_available = 0          # nothing ever buffers: reads are on-demand
 
@@ -61,6 +67,9 @@ class FakeMic:
         chunk = self._clip[self._pos:self._pos + n]
         if len(chunk) < n:
             chunk = np.concatenate([chunk, np.zeros(n - len(chunk), dtype=np.int16)])
+            if self._on_exhausted is not None:
+                self._on_exhausted()
+                self._on_exhausted = None       # once
         self._pos += n
         return chunk.reshape(-1, 1), False
 
@@ -132,20 +141,33 @@ def run_case(case: dict, wake_model) -> list[str]:
         return [f"{wav} missing — record it: python -m tests.replay --record {case['name']}"]
     clip = load_wav(wav)
 
+    trigger = case.get("trigger", "wake")
     Orchestrator._flush_wake(wake_model)        # a prior case's phrase must not leak in
     orch = Orchestrator(brain=FakeBrain(case.get("brain_reply", "Acknowledged.")))
     orch.synth = fake_synth
     orch.vad = SileroVAD(_silero_model_path())
+
+    # A keyed case drives the REAL Door objects — never registering a combo, so no Win32
+    # and no keyboard here; a Door is two Events and that is the whole interface.
+    on_exhausted = None
+    if trigger == "key":
+        orch.hk = Hotkeys({"ask": "ctrl+alt+1"})
+        ask = orch.hk.doors["ask"]
+        ask.start.set()                         # the press that opened the recording
+        on_exhausted = ask.end.set              # ...and the one that closed it
     try:
-        orch.serve(FakeMic(clip), FakePump(), wake_model)
+        orch.serve(FakeMic(clip, on_exhausted), FakePump(), wake_model)
     except ReplayExhausted:
         pass
 
     events = [e for _, e, _ in orch.trace]
     transcripts = [d for _, e, d in orch.trace if e == "transcript"]
     fails = []
-    if case["wake"] != ("wake" in events):
-        fails.append(f"wake: expected {case['wake']}, events={events}")
+    # Both doors trace a "wake" event; the detail says which entrance opened it.
+    entrances = [d for _, e, d in orch.trace if e == "wake"]
+    want = {"key": ["key"], "wake": ["phrase"], "none": []}[trigger]
+    if entrances[:1] != want:
+        fails.append(f"trigger: expected {trigger} {want}, got {entrances}")
     expected = case.get("transcripts", [])
     if len(transcripts) != len(expected):
         fails.append(f"transcripts: expected {len(expected)}, got {transcripts}")
@@ -185,6 +207,35 @@ def run_all(only: str | None) -> int:
     return 1 if failed else 0
 
 
+def _record_keyed(max_seconds: int):
+    """Record between two real presses of the ask hotkey. The clip is then exactly the
+    capture window, so replay needs no invented endpoint timestamp — the WAV running out
+    IS the second tap. Uses the real hotkey module, which is also a live test of it."""
+    import time
+
+    import numpy as np
+    import sounddevice as sd
+
+    hk = Hotkeys()
+    hk.start()
+    ask = hk.doors["ask"]
+    print(f"{ask.combo}: tap to start / tap to stop, OR hold down and release "
+          f"— whichever the case's script says ({max_seconds} s cap)")
+    while not ask.start.is_set():               # set on PRESS, so a hold records too
+        time.sleep(0.03)
+    print("recording...")
+    frames = []
+    with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="int16") as mic:
+        while not ask.end.is_set() and len(frames) * 1024 < max_seconds * SAMPLE_RATE:
+            chunk, _ = mic.read(1024)
+            frames.append(chunk[:, 0].copy())
+    data = np.concatenate(frames) if frames else np.zeros(1, dtype=np.int16)
+    if len(data) < SAMPLE_RATE // 2:
+        print("WARNING: under 0.5 s captured — the window shut almost immediately. "
+              "Re-record; start speaking after the 'recording...' line, not before.")
+    return data
+
+
 def record(name: str, seconds: int) -> None:
     """Record one case's WAV from the default mic (16 kHz mono 16-bit)."""
     import sounddevice as sd
@@ -196,17 +247,21 @@ def record(name: str, seconds: int) -> None:
     seconds = seconds or case.get("seconds", 12)
     WAV_DIR.mkdir(parents=True, exist_ok=True)
     print(f"script: {case['script']}")
-    input(f"recording {seconds} s after you press Enter...")
-    data = sd.rec(int(seconds * SAMPLE_RATE), samplerate=SAMPLE_RATE,
-                  channels=1, dtype="int16")
-    sd.wait()
+    if case.get("trigger") == "key":
+        data = _record_keyed(seconds)
+    else:
+        input(f"recording {seconds} s after you press Enter...")
+        data = sd.rec(int(seconds * SAMPLE_RATE), samplerate=SAMPLE_RATE,
+                      channels=1, dtype="int16")
+        sd.wait()
     path = WAV_DIR / case["file"]
     with wave.open(str(path), "wb") as w:
         w.setnchannels(1)
         w.setsampwidth(2)
         w.setframerate(SAMPLE_RATE)
         w.writeframes(data.tobytes())
-    print(f"wrote {path} ({seconds} s) — replay it: python -m tests.replay --case {name}")
+    print(f"wrote {path} ({len(data) / SAMPLE_RATE:.1f} s) — "
+          f"replay it: python -m tests.replay --case {name}")
 
 
 def main() -> None:
