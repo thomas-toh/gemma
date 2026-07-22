@@ -15,11 +15,22 @@ class OverlayModel(QObject):
     every binding per message is far cheaper than per-field plumbing."""
 
     changed = Signal()
+    # D24: the user dismissed the island (Esc). A one-shot signal rather than a property,
+    # because it is an EVENT — the island hides itself on it and the daemon is told separately.
+    dismissed = Signal()
 
     def __init__(self, show_latency: bool = False) -> None:
         super().__init__()
         self._s = OverlayState()
         self._show_latency = show_latency
+
+    def feed_lost(self) -> None:
+        """The daemon went away. Show nothing rather than a frozen last frame — `idle` alone
+        cannot say this any more, since an answer now deliberately outlives it (D24)."""
+        self._s.clear_turn()
+        self._s.state = "idle"
+        self._s.mic = 0.0
+        self.changed.emit()
 
     # --- a UI preference, not feed state, so it lives here rather than in OverlayState ---
 

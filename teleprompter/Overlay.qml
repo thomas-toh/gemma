@@ -62,8 +62,60 @@ Window {
     readonly property string st: overlay.state
     // The reply replaces the prompt — never stacked (locked design). A fault outranks both.
     readonly property bool isError: overlay.error !== ""
+    // ...but NOT until the prompt has finished revealing. `bodyText` used to flip the instant
+    // the first brain delta arrived, and the prefix test further down then read the new string
+    // as "not a continuation" and reset the typewriter to zero — so any prompt longer than
+    // about eleven words lost its tail, every warm turn. A *time* dwell cannot fix that: any
+    // dwell shorter than the reveal truncates it exactly the same way. The invariant is
+    // finish revealing → hold → swap, and only this side knows when the first part is done.
+    // A fault swaps immediately: it outranks the prompt and is the more urgent thing to read.
+    readonly property string prompt: overlay.transcript
+    property bool promptShown: false
+    onPromptChanged: promptShown = false            // a new turn earns a fresh hold
+    readonly property bool replyReady: overlay.reply !== "" && (promptShown || prompt === "")
     readonly property string bodyText: isError ? overlay.error
-                                     : (overlay.reply !== "" ? overlay.reply : overlay.transcript)
+                                     : (replyReady ? overlay.reply : prompt)
+    // Has the typewriter caught up with everything it has been given?
+    readonly property bool revealDone: reveal.shown >= bodyText.length
+
+    Timer {                                   // the prompt's hold, before the reply takes over
+        id: promptHold
+        interval: Theme.durationPromptHold
+        running: !root.promptShown && !root.isError && root.prompt !== ""
+                 && root.bodyText === root.prompt && root.revealDone
+        onTriggered: root.promptShown = true
+    }
+
+    // --- when the island stops showing (D24) ---
+    // `idle` from the daemon means the DAEMON is finished — not "blank". How long an answer
+    // stays up is a fact about the reveal, and this is the only process that can see it. The
+    // daemon owned this decision for two revisions and blanked answers mid-sentence both times.
+    readonly property bool busy: st === "listening" || st === "thinking"
+                                 || st === "speaking" || st === "error"
+    property bool hidden: false                     // dwell expired, or the user dismissed
+    onBusyChanged: if (busy) hidden = false         // a new turn always brings the island back
+    // `hidden` outranks `busy` deliberately: pressing Esc while Gemma is still thinking must
+    // take the island away THAT INSTANT. If this read `busy || …` the island would linger
+    // until the daemon got round to publishing its abort — which is the round trip D24 exists
+    // to remove, and it would be longest exactly when the daemon is wedged.
+    readonly property bool showing: !hidden && (busy || bodyText !== "")
+
+    Timer {                                   // the answer's dwell — the walked-away backstop
+        id: answerDwell
+        objectName: "answerDwell"             // reached by name from the self-check
+        interval: Theme.durationAnswerDwell
+        // Restarts on every newly revealed word, so the count only ever runs from the moment
+        // the last of the text actually appeared.
+        running: !root.busy && !root.hidden && root.bodyText !== "" && root.revealDone
+        onTriggered: root.hidden = true
+    }
+
+    // Esc, handled in __main__.py, which owns the key because it owns the window. Hiding is
+    // local and immediate — the daemon is told separately and never waited on.
+    Connections {
+        target: overlay
+        function onDismissed() { root.hidden = true }
+    }
     // Two sizes, nothing else: LISTENING is the minimised pill with the wave; every other
     // visible state — thinking, prompt, reply, fault — is the standard width, with the status
     // word or the text sitting in the SAME left-aligned slot, so the handoff from
@@ -138,8 +190,9 @@ Window {
     readonly property real inkTop: padTop + (lineBox - fm.height) / 2 + (fm.ascent - fm.capitalHeight)
     readonly property real fadeH: Math.max(4, inkTop - 0.5)   // ~16px at 18/1.3
 
-    // idle = asleep = gone (spec/40, status.json). The tray, not the island, says "alive".
-    visible: st !== "idle" || entrance > 0.01
+    // Gone = nothing to say and nothing left to read (D24 — no longer simply `st === "idle"`).
+    // The tray, not the island, says "alive".
+    visible: showing || entrance > 0.01
     opacity: entrance
     color: "transparent"
     flags: Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
@@ -153,7 +206,7 @@ Window {
     // Fades the whole window rather than wrapping the contents in a transformed Item: the
     // visuals are interleaved with the declarations they depend on, so wrapping reparents those
     // too and every `root.<prop>` breaks. `visible` lingers so the fade-out can finish.
-    property real entrance: st === "idle" ? 0 : 1
+    property real entrance: showing ? 1 : 0
     Behavior on entrance {
         NumberAnimation { duration: root.fadeMs; easing.type: Easing.OutCubic }
     }

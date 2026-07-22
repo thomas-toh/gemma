@@ -27,11 +27,11 @@ try:
 except (AttributeError, OSError):
     pass
 
-from PySide6.QtCore import QUrl                                          # noqa: E402
+from PySide6.QtCore import QAbstractNativeEventFilter, QUrl              # noqa: E402
 from PySide6.QtQml import QQmlApplicationEngine                          # noqa: E402
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon              # noqa: E402
 
-from teleprompter.decode import HOST, PORT                               # noqa: E402
+from teleprompter.decode import HOST, PORT, m_dismiss                    # noqa: E402
 from teleprompter.feed import Feed                                       # noqa: E402
 from teleprompter.model import OverlayModel                              # noqa: E402
 from teleprompter.tray import Tray                                       # noqa: E402
@@ -102,6 +102,72 @@ def reduced_motion() -> bool:
     return bool(ok) and not enabled.value
 
 
+# Win32 (winuser.h). The id is this process's own — the daemon's doors live in a different
+# process and cannot collide. RegisterHotKey with a NULL window requires id < 0xC000.
+_VK_ESCAPE, _MOD_NOREPEAT, _WM_HOTKEY, _ESC_ID = 0x1B, 0x4000, 0x0312, 0x0E5C
+
+
+class DismissKey(QAbstractNativeEventFilter):
+    """Bare Esc — owned by the surface it dismisses (spec/00 D24).
+
+    Esc is registered ONLY while the island is on screen and released the instant it hides.
+    The daemon used to attempt exactly this discipline and could not keep it: it armed the key
+    off its own idea of session state, which stayed non-idle for the whole answer dwell, so Esc
+    was taken from every other app on the machine for up to a minute and a half at a stretch —
+    while the loop that was actually running never looked at it. Here the question "is the
+    island showing?" is not an inference: this process IS the window.
+
+    A press hides the island immediately (locally, no round trip) and tells the daemon
+    afterwards, so dismissal feels instant even if the daemon is busy or gone.
+
+    Narrow registration, no keyboard hook: spec/50 rule 11 governs this exactly as it governs
+    the daemon's doors — RegisterHotKey delivers only this combo and nothing else is observed.
+    """
+
+    def __init__(self, on_press) -> None:
+        super().__init__()
+        self._on_press = on_press
+        self._armed = False
+
+    def arm(self, on: bool) -> None:
+        if sys.platform != "win32" or on == self._armed:
+            return
+        import ctypes
+        user32 = ctypes.windll.user32
+        if on:
+            if not user32.RegisterHotKey(None, _ESC_ID, _MOD_NOREPEAT, _VK_ESCAPE):
+                log.warning("could not register Esc — another app owns it; no dismiss key")
+                return
+        else:
+            user32.UnregisterHotKey(None, _ESC_ID)
+        self._armed = on
+
+    def nativeEventFilter(self, event_type, message):
+        # Qt hands us every message it pumps, including thread messages like WM_HOTKEY (which
+        # has no window). Cheapest possible guard first: while disarmed this costs one bool.
+        if not self._armed:
+            return False, 0
+        # `event_type` is bytes or a QByteArray depending on the binding's mood; both convert,
+        # and matching on a substring rather than the exact tag covers Qt's two Windows
+        # dispatchers ("windows_generic_MSG" and "windows_dispatcher_MSG") without listing them.
+        try:
+            kind = bytes(event_type)
+        except (TypeError, ValueError):           # pragma: no cover
+            kind = str(event_type).encode("utf-8", "replace")
+        if b"windows" not in kind:
+            return False, 0
+        import ctypes
+        from ctypes import wintypes
+        try:
+            msg = wintypes.MSG.from_address(int(message))
+        except (TypeError, ValueError):      # pragma: no cover — Qt changed the payload shape
+            return False, 0
+        if msg.message == _WM_HOTKEY and msg.wParam == _ESC_ID:
+            self._on_press()
+            return True, 0                   # consumed: nobody else should see this Esc
+        return False, 0
+
+
 def stamp_overlay_styles(win) -> None:
     """Two native guarantees the Qt flags alone don't reliably give on Windows:
 
@@ -162,11 +228,27 @@ def main() -> int:
         return 1
     win = roots[0]
 
+    # Kept in locals for the app's lifetime — both are garbage collected otherwise.
+    feed = Feed(model, args.host, args.port)                             # noqa: F841
+
+    def on_dismiss() -> None:
+        """Esc. Hide first, tell the daemon second — the island must never look like it is
+        waiting for permission to go away (D24)."""
+        model.dismissed.emit()
+        feed.send(m_dismiss())
+
+    dismiss_key = DismissKey(on_dismiss)
+    app.installNativeEventFilter(dismiss_key)
+
     def restamp() -> None:
         # The island hides at idle; a re-shown window can come back with a fresh HWND, so
-        # re-apply the non-activating style every time it appears.
-        if win.isVisible():
+        # re-apply the non-activating style every time it appears. The dismiss key follows the
+        # same signal: Esc is borrowed from the rest of the system for exactly as long as
+        # there is something on screen to dismiss, and not one frame longer.
+        showing = win.isVisible()
+        if showing:
             stamp_overlay_styles(win)
+        dismiss_key.arm(showing)
 
     win.visibleChanged.connect(restamp)
     restamp()
@@ -178,8 +260,6 @@ def main() -> int:
     # without clipping needs WM_NCHITTEST -> HTTRANSPARENT via a native event filter, or a
     # separate tiny window for the tab. Recorded in STATE, Track P.
 
-    # Kept in locals for the app's lifetime — both are garbage collected otherwise.
-    feed = Feed(model, args.host, args.port)                             # noqa: F841
     tray = None
     if QSystemTrayIcon.isSystemTrayAvailable():
         tray = Tray(app, model)                                          # noqa: F841

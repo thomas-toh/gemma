@@ -49,4 +49,13 @@ QtObject {
     // One WORD per tick, not one character: this is a teleprompter to be read, not a chat
     // stream to be skimmed. Matched to the scripted feed's cadence, which read well.
     readonly property int durationWord: 90
+
+    // ── dwells: how long finished content stays put (D24) ───────────────────
+    // Both start from the moment the text has FINISHED revealing, which is why they can be
+    // flat numbers. Their predecessors lived in the daemon and had to scale with word count,
+    // because the daemon was estimating this side's typing speed — it guessed 0.45 s a word
+    // and still blanked long answers mid-sentence. Measured from the right clock, a constant
+    // is enough, and "N seconds after it finishes appearing" is a knob you can reason about.
+    readonly property int durationPromptHold: 700     // prompt sits before the reply takes over
+    readonly property int durationAnswerDwell: 20000  // answer sits before the island hides
 }

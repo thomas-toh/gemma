@@ -1,6 +1,6 @@
 # Spec 00 — System overview & status
 
-**Last reconciled: 2026-07-21** · Build progress: [STATE.md](../STATE.md) · Decisions record: [docs/02](../docs/02_architecture/02_system_architecture.md)
+**Last reconciled: 2026-07-22** · Build progress: [STATE.md](../STATE.md) · Decisions record: [docs/02](../docs/02_architecture/02_system_architecture.md)
 
 ## The system in one paragraph
 
@@ -239,6 +239,9 @@ owns a **crash-isolated broadcaster** (`bridge/broadcaster.py`) publishing Contr
 messages as NDJSON over a localhost-only TCP socket (127.0.0.1, the docs/04 §5 reserved
 port 8990). The **front-end** is a new top-level **`teleprompter/`** package (PySide6 +
 QML) — a dumb subscriber that renders whatever arrives and never drives the voice loop.
+*(Amended by D24, 2026-07-22: still a subscriber, and it still cannot drive the loop — but it
+owns the display decisions the daemon could only guess at, and may send one upstream verb,
+`dismiss`, which cancels and never commands. spec/50 rule 12.)*
 **Crash-isolation is by construction:** the broadcaster's `publish()` never blocks and
 never raises, and a busy port just disables the feed, so a slow, absent, or dead overlay
 (or the broadcaster itself) can neither stall nor crash the orchestrator. The always-up
@@ -351,4 +354,54 @@ speech enabled, and the ×3 "spoken path carrying alone" variant is no longer pa
 "listen for me" decision is **settled here** rather than left owed. (d) D11's feedback budget is
 unaffected — "perceptible feedback" already counts an overlay state change, so a screen-only
 Gemma still meets it.
+
+**D24 (2026-07-22): the Teleprompter owns what is on screen — Contract P gains one upstream
+verb.** Three display bugs in three days had one root: **the daemon was deciding things only
+the overlay could see.** It timed how long an answer stayed up (a guess at the island's own
+typing speed — first a flat 8 s, then 8 s + 0.45 s/word, and it blanked long answers mid-reveal
+both times); it decided when the prompt gave way to the reply (which truncated any prompt past
+~11 words, every warm turn); and it armed the bare Esc key against its own idea of what was
+displayed (holding Esc hostage from every other application for up to 90 s per turn, while the
+loop that was actually running never once looked at it). None of these are facts the daemon
+possesses. All three are facts about a reveal happening in another process.
+
+**Ruling.** The overlay owns the display: when the prompt hands over, when the island stops
+showing, and the Esc key that dismisses it. The daemon owns the voice loop and says only what
+it knows.
+
+- **`idle` is demoted to "the daemon is free".** It no longer blanks the island and no longer
+  clears the turn. The overlay hides itself a fixed interval after the text has **finished
+  revealing** — the clock finally starts from the right event, so the knob is a legible
+  "N seconds after it finishes appearing" instead of a per-word estimate of someone else's
+  animation.
+- **The turn-clear moves onto `listening`.** Opening a capture window *is* the clear, so the
+  binding "never draw the mic bars over a stale answer" stops depending on a caller remembering
+  to blank first — which is exactly how the barge-in entrance came to violate it. Sound only
+  because every capture window is now user-initiated (the follow-up window is gone); if a
+  non-turn capture ever returns, this must change back **before** it lands.
+- **Contract P stops being strictly one-way.** The overlay may send exactly one message,
+  `dismiss`, and the daemon accepts nothing else (allowlisted from `status.json`). This
+  **amends D19's "never drives the voice loop" and spec/70 §2's "no control channel back"** —
+  both written before dismissal existed as a gesture. The replacement guarantee is narrower and
+  stated as **spec/50 rule 12: the upstream channel can cancel, never command.** It can only
+  stop work already in flight; it can never start a turn, invoke a tool, or change a setting.
+  The exposure it adds is minor next to what the same socket already grants a local process —
+  which is to *read* every prompt and reply.
+- **Esc moves to the overlay**, which registers it only while the island is on screen. That is
+  exact rather than inferred: the overlay *is* the window. A press hides the island immediately
+  and tells the daemon afterwards, so dismissal never waits on a busy or dead daemon.
+  spec/50 rule 11 (narrow registration, no keyboard hook) governs it unchanged. Ask and dictate
+  keep their modifiers and stay with the daemon.
+- **Deletions this buys:** the daemon's dwell constants and `answer_dwell()`, its `self.shown`
+  guess at the island's contents, and the whole transient-door arming protocol in
+  `bridge/hotkeys.py` (with its cross-thread race on `_armed` and its duplicated hotkey-id
+  derivation). `parse_binding` loses its modifier-less exemption entirely.
+- **Cost, eyes open:** with the Teleprompter not running there is no dismiss gesture at all
+  (the ask key still interrupts) — coherent with D23's "the Teleprompter is the spine". The
+  overlay needs a Win32 native event filter; macOS is unbuilt there, the same seam
+  `bridge/hotkeys.py` already has. `status.json` → **v0.3.0** (`dismiss` message; the clearing
+  rule and the upstream allowlist promoted from prose to loaded data, hard rule 3).
+
+Source: the adversarial review of 2026-07-22 (G-01, G-02, P-01's class, and STATE's own
+refactor brief — *"a fact living on two sides of a seam, and one side not being told"*).
 

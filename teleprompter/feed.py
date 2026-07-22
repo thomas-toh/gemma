@@ -7,6 +7,7 @@ or restarting the daemon under it, both just work.
 """
 from __future__ import annotations
 
+import json
 import logging
 
 from PySide6.QtCore import QObject, QTimer
@@ -56,9 +57,20 @@ class Feed(QObject):
             if msg["type"] == "mic":
                 self._mic_idle.start()
 
+    def send(self, msg: dict) -> None:
+        """One upstream Contract P line (D24) — today only `dismiss`. Best-effort on purpose:
+        if the daemon is not there, there is no turn to cancel, and the island has already
+        hidden itself without waiting for anyone's permission."""
+        if self._sock.state() != QAbstractSocket.SocketState.ConnectedState:
+            log.info("not connected — nothing upstream to tell")
+            return
+        self._sock.write((json.dumps(msg, separators=(",", ":")) + "\n").encode("utf-8"))
+
     def _on_closed(self) -> None:
-        # Deaf -> the island goes away rather than freezing on a stale frame.
-        self._model.apply({"type": "state", "state": "idle"})
+        # Deaf -> the island goes away rather than freezing on a stale frame. Since D24 `idle`
+        # no longer clears anything (the answer must outlive it to be read), so losing the feed
+        # has to say so explicitly: we know nothing, show nothing.
+        self._model.feed_lost()
         self._sock.abort()
         if not self._retry.isActive():
             self._retry.start(RECONNECT_MS)

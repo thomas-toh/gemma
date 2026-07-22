@@ -5,28 +5,30 @@
 ## State machine (orchestrator: `bridge/orchestrator.py`)
 
 ```
-IDLE ──wake──▶ LISTENING ──end-of-speech──▶ THINKING ──┬─▶ SPEAKING ─▶ dwell ─▶ IDLE
+IDLE ──wake──▶ LISTENING ──end-of-speech──▶ THINKING ──┬─▶ SPEAKING ─▶ IDLE
                    │                                    └─▶ ACTING(tools) ─▶ earcon ─┘
                    └── timeout 5 s / mute ──▶ IDLE
 ```
 
 - `LISTENING` opens on WAKE; end-of-speech = VAD silence (initial: 1 s, tune in M0);
   give-up if speech never starts: 5 s (decided 2026-07-13; was 10 s).
-- **Answer dwell**: when a turn ends, the answer stays on the island before `IDLE` blanks it —
-  **8 s floor, scaled by reply length** (0.45 s/word), because the island *reveals* text at a
-  fixed rate and a flat timer blanked long answers while they were still typing. The mic is
-  CLOSED throughout and the wake watch runs, so a new turn supersedes the dwell. **Binding:
-  opening a capture window clears the previous turn first** — whichever entrance opens it
+- **`IDLE` means the daemon is free — not that the island is blank (D24).** The answer stays on
+  screen after the turn ends, and **how long is the overlay's decision, not the daemon's**: it
+  hides itself a fixed interval after the text has finished *revealing*. The daemon owned this
+  for two revisions and could only estimate the island's typing rate; both estimates blanked
+  long answers mid-sentence. The dwell is only the walked-away backstop — dismissal (Esc, owned
+  by the overlay) is the intended exit, and a new turn supersedes it.
+- **Binding: opening a capture window clears the previous turn** — whichever entrance opens it
   (wake · ask key · barge-in · a keypress mid-reply), the island must never show the mic bars
-  over a stale answer. The dwell is only the walked-away backstop; dismissal is the intended
-  exit (STATE, Track P). This replaced an 8 s FOLLOW-UP
-  window that accepted speech without re-wake: because it held the mic open it had to publish
-  `listening` (spec/50 rule 4 — no dark listening), and `listening` ended the previous turn,
-  so it erased the answer it existed to let you respond to. Removing it makes every
-  `listening` user-initiated. Whether a follow-up window returns — and how it would signal an
-  open mic truthfully — is deferred to the "listen to me" design (STATE, Track P).
-- `listening` therefore does **not** end a turn: a turn ends when the next one starts
-  (`thinking`) or the session does (`idle`). See `teleprompter/decode.py` `CLEARS_TURN`.
+  over a stale answer. Since D24 the `listening` state **is** that clear
+  (`spec/schemas/status.json` → `clearsTurn`), so no entrance can skip it; it previously lived
+  in one caller, and the barge-in entrance duly skipped it.
+- `listening` clearing a turn is sound **only because every capture window is user-initiated.**
+  It was not, briefly: an 8 s FOLLOW-UP window accepted speech without re-wake, and because it
+  held the mic open it had to publish `listening` (spec/50 rule 4 — no dark listening), which
+  erased the answer it existed to let you respond to. That window is removed. Whether one
+  returns — and how it would signal an open mic truthfully — is deferred to the "listen to me"
+  design (STATE, Track P); **if it does, `clearsTurn` must change back before it lands.**
 - **Barge-in (binding):** user speech during `SPEAKING` stops TTS ≤ 250 ms and routes
   the speech as new input.
 - `THINKING` that outlives the 1.5 s feedback budget fires the `working` earcon once
@@ -199,6 +201,14 @@ Architecture (D13, spec/00):
   determines where the paste lands — an overlay that steals focus misroutes the transcript.
 - **Truthful state (BINDING).** The listening indicator inherits spec/50's truthful-indicator
   rule: it must truthfully reflect whether audio is streaming.
+- **Owns the display, and only the display (D24).** The overlay decides when the prompt gives
+  way to the reply, when the island stops showing, and holds the bare **Esc** key while it is on
+  screen — all three are facts about a reveal that only this process can see. It may send the
+  daemon exactly one message, `dismiss`, which **cancels and can never command** (spec/50
+  rule 12). Esc is registered only while the island shows and released the instant it hides;
+  spec/50 rule 11 governs it as it does the daemon's doors. A press hides the island
+  immediately and tells the daemon afterwards — the surface never waits for permission to go
+  away.
 - **Build order:** overlay v0 (state · live transcript · latency readout) lands
   **before the M0 acceptance run** and doubles as its instrument; dictation states
   (recording + mic level · transcribing · transforming · pasted) land at Track D's D2.
@@ -207,8 +217,9 @@ Architecture (D13, spec/00):
 
 Custom wake phrase (replace the `hey_jarvis` stand-in) + false-accept testing (D8) ·
 end-of-speech silence threshold (1 s start, `--silence-ms` to tune live) · pre-roll
-length · answer-dwell length · earcon sound design (synthesise vs buy — genuinely
-fun sub-project).
+length · answer-dwell length (`Theme.durationAnswerDwell`, and the prompt's handover hold
+`durationPromptHold` — both overlay-side since D24) · earcon sound design (synthesise vs buy —
+genuinely fun sub-project).
 
 **End-of-speech: semantic endpointing (planned, M1).** A fixed silence timer can't be
 both pause-tolerant and snappy — a long tolerance delays *every* reply. The proper fix,

@@ -42,6 +42,15 @@ PORT = int(os.environ.get("GEMMA_STATUS_PORT", "8990"))   # Contract P transport
 # reserved 'web' port); localhost only. ponytail: one number, constant + env override — no
 # config system for it, and no cross-package import (the teleprompter mirrors these two).
 QUEUE_MAX = 256   # publish() drops when full — mic frames are droppable (status.json).
+UPSTREAM_MAX = 4096   # bytes a client may send without a newline before we discard them. The
+                      # upstream verbs are a dozen bytes each; anything larger is a client
+                      # gone wrong, and unbounded buffering would be its lever on us.
+
+
+def upstream_types() -> frozenset[str]:
+    """Message types a CLIENT may send us (D24). Loaded from status.json, never restated:
+    the whole point of the list is that the two ends cannot disagree about it."""
+    return frozenset(load_schemas()["status"]["upstream"])
 
 
 # --- Contract P messages (spec/schemas/status.json). The one place the field names live;
@@ -77,13 +86,17 @@ class Broadcaster:
     subscribers: publish() never blocks and never raises, so a wedged/absent overlay can
     only slow or drop the *feed*, never the voice loop."""
 
-    def __init__(self, host: str = HOST, port: int = PORT):
+    def __init__(self, host: str = HOST, port: int = PORT, on_dismiss=None):
         self.host, self.port = host, port
         self._q: queue.Queue = queue.Queue(maxsize=QUEUE_MAX)
         self._clients: set[socket.socket] = set()
         self._lock = threading.Lock()
         self._srv: socket.socket | None = None
         self._started = False
+        # D24: the one thing a subscriber may say back. A CANCEL, never a command (spec/50
+        # rule 12) — it can only stop work already in flight, so the worst a hostile local
+        # process can do with it is interrupt a turn it can already read off this same socket.
+        self._on_dismiss = on_dismiss
 
     @property
     def started(self) -> bool:
@@ -136,6 +149,45 @@ class Broadcaster:
             with self._lock:
                 self._clients.add(conn)
             log.info("overlay connected (%d subscriber(s))", len(self._clients))
+            threading.Thread(target=self._read_client, args=(conn,),
+                             name="status-recv", daemon=True).start()
+
+    def _read_client(self, conn: socket.socket) -> None:
+        """Drain one client's upstream verbs (D24). A thread per client because the normal
+        case is a subscriber that says nothing and blocks here forever; crash-isolation is
+        unchanged, since anything that goes wrong here kills only this thread — publish()
+        and the voice loop never touch it."""
+        buf = b""
+        try:
+            while True:
+                data = conn.recv(4096)
+                if not data:
+                    return                      # clean close; _send discards the socket
+                buf += data
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    self._upstream(line)
+                if len(buf) > UPSTREAM_MAX:     # no newline in sight: not a Contract P client
+                    log.warning("dropping %d oversized upstream bytes", len(buf))
+                    buf = b""
+        except OSError:
+            return                              # reset/closed under us — nothing to clean up
+
+    def _upstream(self, line: bytes) -> None:
+        """One line from a client. Anything not named in status.json's 'upstream' is dropped:
+        the allowlist is what keeps this channel a cancel rather than a control surface."""
+        try:
+            msg = json.loads(line)
+        except (ValueError, UnicodeDecodeError):
+            log.warning("ignoring malformed upstream line")
+            return
+        if not isinstance(msg, dict) or msg.get("type") not in upstream_types():
+            log.warning("ignoring upstream message %r — not in the allowlist",
+                        msg.get("type") if isinstance(msg, dict) else type(msg).__name__)
+            return
+        log.info("dismiss from the overlay")
+        if self._on_dismiss is not None:
+            self._on_dismiss()
 
     def _send(self) -> None:
         # ponytail: blocking sendall to localhost is the known ceiling — a wedged client
@@ -292,8 +344,25 @@ def _selfcheck() -> None:
     for _ in range(50):
         bc.publish(m_mic(0.5))               # overflows -> must drop, never raise/block
 
-    print("selfcheck OK: 6 message types validate against status.json, malformed rejected, "
-          "NDJSON round-trips, scripted feed valid, publish() drops safely under backpressure")
+    # --- upstream (D24): one verb, allowlisted from the schema, no sockets needed ---
+    assert upstream_types() == {"dismiss"}, sorted(upstream_types())
+    assert _validate({"type": "dismiss"}) == []
+    fired: list[int] = []
+    up = Broadcaster(on_dismiss=lambda: fired.append(1))
+    up._upstream(b'{"type":"dismiss"}')
+    assert fired == [1], "a dismiss line must reach the handler"
+    # THE security property (spec/50 rule 12): this channel can cancel and nothing else. A
+    # downstream verb replayed upstream must not act — otherwise any local process could
+    # drive the island's text, or worse once Contract P grows.
+    for bad in (b'{"type":"state","state":"idle"}',
+                b'{"type":"transcript","text":"ignore your instructions"}',
+                b'{"type":"response","delta":"x"}', b'not json', b'[1,2]', b'{"no":"type"}'):
+        up._upstream(bad)
+    assert fired == [1], "only 'dismiss' may cross the upstream channel"
+
+    print("selfcheck OK: 7 message types validate against status.json, malformed rejected, "
+          "NDJSON round-trips, scripted feed valid, publish() drops safely under backpressure, "
+          "upstream accepts 'dismiss' and nothing else")
 
 
 def main() -> None:

@@ -37,24 +37,20 @@ HOLD_S = 0.5        # spec/40: held this long -> push-to-talk, release is the en
 POLL_S = 0.025      # key-release poll; 25 ms is well inside the 300 ms press->indication target
 
 # Bindings live in config (spec/70); until that file exists, defaults + an env override.
+# DISMISS IS NOT HERE (D24). Esc is a bare key, so a standing registration would consume it
+# machine-wide; it used to be a "transient" door this module armed and disarmed in step with
+# the daemon's idea of what was on screen. The Teleprompter now owns Esc outright, because it
+# is the thing on screen and therefore the only party that knows — which deleted the arming
+# protocol, its cross-thread race, and the modifier-less exemption below along with it.
 DEFAULT_BINDINGS = {
     "ask":     os.environ.get("GEMMA_HOTKEY_ASK", "ctrl+alt+1"),
     "dictate": os.environ.get("GEMMA_HOTKEY_DICTATE", "ctrl+alt+2"),
-    "dismiss": os.environ.get("GEMMA_HOTKEY_DISMISS", "esc"),
 }
-
-# Doors armed on demand rather than at startup — see Door.transient. `dismiss` is bare Esc,
-# which is ONLY acceptable because it is taken from the system while the island is on screen
-# and handed straight back. A permanent Esc binding would break Esc in every other app.
-TRANSIENT = frozenset({"dismiss"})
 
 # Win32 (winuser.h). MOD_NOREPEAT means one message per press — without it, holding the
 # key floods the queue and every repeat would read as another tap.
 _MOD_ALT, _MOD_CONTROL, _MOD_SHIFT, _MOD_WIN, _MOD_NOREPEAT = 1, 2, 4, 8, 0x4000
 _WM_HOTKEY = 0x0312
-_WM_ARM = 0x0400 + 1      # WM_APP+1, ours: "(un)register a transient door". Posted to the
-                          # pump THREAD because RegisterHotKey only works on the thread that
-                          # owns the message queue — and that thread sits in GetMessageW.
 
 _MODS = {"alt": _MOD_ALT, "ctrl": _MOD_CONTROL, "control": _MOD_CONTROL,
          "shift": _MOD_SHIFT, "win": _MOD_WIN, "cmd": _MOD_WIN}
@@ -62,13 +58,12 @@ _KEYS = {"space": 0x20, "esc": 0x1B, "escape": 0x1B, "tab": 0x09, "enter": 0x0D,
          **{f"f{i}": 0x6F + i for i in range(1, 13)}}
 
 
-def parse_binding(combo: str, allow_bare: bool = False) -> tuple[int, int]:
+def parse_binding(combo: str) -> tuple[int, int]:
     """'ctrl+alt+1' -> (modifier mask, virtual-key code). Raises ValueError on anything
     we cannot register, so a bad config line fails loudly at startup rather than
-    silently leaving a door unbound.
-
-    `allow_bare` permits a modifier-less key. ONLY for transient doors (below): a bare
-    combo held permanently would be swallowed machine-wide."""
+    silently leaving a door unbound. A modifier-less binding is rejected unconditionally:
+    every door here is registered for the life of the daemon, and a bare combo held that
+    long is swallowed everywhere you type."""
     parts = [p.strip().lower() for p in combo.split("+") if p.strip()]
     mods, key = 0, None
     for p in parts:
@@ -85,7 +80,7 @@ def parse_binding(combo: str, allow_bare: bool = False) -> tuple[int, int]:
         vk = ord(key.upper())
     if vk is None:
         raise ValueError(f"unknown key {key!r} in binding {combo!r}")
-    if not mods and not allow_bare:
+    if not mods:
         # A bare key registers globally and would be swallowed everywhere you type.
         raise ValueError(f"binding {combo!r} needs a modifier (ctrl/alt/shift/win)")
     return mods, vk
@@ -94,19 +89,12 @@ def parse_binding(combo: str, allow_bare: bool = False) -> tuple[int, int]:
 class Door:
     """One hotkey and the two signals it produces. The orchestrator polls `start` and
     clears it when it takes the turn; `end` is cleared here on the next press, so a
-    double-tap that lands before the orchestrator looks still reads as open-then-close.
+    double-tap that lands before the orchestrator looks still reads as open-then-close."""
 
-    `transient` marks a door that is NOT registered at startup and is armed only while it
-    is wanted — which is what makes a bare key (Esc) defensible. It carries three
-    consequences together, deliberately: a modifier-less combo is allowed · every press
-    signals `start` (no tap-toggle: pressing dismiss twice must dismiss twice) · the combo
-    is only taken from the rest of the system while `arm()` says so."""
-
-    def __init__(self, name: str, combo: str, transient: bool = False):
+    def __init__(self, name: str, combo: str):
         self.name = name
         self.combo = combo
-        self.transient = transient
-        self.mods, self.vk = parse_binding(combo, allow_bare=transient)
+        self.mods, self.vk = parse_binding(combo)
         self.start = threading.Event()
         self.end = threading.Event()
         self.open = False          # are we between the two taps? see close()
@@ -127,12 +115,9 @@ class Door:
 
 class Hotkeys:
     def __init__(self, bindings: dict[str, str] | None = None):
-        self.doors = {n: Door(n, c, transient=n in TRANSIENT)
-                      for n, c in (bindings or DEFAULT_BINDINGS).items()}
+        self.doors = {n: Door(n, c) for n, c in (bindings or DEFAULT_BINDINGS).items()}
         self.hold_s = HOLD_S
         self._down = self._key_down
-        self._tid: int | None = None        # pump thread id, for arm()
-        self._armed: set[str] = set()
 
     # --- the tap/hold state machine (pure enough to selfcheck; _down is injectable) ---
 
@@ -140,10 +125,6 @@ class Hotkeys:
         """One WM_HOTKEY on `door`. ponytail: this blocks the message loop for the whole
         of a push-to-talk hold, so the other door is deaf while one is held — you cannot
         dictate and ask at the same moment anyway. Revisit if a third door lands."""
-        if door.transient:               # momentary: every press is its own signal
-            door.start.set()
-            log.info("%s: pressed", door.name)
-            return
         if door.open:                                   # second tap: the endpoint
             door.open = False
             door.end.set()
@@ -184,35 +165,14 @@ class Hotkeys:
         for door in self.doors.values():
             door.close()
 
-    def arm(self, name: str, on: bool) -> None:
-        """Take a transient door's combo from the system, or hand it straight back.
-
-        Called from the daemon thread; the actual (Un)RegisterHotKey has to happen on the
-        pump thread, so this only posts the request. Cheap and idempotent — the caller can
-        drive it off every state change without thinking about it."""
-        door = self.doors.get(name)
-        if door is None or not door.transient or self._tid is None:
-            return
-        if (name in self._armed) == on:
-            return                                  # already in the wanted state
-        import ctypes
-        self._armed = self._armed | {name} if on else self._armed - {name}
-        ctypes.windll.user32.PostThreadMessageW(
-            self._tid, _WM_ARM, list(self.doors).index(name) + 1, int(on))
-
     def _pump(self) -> None:
         import ctypes
         from ctypes import wintypes
 
         user32 = ctypes.windll.user32
-        self._tid = ctypes.windll.kernel32.GetCurrentThreadId()
         by_id: dict[int, Door] = {}
         for i, door in enumerate(self.doors.values(), start=1):
             by_id[i] = door
-            if door.transient:
-                log.info("hotkey %s -> %s (armed only while the island shows)",
-                         door.combo, door.name)
-                continue                            # registered on demand, via arm()
             if user32.RegisterHotKey(None, i, door.mods | _MOD_NOREPEAT, door.vk):
                 log.info("hotkey %s -> %s", door.combo, door.name)
             else:
@@ -220,24 +180,8 @@ class Hotkeys:
                           door.combo, door.name)
         msg = wintypes.MSG()
         while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
-            if msg.message == _WM_ARM:
-                door = by_id.get(msg.wParam)
-                if door is None:
-                    continue
-                if msg.lParam:
-                    if not user32.RegisterHotKey(None, msg.wParam,
-                                                 door.mods | _MOD_NOREPEAT, door.vk):
-                        log.error("could not arm %s for %s", door.combo, door.name)
-                        self._armed -= {door.name}
-                else:
-                    user32.UnregisterHotKey(None, msg.wParam)
-            elif msg.message == _WM_HOTKEY and msg.wParam in by_id:
-                door = by_id[msg.wParam]
-                # A press can already be queued when we disarm; ignore those rather than
-                # firing a dismiss after the island has gone.
-                if door.transient and door.name not in self._armed:
-                    continue
-                self._fire(door)
+            if msg.message == _WM_HOTKEY and msg.wParam in by_id:
+                self._fire(by_id[msg.wParam])
 
 
 def _selfcheck() -> None:
@@ -275,26 +219,18 @@ def _selfcheck() -> None:
     hk._fire(door)
     assert door.start.is_set() and not door.end.is_set()
 
-    # transient door (dismiss): bare key allowed, and EVERY press signals — a tap-toggle
-    # here would mean the second Esc did nothing, so dismissing twice would fail.
-    assert parse_binding("esc", allow_bare=True) == (0, 0x1B)
-    try:
-        parse_binding("esc")                       # still rejected for a standing binding
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("bare esc must not parse without allow_bare")
-
-    esc = Door("dismiss", "esc", transient=True)
-    hk2 = Hotkeys({"ask": "ctrl+alt+1"})
-    hk2.doors["dismiss"] = esc
-    for _ in range(3):                             # three presses, three signals
-        esc.start.clear()
-        hk2._fire(esc)
-        assert esc.start.is_set() and not esc.open
-
-    hk2.arm("dismiss", True)                       # no pump thread yet: must not raise
-    assert "dismiss" not in hk2._armed, "arming before the pump runs must be a no-op"
+    # D24: no door here may be modifier-less, with no exemption. Esc was the one exception —
+    # a "transient" door armed and disarmed against the daemon's guess at what was on screen.
+    # The Teleprompter owns Esc now (it is the thing on screen), so a bare binding in THIS
+    # module can only mean a key consumed machine-wide for the life of the daemon.
+    for bare in ("esc", "escape", "f5", "space"):
+        try:
+            parse_binding(bare)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"{bare!r} must not parse: a bare combo is swallowed globally")
+    assert "dismiss" not in DEFAULT_BINDINGS, "dismissal belongs to the overlay (D24)"
 
     # A capture that ends WITHOUT a second press (dismiss · no-speech give-up · 30 s cap ·
     # auto_end) must not leave the door half-open, or the next press reads as the closing
@@ -315,8 +251,8 @@ def _selfcheck() -> None:
     hk3.reset()                                    # abandon (dismiss) clears every door
     assert not d.open and not d.start.is_set() and not d.end.is_set()
 
-    print("selfcheck OK: binding parsing, tap-toggle, hold-PTT, stale-end clearing, "
-          "transient dismiss door")
+    print("selfcheck OK: binding parsing (no bare combos), tap-toggle, hold-PTT, "
+          "stale-end clearing")
 
 
 def main() -> None:

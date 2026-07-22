@@ -2,20 +2,24 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "gemma/overlay/status",
   "title": "Overlay status feed messages",
-  "version": "0.2.1",
-  "description": "JSON status events the orchestrator broadcasts over a localhost-only socket for the Teleprompter overlay to render (spec/00 D13/D19, Contract P). Transport is one JSON object per line (NDJSON) on 127.0.0.1. The overlay is a dumb subscriber: it renders whatever arrives and never drives the voice loop. Protocol: receivers ignore unknown message types (log once); every message carries 'type'. The 'state' values are the overlay's own; its listening indicator inherits spec/50's truthful-indicator rule (shows 'listening' only while audio is actually being captured).",
+  "version": "0.3.0",
+  "description": "JSON status events the orchestrator broadcasts over a localhost-only socket for the Teleprompter overlay to render (spec/00 D13/D19, Contract P). Transport is one JSON object per line (NDJSON) on 127.0.0.1. Protocol: receivers ignore unknown message types (log once); every message carries 'type'. The 'state' values are the overlay's own; its listening indicator inherits spec/50's truthful-indicator rule (shows 'listening' only while audio is actually being captured). Nearly all traffic is orchestrator->overlay; 'upstream' below lists the sole exception (D24).",
+  "$comment": "'clearsTurn' and 'upstream' are Contract P RULES that the code loads at run time (hard rule 3), not JSON Schema keywords — draft 2020-12 ignores unknown top-level keys, so they travel with the message shapes they govern instead of being restated as literals in teleprompter/decode.py and bridge/broadcaster.py. Both were prose before, and both drifted from the code that implements them.",
+  "clearsTurn": ["listening", "thinking"],
+  "upstream": ["dismiss"],
   "oneOf": [
     { "$ref": "#/$defs/state" },
     { "$ref": "#/$defs/transcript" },
     { "$ref": "#/$defs/response" },
     { "$ref": "#/$defs/mic" },
     { "$ref": "#/$defs/latency" },
-    { "$ref": "#/$defs/error" }
+    { "$ref": "#/$defs/error" },
+    { "$ref": "#/$defs/dismiss" }
   ],
   "$defs": {
     "state": {
       "type": "object",
-      "description": "orchestrator->overlay: coarse session state — drives the island's mode (idle = asleep/hidden, listening = bars, thinking = processing, speaking = reply shown, error = fault). 'listening' also covers the follow-up window (mic open, spec/40).",
+      "description": "orchestrator->overlay: coarse session state — drives the island's mode (listening = bars, thinking = processing, speaking = reply shown, error = fault, idle = the orchestrator is free again). 'idle' means the DAEMON has finished, not that the island must vanish: since D24 the overlay owns when it stops showing the last answer, because only it knows how much text is left to reveal. A capture window opening publishes 'listening', which clears the previous turn by itself (see 'clearsTurn') — there is no separate clearing message.",
       "properties": {
         "type": { "const": "state" },
         "state": { "enum": ["idle", "listening", "thinking", "speaking", "error"] }
@@ -36,7 +40,7 @@
     },
     "response": {
       "type": "object",
-      "description": "orchestrator->overlay: one chunk of the brain's reply as it streams (the teleprompter, D14). The overlay appends 'delta' to the current reply; 'done':true marks the reply complete. Clearing: a 'state' that starts a new turn ('listening', 'thinking') or ends the session ('idle') clears the reply and any fault; 'speaking' and 'error' deliberately do NOT — the reply streams in during THINKING and the island flips to SPEAKING while it is read, so clearing there would blank the text exactly as the user starts reading it.",
+      "description": "orchestrator->overlay: one chunk of the brain's reply as it streams (the teleprompter, D14). The overlay appends 'delta' to the current reply; 'done':true marks the reply complete. Clearing is governed by the top-level 'clearsTurn' list, which the reducer loads rather than restates: a 'state' in that list clears the reply and any fault. 'speaking' and 'error' are deliberately absent — the reply streams in during THINKING and the island flips to SPEAKING while it is read, so clearing there would blank the text exactly as the user starts reading it. 'idle' is absent too (D24): it now means the daemon has finished, and the answer must survive it long enough to be read.",
       "properties": {
         "type": { "const": "response" },
         "delta": { "type": "string", "default": "" },
@@ -47,7 +51,7 @@
     },
     "mic": {
       "type": "object",
-      "description": "orchestrator->overlay: mic input level in [0,1], emitted while a capture window is open (LISTENING / FOLLOW-UP) — drives the listening bars and is the spec/50 truthful indicator for those windows: whenever a capture window is open a 'mic' message is present, and the overlay must not infer 'listening' from anything else. Always-on-mic monitoring — the wake-word watch at IDLE and barge-in detection during SPEAKING — is a separate, user-gated category that deliberately emits no 'mic' (both are governed together by the 'listen for me' setting, spec/70); so the island shows no mic cue while Gemma speaks. High-frequency and droppable.",
+      "description": "orchestrator->overlay: mic input level in [0,1], emitted while a capture window is open (LISTENING) — drives the listening bars and is the spec/50 truthful indicator for that window: whenever a capture window is open a 'mic' message is present, and the overlay must not infer 'listening' from anything else. Always-on-mic monitoring — the wake-word watch at IDLE and barge-in detection during SPEAKING — is a separate, user-gated category that deliberately emits no 'mic' (both are governed together by the 'listen for me' setting, spec/70); so the island shows no mic cue while Gemma speaks. High-frequency and droppable.",
       "properties": {
         "type": { "const": "mic" },
         "level": { "type": "number", "minimum": 0, "maximum": 1 }
@@ -75,6 +79,15 @@
         "message": { "type": "string" }
       },
       "required": ["type", "message"],
+      "additionalProperties": false
+    },
+    "dismiss": {
+      "type": "object",
+      "description": "overlay->orchestrator: the user dismissed the island (Esc while it shows, or a close affordance). THE ONLY message that travels upstream (see 'upstream'), and it is a CANCEL, never a command (spec/50 rule 12): it can stop work already in flight — drop the capture, cut TTS, cancel the in-flight brain call — and can never start a turn, run a tool, or change a setting. The overlay owns bare Esc because it alone knows when it is on screen (D24); the orchestrator treats this exactly as it treated its own dismiss key, so one handler still unwinds every state.",
+      "properties": {
+        "type": { "const": "dismiss" }
+      },
+      "required": ["type"],
       "additionalProperties": false
     }
   }

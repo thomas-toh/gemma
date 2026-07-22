@@ -174,16 +174,82 @@ def main() -> int:
         f"latency readout starts at x={latency.property('x'):.0f} but the reply runs to "
         f"{text_right:.0f} — the instrument overlaps the text")
 
+    # --- the reply must not cut the prompt off mid-reveal (D24) ---
+    # The live defect: `bodyText` flipped to the reply on the FIRST brain delta, the prefix
+    # test below it read the new string as "not a continuation" and reset the typewriter to
+    # zero — so a prompt past ~11 words lost its tail on every warm turn. Reproduce exactly
+    # that: a long prompt, with a reply arriving while it is still typing.
+    model.toggle_latency(False)
+    model.apply({"type": "state", "state": "listening"})       # clears the turn
+    model.apply({"type": "state", "state": "thinking"})
+    prompt = ("Can you say how many states there are in the US and interesting facts "
+              "about three of them")
+    model.apply({"type": "transcript", "text": prompt})
+    _pump(app, 300)                                            # a few words in, not finished
+    assert body.property("text") != prompt, "prompt revealed too fast to test the gate"
+    model.apply({"type": "response", "delta": "There are fifty states. "})
+    _pump(app, 150)
+    shown = body.property("text")
+    assert prompt.startswith(shown) and shown, \
+        f"the reply replaced the prompt mid-reveal — island is showing {shown!r}"
+    deadline = time.monotonic() + 6
+    while time.monotonic() < deadline and not win.property("promptShown"):
+        _pump(app, 20)
+    assert win.property("promptShown"), "the prompt never finished revealing and holding"
+    # The handover is not instant: the island shrinks back to one line first, and the reveal
+    # gate holds every word until it has stopped moving. Wait for it rather than guessing.
+    deadline = time.monotonic() + 6
+    while time.monotonic() < deadline and not body.property("text").startswith("There"):
+        _pump(app, 20)
+    assert body.property("text").startswith("There"), \
+        "the reply never took over once the prompt had had its turn"
+
+    # --- the island hides ITSELF, and never while text is still appearing (D24) ---
+    # The daemon owns none of this now. It publishes `idle` when IT is finished; the clock
+    # that matters starts when the reveal does.
+    dwell = win.findChild(QObject, "answerDwell")
+    assert dwell is not None, "Overlay.qml lost the answerDwell objectName"
+    model.apply({"type": "response", "delta": REPLY})           # plenty left to reveal
+    model.apply({"type": "response", "done": True})
+    model.apply({"type": "state", "state": "idle"})             # daemon done, island is not
+    _pump(app, 200)
+    assert win.property("showing"), "idle blanked an answer that was still being revealed"
+    assert not dwell.property("running"), "the dwell started before the text had appeared"
+    while time.monotonic() < deadline + 8 and not win.property("revealDone"):
+        _pump(app, 20)
+    assert win.property("revealDone"), "the reply never finished revealing"
+    assert dwell.property("running"), "the dwell did not start once the text had appeared"
+    dwell.setProperty("interval", 60)                           # don't sit here for 20 s
+    _pump(app, 400)
+    assert win.property("hidden") and not win.property("showing"), \
+        "the island never hid itself after its dwell"
+    assert float(win.property("entrance")) < 0.99, "the island did not begin fading out"
+
+    # --- Esc dismisses locally, without waiting for the daemon (D24) ---
+    model.apply({"type": "state", "state": "thinking"})
+    model.apply({"type": "transcript", "text": "what's the weather"})
+    _pump(app, 200)
+    assert win.property("showing") and not win.property("hidden"), "a new turn must come back"
+    model.dismissed.emit()                                      # what __main__.py's Esc does
+    _pump(app, 50)
+    assert win.property("hidden") and not win.property("showing"), \
+        "a dismiss must hide the island immediately — it never waits on the daemon"
+
     # --- both edges must move at the same rate, and the island must stay inside its frame ---
     # The island is centred in a FIXED window, so its centre is a constant no matter how wide
     # it is. Any drift means one edge is moving before the other — which is what a native
     # window move racing a native resize looked like (the pill contracted faster on the left).
     # The containment assert covers the other half: the silhouette is drawn at animH, so if
     # that ever exceeded the frame its bottom corners would be clipped away mid-growth.
-    # `idle` is what contracts the island now — the widest change it makes. It used to be
-    # `listening`, but an open mic no longer ends a turn (spec/50 rule 4; see decode.py's
-    # CLEARS_TURN), so listening leaves the answer up and the island open.
-    model.apply({"type": "state", "state": "idle"})
+    # `listening` is what contracts the island (D24): opening a capture window IS the clear
+    # (status.json `clearsTurn`), so the wide text pill drops to the compact wave pill. This
+    # assertion has now been round the houses — `listening`, then `idle` when the follow-up
+    # window made an open mic mean something else, and back again now that every capture is
+    # user-initiated and `idle` merely means the daemon is free.
+    model.apply({"type": "state", "state": "thinking"})
+    model.apply({"type": "response", "delta": REPLY})
+    _pump(app, 500)                                # let it open out to full width first
+    model.apply({"type": "state", "state": "listening"})
     frame_w, frame_h = float(win.property("width")), float(win.property("height"))
     frame_x = float(win.property("x"))
     centre, drift, widths = frame_w / 2, 0.0, []

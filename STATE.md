@@ -15,64 +15,47 @@ Last updated: 2026-07-22
 Track P's island is built and live: real turns render end to end (wake word → STT → B1 →
 Teleprompter → TTS). The renderer's defects from the first live run are fixed and guarded by
 `python -m teleprompter.overlay_check`. **The hotkey module is now built too** (`ctrl+alt+1`
-opens the ask door), so the acceptance run is unblocked and is the next action.
+opens the ask door), so the acceptance run is unblocked.
+
+**In progress (2026-07-22): the adversarial review**
+(`docs/01_scoping/Reviews/2026-07-22_2129_Review-adversarial-code-and-spec.md`) — 26 numbered
+findings across `bridge/`, `teleprompter/` and `spec/`, being worked item by item. **D24 landed
+first** (below) and discharged **G-01 · G-02 · G-04 · S-01** and Track P's owed fix 3 — by
+deleting the code they lived in rather than patching it. G-08 was adjudicated *keep as-is*
+(Thomas): the 5 s no-speech give-up stays on keyed turns. Selfchecks green across hotkeys ·
+broadcaster · orchestrator · decode · overlay_check; **replay 4/4 on the PC**, transcripts
+verbatim; **D24 verified live** (2026-07-22) — prompt gate, Esc on a displayed answer, Esc
+mid-thought, and Esc handed back to other apps when the island is hidden.
+**Remaining:** G-03 · G-05 · G-06 · G-07 · P-01–P-04 · U-01 · U-02 · B-01 · B-02 ·
+S-02–S-09 · X-01. B-01 (a fresh API client + event loop per turn) is the one remaining *class*
+fix and is the next decision.
 
 | # | Action | Track | Why now |
 |---|--------|-------|---------|
-| 1 | **Debug & refactor session** | G · P | Thomas's call: disjointed bits + suspected bugs, then the debugger. Two same-root bugs already found today (entrances diverging). Start from the decided items below: the abort seam is built, Esc is built but **unverified live**. |
-| 2 | M0-close gate — settings surface | G ④ | Thomas's gate, beyond docs/04 §8. The last thing between here and M0 closed — the acceptance test itself has PASSED. |
-| 3 | 7a/7b review — the three timing bugs | P | One root cause; the dwell handoff to the overlay (option ③) is the decided shape. |
+| 1 | **Finish the review's findings** | G · P | 26 items, in severity order; the S-items are spec reconciliation and group into three commits. B-01 (a fresh API client + event loop per turn) is the one remaining *class* fix. |
+| 2 | Live-verify Esc + the upstream verb | P | D24 moved dismissal into the overlay. The whole path — native event filter → socket → brain-call cancellation — is proven offline and in selfchecks, never once on a real keypress. |
+| 3 | M0-close gate — settings surface | G ④ | Thomas's gate, beyond docs/04 §8. The last thing between here and M0 closed — the acceptance test itself has PASSED. |
+| 4 | 7a/7b dead-air gaps | P | The *three timing bugs* are closed by D24; what remains of 7a/7b is the genuinely separate question of what to show while STT and the brain are working. |
 
 **M0's acceptance test has PASSED** (2026-07-22, details under Track G). M0 is not *closed* —
 Thomas's settings-surface gate stands — but the loop is proven. **Track D is unblocked**
 (D12 sequencing, 2026-07-18: validate the shared capture path live before building on it).
 
-**Fixed 2026-07-22 (late) — the held-answer wipe.** A long answer was erased milliseconds
-after arriving. Root cause: `listening` meant two things — "the user asked for the mic" and
-"the mic happens to be open" — and the 8 s follow-up window published it right after an
-answer, ending the turn. spec/50 rule 4 forbids fixing that by going quiet about an open mic,
-so `listening` cannot be a turn boundary: `CLEARS_TURN` is now `{thinking, idle}`. The
-follow-up window is **removed** (Thomas, 2026-07-22): every `listening` is now user-initiated,
-which also removes the "mic open with text on screen" case entirely, so no new indicator is
-needed. In its place the answer **dwells** on the island for `ANSWER_DWELL_S` (8 s) with the
-mic CLOSED; the wake watch runs throughout, and a new wake supersedes the dwell — clearing the
-old answer *before* the mic opens. **"read it" readback is retired** with it; whether anything
-speaks a long answer on request folds into the TTS switch decision (spec/70, with "listen to
-me"). The hold itself survives and now means SHOWN, not spoken.
-
-**OPEN BUG (2026-07-22, found immediately after the fix above) — the dwell is too short, and
-measured from the wrong clock.** A long answer is blanked mid-reveal: `ANSWER_DWELL_S` is 8 s,
-inherited from the old `FOLLOWUP_MS`, but that was a *speech* window, not a *reading* one. A
-278-token answer is ~200 words, and the island reveals at ~9 words/s — **~20 s just to finish
-typing**, so `idle` fires while text is still arriving. Same shape as the bug it replaced: the
-daemon decides when to blank, but only the overlay knows how much text is left to show and how
-long it takes to read. Options, cheapest first: ① scale the dwell to reply length
-(`max(8, words / 2.5)`) — one line, daemon-side, no contract change; ② start the dwell when the
-reply *finishes revealing* rather than when the brain finishes; ③ move the blank decision to
-the overlay entirely, which is the only party that knows the reveal state. ② and ③ need a
-Contract P change. **Decide with the reveal rate itself** — 90 ms/word may simply be too slow
-for long answers, and the expanded view (parked below) is the other half of this answer.
-
-**Direction chosen (Thomas, 2026-07-22): dismissal, not a timer.** The answer stays up until
-the user dismisses it — clicking outside the island, or closing it — which gets better once
-the hotkey exists (pressing it starts a new turn, which already clears). Constraints to design
-against, not around: ① the island is `WS_EX_TRANSPARENT`, so it currently cannot receive a
-click at all, and since the fixed-frame refactor the window is mostly empty space — making it
-clickable naively would swallow clicks meant for the app beneath. Per-region hit-testing
-(`WM_NCHITTEST` → `HTTRANSPARENT`, native event filter) is the real prerequisite, still
-unproven here, and the **expanded view needs the same thing** — build once, serve both.
-② "Click *outside*" has no cheap form: the window never takes focus, so there is no focus-loss
-event, and detecting a click elsewhere means a system-wide low-level mouse hook — heavy, and
-an awkward thing for a privacy-postured assistant to install. Hotkey, Esc, or an on-island
-close affordance all avoid it. ③ Keep a **generous length-scaled backstop** regardless: with
-purely manual dismissal, walking away mid-answer leaves an always-on-top island over
-everything indefinitely.
-**Partly discharged 2026-07-22 by the hotkey:** an ask-key press supersedes the dwell exactly
-as a wake does, so there is now a real dismissal gesture. **Constraint ③ built the same day:**
-`answer_dwell()` = 8 s floor + 0.45 s/word (reveal cost at 90 ms/word, plus reading room), so
-the 200-word answer that blanked at 8 s now holds ~90 s. **Still owed: Esc / an on-island
-close** — which needs the `WM_NCHITTEST` per-region hit-testing of constraint ①, shared with
-the expanded view.
+**CLOSED 2026-07-22 by D24 — the whole answer-display saga.** Four days of bugs (held-answer
+wipe → dwell too short → dwell measured from the wrong clock → prompt truncated mid-reveal)
+were one root: **the daemon deciding things only the overlay can see.** D24 moves the display
+decisions to the overlay, `idle` is demoted to "the daemon is free", the turn-clear rides on
+`listening`, and Contract P gains one upstream verb (`dismiss`). Detail: spec/00 D24 · spec/40
+§State machine · spec/50 rule 12. Deleted with it: `answer_dwell()` and its two constants,
+`self.shown`, `blank_at`, and the whole transient-door arming protocol in `bridge/hotkeys.py`.
+Residue of the earlier fixes still standing: the follow-up window stays **removed**, and
+**"read it" readback is retired** — whether anything speaks a long answer on request folds into
+the TTS switch (spec/70, with "listen to me"); the hold survives and means SHOWN, not spoken.
+**Still owed from the dismissal design: an on-island close affordance** — Esc now exists
+(overlay-owned, D24), but a *click* target needs `WM_NCHITTEST` → `HTTRANSPARENT` per-region
+hit-testing, still unproven here and shared with the expanded view. Build once, serve both.
+"Click *outside*" remains ruled out: the window never takes focus, so it would need a
+system-wide low-level mouse hook — heavy, and against spec/50's posture.
 
 **Fixed 2026-07-22 (live, during acceptance-run setup) — bars drawn over a stale answer.**
 Symptom (Thomas): press the ask key while a reply is showing and the wave appears *alongside*
@@ -94,29 +77,25 @@ so barge-in, where this bug lived, now has **no replay case at all**, and the ne
 key-interrupt path has none either. Both want a case; the key-interrupt one *can* be a keyed
 case (unlike barge-in) if the harness can script a second press mid-reply.
 
-**Decided 2026-07-22 (Thomas), for the refactor session — the dismiss key and the abort seam.**
-① **Esc dismisses the Teleprompter**, registered **only while the island is showing**. Bare Esc
-must NEVER be registered permanently: `RegisterHotKey` *consumes* its combo system-wide, so a
-standing Esc binding would break Esc in every other app (dialogs, autocomplete, fullscreen,
-vim). `parse_binding` already rejects modifier-less bindings and should keep doing so —
-dynamic registration is the exemption, not a relaxation. Cost, eyes open: `RegisterHotKey`
-must run on the message-pump thread, so register/unregister needs `PostThreadMessage`
-marshalling against a blocking `GetMessageW`, plus the race where the island hides mid-press.
-Neither a keyboard hook (spec/50 rule 11) nor a QML key handler (the island is
-`WS_EX_NOACTIVATE`, never focused) is available.
-② **Dismiss = full abort of the turn**, not just a blank: LISTENING drops the capture,
-SPEAKING cuts TTS, **THINKING cancels the in-flight brain call**. That makes the **asyncio
-cancellation seam in `_collect()` load-bearing** — it is the same missing capability as
-"a press while the brain is streaming still queues" (above). One seam, two callers.
-③ **Consequence for the dwell — the estimate is measuring the wrong thing.** The dwell already
-starts *after* the brain and TTS finish, so it is not covering response latency; it is blindly
-estimating **reveal** time (90 ms/word) plus reading time, which is why it needs 0.45 s/word
-and lands at ~90 s for a long answer. The clock should start when the reply **finishes
-revealing**, making the knob a legible "N seconds after it finishes appearing". **Contract P is
-one-way** (spec/70: no control channel back), so the overlay cannot report reveal-completion
-upstream — which rules out option ② of the dwell bug and selects **option ③: the overlay owns
-the blank decision**. It needs no reverse channel and it is the only party that knows the
-reveal state. This is also the 7a/7b answer for the other two timing bugs.
+**BUILT 2026-07-22 — the dismiss key and the abort seam (D24).** Decided as three items and
+delivered as one decision, because the first two could not be built where they were.
+① **Esc dismisses the Teleprompter**, registered only while the island shows — but *not* by the
+daemon. Doing it daemon-side needed `PostThreadMessage` marshalling against a blocking
+`GetMessageW`, raced across two threads on an `_armed` set, and could only arm against the
+daemon's *guess* at what was displayed; that guess held Esc hostage from every other app for
+the entire answer dwell while nothing polled for it. **The overlay owns Esc instead** — it is
+the window, so "is it showing" is a fact. `bridge/hotkeys.py` loses the transient-door protocol
+entirely and `parse_binding` loses its modifier-less exemption.
+② **Dismiss = full abort of the turn**, not just a blank: LISTENING drops the capture, SPEAKING
+cuts TTS, **THINKING cancels the in-flight brain call**. The asyncio cancellation seam in
+`_drive()`/`_collect()` is load-bearing and built; only the *source* of the signal moved, so
+the single `Dismissed` handler still unwinds every state. Guarded end to end: a `dismiss` line
+off the wire must cancel a hanging brain call, verified to FAIL when the wiring is cut.
+③ **The dwell** was estimating **reveal** time (90 ms/word) plus reading time from the wrong
+clock. It is now the overlay's, measured from the moment the text finishes appearing —
+`Theme.durationAnswerDwell`, a flat 20 s, because from the right clock a constant is enough.
+**Still queued:** a press while the *brain is streaming* — `_collect()` owns that window inside
+asyncio, and the ask key (unlike Esc) is not yet polled there.
 
 **Fixed 2026-07-22 — the stuck ask door (found by Thomas within minutes of Esc landing).**
 Press `ctrl+alt+1`, then Esc: the next `ctrl+alt+1` logged `ask: closed (tap)` and opened
@@ -137,9 +116,16 @@ shape: a fact that lives in two places either side of a seam, and one side not b
 Each fix moved the fact to the single place that owns it — the clear into `_capture()`, the
 entrance into `_enter()`, the toggle into `Door.close()`. **This is the brief for the refactor
 session:** hunt remaining duplicated state across the daemon/module/overlay seams rather than
-individual misbehaviours. Known candidates: `self.shown` (daemon guesses what the island
-displays) · `blank_at` (daemon times a reveal it cannot see — already decided to move to the
-overlay, option ③) · `Door.open` vs orchestrator capture state (fixed, but the class remains).
+individual misbehaviours.
+**Candidates discharged by D24 (2026-07-22):** `self.shown` and `blank_at` are *deleted* — the
+daemon no longer guesses what the island shows or times a reveal it cannot see; the clear moved
+off a caller and onto the `listening` state itself; and the `_armed` set that the arming
+protocol raced across two threads went with the protocol.
+**Still open on this brief:** `Door.open` vs orchestrator capture state (fixed once via
+`Door.close()`, but the two-Events-plus-a-flag shape remains — a monotonic press counter owned
+by the module would make lost updates impossible by construction; review G-06) · the daemon
+building a fresh API client and event loop per turn (review B-01) · no snapshot for a
+reconnecting overlay, so a mid-turn restart renders nothing (review P-02).
 
 Parked, not blocking, pick up by mood:
 
@@ -161,8 +147,11 @@ Parked, not blocking, pick up by mood:
 - **Expanded view** — design session first, and it **wants its own D-number** (it widens D14).
 - **Latency readout styling** (owed fix 4) — deferred to a static-screens design pass.
 - **Contract P gap (D20)** — dictate overwrite-warning + propose-then-tap messages, unbuilt.
-- **Launcher option C2** — Job Object lifetime tie; **needs D24** (amends D13/D19's isolation
-  rationale and D10's two-seam limit), and daemon-death must become visible in the tray.
+- **Launcher option C2** — Job Object lifetime tie; **wants its own D-number** (amends D13/D19's
+  isolation rationale and D10's two-seam limit), and daemon-death must become visible in the
+  tray. *(This line used to reserve "D24"; D24 was allocated to the display-ownership decision
+  on 2026-07-22. Reserve numbers by taking them, not by naming them in advance — the D18/D19
+  collision came from exactly this.)*
 
 Two open questions owed a decision:
 
@@ -339,6 +328,20 @@ Two open questions owed a decision:
   The ⌄ was built and then **cut** (D22). Focus question **answered**: a non-activating window
   *can* take clicks without taking focus, and `WS_EX_TRANSPARENT` makes the island fully
   click-through while still painting — `setMask()` must NOT be used, it clips painting too.
+- **Built (D24, 2026-07-22) — the island owns the display.** `Overlay.qml`: the prompt hands
+  over to the reply only once it has finished revealing (`promptShown` +
+  `Theme.durationPromptHold`), and the island hides *itself* `Theme.durationAnswerDwell` after
+  the text finishes appearing — replacing a daemon-side timer that was estimating this file's
+  own typing speed. `showing` deliberately lets a dismiss outrank `busy`, so Esc takes the
+  island away instantly rather than waiting for the daemon's abort to come back.
+  `teleprompter/__main__.py`: `DismissKey`, a `QAbstractNativeEventFilter` holding bare Esc via
+  `RegisterHotKey` for exactly as long as the window is visible (armed off the same
+  `visibleChanged` signal as the NOACTIVATE re-stamp). `feed.py` gained `send()` — the one
+  upstream verb — and `feed_lost()`, because `idle` can no longer double as "show nothing".
+  `decode.py` now *loads* `clearsTurn` and `upstream` from `status.json` instead of restating
+  them. Guarded in `overlay_check` (prompt gate · dwell start/stop · dismiss) and in
+  `decode --selfcheck`; every assertion verified to FAIL when its fix is reverted.
+  **Unproven live:** the native event filter has only ever run on Qt's `offscreen` platform.
 - **OWED — fixes from the first live run (2026-07-22).** First real turns ever rendered
   (wake word → STT → B1 → Teleprompter → TTS). It works end to end; these are the defects:
   1. ~~**The reply appears as a block, not typed.**~~ **FIXED.** Prompt *and* reply now reveal
@@ -347,27 +350,14 @@ Two open questions owed a decision:
      stream being skimmed rather than a teleprompter to be read.
   2. ~~**The pill snaps into existence on wake.**~~ **FIXED.** `entrance` fades the window in
      and out, bound to the state rather than toggled by hand.
-  3. **The prompt flashes for ~1 s and is gone** — ugly and janky. *Measured:* the brain takes
-     ~1 s warm but **6 s cold**, so the dwell is wildly inconsistent. **Fix:** a minimum dwell
-     before the reply may replace the prompt (keeps the locked design's "never stacked").
-     Same family as the 7a/7b gaps below.
-     **Sharpened 2026-07-22 (live, hotkey turn): the prompt is cut off mid-typing.** Asked "Can
-     you say how many states there are in the US and interesting facts about 3 of them" — the
-     prompt began revealing and the reply replaced it before it finished. *Mechanism, confirmed
-     in code:* `Overlay.qml`'s `bodyText` is `reply !== "" ? reply : transcript`, so the FIRST
-     delta flips it; `onBodyTextChanged`'s prefix test then sees a non-prefix and resets
-     `reveal.shown = 0`. **The dwell is not too short — there is none.** *Quantified:* the
-     reveal is 90 ms/word (`Theme.durationWord`), so an N-word prompt needs N × 90 ms; that
-     18-word prompt needed ~1.6 s against a ~1 s warm first token, so ~11 of 18 words showed.
-     Any prompt past **~11 words** loses its tail when warm; cold turns complete, which is why
-     this read as inconsistent. **Consequence for the fix above: a minimum *time* dwell does
-     not solve it** — any dwell shorter than the reveal truncates the same way. The invariant
-     is *finish revealing → then dwell → then swap*.
-     **The three timing bugs are one bug.** Prompt flash, this truncation, and the answer-dwell
-     blanking (handoff, above) all have the same root: **content swaps are driven by producer
-     events while only the overlay knows how much text is left to reveal.** Decide it once in
-     the 7a/7b review rather than three times — the answer is likely a reveal-aware gate the
-     overlay owns, which is also option ③ of the dwell bug.
+  3. ~~**The prompt flashes for ~1 s / is cut off mid-typing.**~~ **FIXED by D24.** `bodyText`
+     was `reply !== "" ? reply : transcript`, so the FIRST brain delta flipped it and the prefix
+     test reset the typewriter to zero — at 90 ms/word against a ~1 s warm first token, any
+     prompt past **~11 words** lost its tail (cold turns completed, which is why it read as
+     inconsistent). A minimum *time* dwell could never have fixed it: any dwell shorter than the
+     reveal truncates identically. The invariant is *finish revealing → hold → swap*, and it is
+     now enforced overlay-side (`promptShown`, `Theme.durationPromptHold`), guarded by
+     `overlay_check` and verified to FAIL when the gate is removed.
   4. **The latency readout is ugly.** Styling — folds into the static-screens pass, but now a
      confirmed complaint rather than a hypothetical.
 - **First real latency figures (2026-07-22)** — partially discharges the owed D11 numbers:

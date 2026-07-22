@@ -40,4 +40,16 @@
     Gemma's process, which is the same posture problem as rule 3 in a different medium.
     Key *state* may be queried for the key we registered (release detection); nothing
     else is observed. The macOS peer, when built, uses Carbon `RegisterEventHotKey` for
-    the same reason.
+    the same reason. Since D24 the **Teleprompter** registers bare `Esc` under this same rule,
+    and only while the island is on screen.
+12. **The upstream channel cancels, never commands** (decided 2026-07-22, D24). Contract P was
+    strictly one-way until the overlay had to own dismissal. It may now send the daemon
+    **exactly one** message, `dismiss`, allowlisted from `spec/schemas/status.json` and
+    rejected by name if anything else arrives. The invariant, not the message count, is what
+    makes this acceptable: an upstream message may only **stop work already in flight** — drop
+    a capture, cut TTS, cancel an in-flight brain call. It may never start a turn, invoke a
+    tool, alter a setting, or put words on the screen. Any future upstream verb must satisfy
+    the same test or it does not belong on this channel. Threat note: the socket is
+    localhost-only but unauthenticated, so any local process can send `dismiss` — a nuisance,
+    bounded by the invariant, and strictly smaller than the exposure already accepted, which is
+    that the same process can *read* every prompt and reply on the feed.

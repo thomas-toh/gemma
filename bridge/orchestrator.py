@@ -41,16 +41,11 @@ from bridge.log import setup_logging
 log = logging.getLogger("gemma.orchestrator")
 
 # --- interaction timings (spec/40) ---
-ANSWER_DWELL_S = 8.0   # FLOOR for how long the answer stays on the island after a turn ends.
-                       # The mic is CLOSED throughout — this replaced the old 8 s follow-up
-                       # window, which held the mic open and so had to publish `listening`,
-                       # wiping the very answer it existed to let you respond to.
-ANSWER_DWELL_PER_WORD_S = 0.45  # ...and the per-word scaling on top of that floor. 8 s was
-                       # inherited from a SPEECH window and blanked long answers mid-reveal:
-                       # the island types at 90 ms/word, so a 200-word answer needs ~20 s
-                       # before it has even finished appearing. 0.45 = that reveal cost plus
-                       # room to actually read it. Deliberately generous — this is only the
-                       # walked-away backstop; a keypress dismisses (STATE, Track P).
+# The answer dwell is NOT here any more (D24). The daemon spent two revisions guessing how
+# long an answer needed to stay up — a floor, then a per-word scaling — because it was timing
+# a reveal it could not see: the island types at a fixed rate, so the daemon was estimating
+# the overlay's own animation. It now publishes `idle` the moment it is free and the island
+# decides when to stop showing, which is the only place the reveal state exists.
 WORKING_AFTER_S = 1.4  # 'working' earcon if nothing audible yet — just inside D11's 1.5 s
 BARGE_CHUNKS = 4       # sustained speech chunks (~128 ms) to call it a barge-in; with the
                        # low-latency pump the cut lands ≤ 250 ms (spec/40 binding).
@@ -59,13 +54,6 @@ BARGE_CHUNKS = 4       # sustained speech chunks (~128 ms) to call it a barge-in
 MIC_LEVEL_REF = 6000.0  # int16 RMS mapped to a full overlay bar (Contract P 'mic' level).
                         # ponytail: calibration knob — mic-dependent; raise if the bars peg,
                         # lower if they barely move (the physical world needs tuning).
-
-
-def answer_dwell(reply: str) -> float:
-    """How long an answer stays on the island once the turn ends. Scales with length
-    because the island *reveals* at a fixed rate — a flat timer blanks a long answer
-    while it is still typing itself out (STATE, Track P)."""
-    return max(ANSWER_DWELL_S, len(reply.split()) * ANSWER_DWELL_PER_WORD_S)
 
 
 def capture_over(fired: bool, eos: EndOfSpeech, keyed: bool, auto_end: bool) -> bool:
@@ -212,10 +200,14 @@ class Orchestrator:
         self.hk = hotkeys                        # None under replay/selfcheck: wake word only
         self.brain = brain or ClaudeBrain(model=model)   # injectable: replay's fake brain
         self.synth = synth                               # injectable: replay fakes TTS
-        self.bc = broadcaster or Broadcaster()           # Contract P feed; unstarted in replay
+        # D24: dismissal arrives from the Teleprompter, which owns bare Esc because it alone
+        # knows when it is on screen. Set from the broadcaster's receive thread; every waiting
+        # state polls it, and the single Dismissed handler in serve() does the unwinding — the
+        # plumbing is unchanged from when the daemon owned the key, only the source moved.
+        self._dismiss = threading.Event()
+        self.bc = broadcaster or Broadcaster(on_dismiss=self._dismiss.set)
         self.trace: list[tuple[float, str, str]] = []    # (t, event, detail) — latency_table
         self.session = Session(id="boot")
-        self.shown = ""                         # last thing left on the island -> its dwell
         self.audible = True                     # has this turn produced sound yet?
         self.working = threading.Timer(0, lambda: None)
         self.t_eos = time.perf_counter()        # spec/40 clock: VAD declared the turn over
@@ -227,8 +219,10 @@ class Orchestrator:
     # 'listening' is emitted by _capture (mic open); 'speaking'/'error' by _speak (its `state`
     # arg — so an error apology dwells in fault mode, not a bare reply view). 'speak' is
     # trace-only here.
-    # 'dismissed' maps to idle: it blanks the island and, through _publish_state, hands the
-    # bare Esc binding back to the rest of the system.
+    # 'idle'/'dismissed' both mean "the daemon is free again" — NOT "blank the island" (D24).
+    # The island is already gone on a dismiss (it hid itself the instant Esc was pressed, which
+    # is why it, not the daemon, sends the verb), and after a normal turn it stays up until it
+    # has finished revealing the answer plus its own dwell.
     _EVENT_STATE = {"thinking": "thinking", "idle": "idle", "dismissed": "idle"}
 
     def _ev(self, event: str, detail: str = "", show: str | None = None) -> None:
@@ -248,30 +242,22 @@ class Orchestrator:
             self.bc.publish(m_transcript(detail))
 
     def _publish_state(self, name: str) -> None:
-        """Publish a Contract P state — and keep the dismiss key armed in step with it.
-
-        Esc is a BARE binding, so it is taken from the rest of the system only while the
-        island is on screen and handed straight back at `idle`. Routing every state change
-        through here is what makes that automatic: there is no state that can show the
-        island without arming Esc, or hide it while still holding the key hostage."""
+        """Publish a Contract P state. `listening` is load-bearing beyond showing the bars:
+        it is also what CLEARS the previous turn (status.json `clearsTurn`), so a capture
+        window can never open over a stale answer — the invariant lives in the state itself
+        rather than in whichever caller remembered to blank first."""
         self.bc.publish(m_state(name))
-        if self.hk is not None:
-            self.hk.arm("dismiss", name != "idle")
 
     def _dismissed(self) -> bool:
-        """Has dismiss been pressed since we last looked? Consumes the signal."""
-        flag = self._abort_flag()
-        if flag is not None and flag.is_set():
-            flag.clear()
+        """Has the overlay reported a dismiss since we last looked? Consumes the signal."""
+        if self._dismiss.is_set():
+            self._dismiss.clear()
             return True
         return False
 
     def _abort_flag(self):
-        """The dismiss door's Event, or None when there are no hotkeys (replay, tests)."""
-        if self.hk is None:
-            return None
-        door = self.hk.doors.get("dismiss")
-        return door.start if door is not None else None
+        """The Event a streaming brain call races against (the abort seam in `_drive`)."""
+        return self._dismiss
 
     # --- feedback bookkeeping (D11: something audible < 1.5 s after end of speech) ---
 
@@ -333,15 +319,14 @@ class Orchestrator:
         for s in seed or []:
             captured.append(s)
             eos.update(True)
-        # BINDING INVARIANT: opening a capture window clears the previous turn first — the
-        # island must never show bars over a stale answer. This lives HERE, not in the
-        # callers, because capture windows open from two places: serve() (wake or ask key)
-        # and _speak() (barge-in, and a keypress mid-reply). The barge-in path used to skip
-        # it, which is exactly how bars ended up drawn over the last reply.
-        # Redundant when already idle — the reducer treats idle->idle as a no-op.
-        self._ev("idle")                            # CLEARS_TURN (teleprompter/decode.py)
-        self._dismissed()                           # drop a stale press from a past turn
-        self._publish_state("listening")            # island -> bars (mic open)
+        # BINDING INVARIANT: opening a capture window clears the previous turn — the island
+        # must never show the mic bars over a stale answer. Since D24 that clearing IS
+        # `listening` (status.json `clearsTurn`), so no caller can skip it: it used to be a
+        # separate `idle` published here, and before that a blank in serve() alone, which the
+        # barge-in entrance bypassed — that is precisely how bars came to be drawn over the
+        # last reply. One message, one owner, no path that can forget.
+        self._dismissed()                           # drop a stale dismiss from a past turn
+        self._publish_state("listening")            # clears the turn AND opens the bars
         try:
             return self._capture_loop(eos, captured, door)
         finally:
@@ -394,7 +379,6 @@ class Orchestrator:
             self.bc.publish(m_error("I didn't catch that.", "no_transcript"))
             self._ping("error")                 # narration rules: the pipeline broke
             self._ev("no-transcript", show="(no transcript)")
-            self.shown = ""                     # nothing to read: the dwell floor is enough
             return None                         # ends the chain; the wake watch resumes
         self._ev("transcript", text, show=f"> {text}")
 
@@ -410,10 +394,8 @@ class Orchestrator:
             kind = err or "unknown"
             self.bc.publish(m_error(spoken_error(kind), kind))
             self._ping("error")
-            self.shown = spoken_error(kind)     # the apology is what dwells
             return self._speak(self.synth(spoken_error(kind), self.voice), state="error")
         self.bc.publish(m_response(done=True))  # reply text complete on the overlay
-        self.shown = reply                      # what the island is displaying -> its dwell
 
         self.session.history += [{"role": "user", "content": text},
                                  {"role": "assistant", "content": reply}]
@@ -518,27 +500,17 @@ class Orchestrator:
         devices from run(), fakes from the replay harness (tests/replay.py)."""
         self.pump, self.mic = pump, mic
         ring: deque = deque(maxlen=BUFFER_BLOCKS)   # ≤3 s pre-trigger audio, RAM only (spec/50)
-        # When the last turn's answer should stop being shown. `idle` both clears the turn and
-        # hides the island, so publishing it the moment a turn ends would blank the answer as
-        # it finished arriving. The wake watch below runs THROUGHOUT the dwell — this delays
-        # the blanking, never Gemma's readiness.
-        blank_at: float | None = None
         while True:
             # IDLE: wake watch
             block, _ = mic.read(BLOCK_SAMPLES)
             frame = block[:, 0]
             ring.append(frame)
-            if blank_at is not None and time.perf_counter() >= blank_at:
-                blank_at = None
-                self._ev("idle", show="[idle]")
             # Two entrances to the same door (D20): the ask hotkey and the wake phrase.
             door = self._pressed()
             if door is None and not any(s >= THRESHOLD
                                         for s in wake_model.predict(frame).values()):
                 continue
             t_wake = time.perf_counter()
-            blank_at = None                     # a new turn supersedes the dwell; _capture()
-                                                # does the clearing, for every entrance alike
             self._enter(door, t_wake)
             # ponytail: fresh history each wake-chain — whether it should persist
             # across wakes is an open question (parked; STATE), so it dies at IDLE.
@@ -553,19 +525,21 @@ class Orchestrator:
                     utt = self._turn(utt)
             except Dismissed:
                 # One handler for every state (spec/40): whatever was in flight — an open
-                # mic, a streaming brain call, TTS mid-sentence — stops here.
+                # mic, a streaming brain call, TTS mid-sentence — stops here. The island is
+                # already gone; it hid itself the instant Esc landed and told us afterwards.
                 self.working.cancel()
                 pump.cut()
-                self.shown = ""
                 if self.hk is not None:
                     self.hk.reset()             # no door left mid-toggle by the abandon
                 self._ev("dismissed", show="[dismissed]")
                 self._flush_wake(wake_model)
-                blank_at = None                 # nothing left on the island to dwell
                 continue
+            # Published BEFORE the wake flush (37 model calls) so the island's dwell clock
+            # starts when the turn actually ended. `idle` says the DAEMON is free — it no
+            # longer blanks anything, because how long the answer stays up is a fact about
+            # the reveal, which only the island can see (D24).
+            self._ev("idle", show="[idle]")
             self._flush_wake(wake_model)        # else the old phrase re-triggers
-            # Leave the answer up long enough to reveal AND read (a keypress cuts it short).
-            blank_at = time.perf_counter() + answer_dwell(self.shown)
 
     def run(self) -> None:
         import numpy as np
@@ -637,15 +611,16 @@ def _selfcheck() -> None:
     assert capped.update(True)                        # 30 s runaway cap survives a key
     assert capture_over(True, capped, keyed=True, auto_end=False)
 
-    # answer dwell scales with what is on screen, and never dips under the floor
-    assert answer_dwell("") == ANSWER_DWELL_S
-    assert answer_dwell("Yes.") == ANSWER_DWELL_S                  # short: floor wins
-    assert answer_dwell("word " * 200) > 20                        # must outlast the reveal
-    assert answer_dwell("word " * 200) > answer_dwell("word " * 50)
-
     # BINDING INVARIANT: a capture window clears the previous turn BEFORE the mic opens,
     # whichever entrance opened it. Regressing this draws the mic bars over the last reply
     # (it did: the barge-in path skipped the clear, which lived in serve()).
+    # Since D24 the clear IS `listening`, so the guarantee no longer depends on a caller
+    # remembering to blank first — but only while the contract agrees, hence the cross-check.
+    from bridge.config import load_schemas
+    assert "listening" in load_schemas()["status"]["clearsTurn"], \
+        "Contract P no longer clears on `listening` — opening a capture would leave the "\
+        "previous answer on the island under the mic bars"
+
     import numpy as np
 
     class _Rec:                                       # stands in for the Contract P feed
@@ -666,7 +641,7 @@ def _selfcheck() -> None:
     probe = Orchestrator(brain=object(), broadcaster=_Rec())
     probe.mic, probe.vad = _SilentMic(), _QuietVad()
     assert probe._capture(nospeech_ms=64) is None      # silence -> gives up, no transcript
-    assert probe.bc.states[:2] == ["idle", "listening"], probe.bc.states
+    assert probe.bc.states == ["listening"], probe.bc.states
 
     # the abort seam: a dismiss must cut a brain call that is still streaming, not wait it
     # out. A brain that never yields stands in for "slow first token" — the hardest case.
@@ -685,6 +660,26 @@ def _selfcheck() -> None:
     # with no abort flag the same call runs normally (replay/selfcheck path)
     reply, err = asyncio.run(_drive(FakeReply("Fine."), Session(id="t"), "hi"))
     assert (reply, err) == ("Fine.", None), (reply, err)
+
+    # D24: the dismiss signal is no longer a key this process owns — it arrives as a Contract P
+    # line from the Teleprompter, which holds bare Esc because it alone knows when it is on
+    # screen. Drive the WHOLE seam: a line off the wire must cancel a streaming brain call
+    # exactly as the old keypress did. Breaking any link (broadcaster allowlist, the on_dismiss
+    # wiring, _abort_flag) fails here rather than silently costing the user their dismiss key.
+    wired = Orchestrator(brain=object())               # a real Broadcaster, never started
+    assert not wired._dismissed()
+    wired.bc._upstream(b'{"type":"dismiss"}')          # exactly what _read_client hands it
+    assert wired._dismissed(), "an upstream dismiss must reach the orchestrator"
+    assert not wired._dismissed(), "the signal is consumed once, not latched"
+    wired.bc._upstream(b'{"type":"state","state":"idle"}')
+    assert not wired._dismissed(), "only 'dismiss' may cross upstream (spec/50 rule 12)"
+
+    threading.Timer(0.15, lambda: wired.bc._upstream(b'{"type":"dismiss"}')).start()
+    t0 = time.perf_counter()
+    reply, err = asyncio.run(_drive(_Hanging(), Session(id="t"), "hi",
+                                    abort=wired._abort_flag()))
+    assert (reply, err) == ("", "aborted"), (reply, err)
+    assert time.perf_counter() - t0 < 5, "an overlay dismiss must cut the brain call"
 
     # barge-in: only sustained speech triggers
     b = BargeIn(chunks=4)

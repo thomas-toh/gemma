@@ -41,6 +41,27 @@ def known_types() -> frozenset[str]:
                      for d in status_schema()["$defs"].values())
 
 
+@lru_cache(maxsize=1)
+def upstream_types() -> frozenset[str]:
+    """The message types that travel overlay->orchestrator (D24). Contract P is otherwise
+    one-way; today this is exactly {'dismiss'}."""
+    return frozenset(status_schema()["upstream"])
+
+
+@lru_cache(maxsize=1)
+def downstream_types() -> frozenset[str]:
+    """What a SUBSCRIBER may legitimately receive. An upstream type arriving on the feed is
+    the daemon echoing our own verb back at us — a bug, not a message."""
+    return known_types() - upstream_types()
+
+
+def m_dismiss() -> dict:
+    """The one upstream message (D24). Lives here rather than in bridge/broadcaster.py's m_*
+    helpers because the overlay is its only sender, and the front-end imports nothing from
+    bridge/ (D21)."""
+    return {"type": "dismiss"}
+
+
 class Decoder:
     """Bytes -> Contract-P messages. Holds the partial trailing line between reads, and
     drops malformed lines / unknown types, logging each kind once (status.json protocol)."""
@@ -64,7 +85,7 @@ class Decoder:
             if not isinstance(msg, dict):
                 self._warn("nonobject", "ignoring non-object feed message")
                 continue
-            if msg.get("type") not in known_types():
+            if msg.get("type") not in downstream_types():
                 self._warn(f"type:{msg.get('type')}",
                            f"ignoring unknown message type {msg.get('type')!r}")
                 continue
@@ -77,17 +98,28 @@ class Decoder:
             log.warning(message)
 
 
-# A 'state' that starts a new turn — or ends the session — clears the previous turn's reply
-# and fault. 'speaking'/'error' must NOT clear: the reply streams in during THINKING and the
-# island flips to SPEAKING while it is read, so clearing there would blank the text exactly
-# as the user starts reading it.
+# Which 'state' values clear the previous turn's reply and fault. NOT a literal here: the rule
+# is data in status.json (hard rule 3), because it is a fact about the contract that the schema
+# and this reducer had already drifted apart on once — the schema taught the exact opposite of
+# the code for a day.
 #
-# 'listening' is NOT here, and cannot be. spec/50 rule 4 binds `listening` to mean "audio is
-# being captured" — so it is published whenever the mic opens, which is not the same thing as
-# "a new turn has begun". While both meanings shared one value, a long answer was wiped
-# milliseconds after arriving by the mic opening behind it. A turn ends when the next one
-# STARTS ('thinking') or the session does ('idle'); the mic opening says nothing about either.
-CLEARS_TURN = frozenset({"thinking", "idle"})
+# 'speaking'/'error' must never clear: the reply streams in during THINKING and the island flips
+# to SPEAKING while it is read, so clearing there would blank the text as the user starts reading.
+#
+# 'listening' DOES clear (D24), and that is only sound because of a precondition worth stating:
+# **every capture window is now user-initiated.** spec/50 rule 4 binds `listening` to "audio is
+# being captured", so it fires whenever the mic opens — which stopped being the same thing as
+# "a new turn began" during the 8 s follow-up window, and a long answer was wiped milliseconds
+# after arriving by the mic opening behind it. The follow-up window is gone; wake-watch and
+# barge-in monitoring publish no 'listening' at all. IF A NON-TURN CAPTURE WINDOW IS EVER
+# REINTRODUCED, THIS LIST MUST CHANGE BACK before it lands — it is one array in status.json.
+#
+# 'idle' is deliberately absent (D24): it means the daemon has finished, not that the island
+# must blank. The overlay decides when to stop showing the answer, since only it knows how much
+# text is left to reveal.
+@lru_cache(maxsize=1)
+def clears_turn() -> frozenset[str]:
+    return frozenset(status_schema()["clearsTurn"])
 
 
 # Prior prompts. RAM only — spec/50 forbids writing any of this to disk.
@@ -115,17 +147,22 @@ class OverlayState:
     # them behind a toggle — but D13 wants them on screen for the M0 acceptance run.
     feedback_ms: float = 0.0
     first_word_ms: float = 0.0
-    # Survives CLEARS_TURN deliberately: the turn ends, the session's prompts do not.
+    # Survives the turn clear deliberately: the turn ends, the session's prompts do not.
     history: list = field(default_factory=list)
+
+    def clear_turn(self) -> None:
+        """Forget the current turn — prompt, reply, fault, instrument readings. The session's
+        prompt history deliberately survives (it belongs to the session, not the turn)."""
+        self.transcript = self.reply = self.error = self.kind = ""
+        self.done = False
+        self.feedback_ms = self.first_word_ms = 0.0
 
     def apply(self, msg: dict) -> None:
         t = msg["type"]
         if t == "state":
             self.state = msg["state"]
-            if self.state in CLEARS_TURN:
-                self.transcript = self.reply = self.error = self.kind = ""
-                self.done = False
-                self.feedback_ms = self.first_word_ms = 0.0
+            if self.state in clears_turn():
+                self.clear_turn()
             if self.state != "listening":
                 self.mic = 0.0          # bars fall the moment the capture window closes
         elif t == "transcript":
@@ -153,8 +190,17 @@ class OverlayState:
 def _selfcheck() -> None:
     """No Qt, no sockets: prove the framing survives arbitrary chunking and that the reducer
     keeps the reply on screen while it is spoken."""
-    assert known_types() == {"state", "transcript", "response", "mic", "latency", "error"}, \
-        sorted(known_types())
+    assert known_types() == {"state", "transcript", "response", "mic", "latency", "error",
+                             "dismiss"}, sorted(known_types())
+    # Contract P is one-way but for a single verb (D24). A subscriber must not accept it back.
+    assert upstream_types() == {"dismiss"}, sorted(upstream_types())
+    assert "dismiss" not in downstream_types()
+    assert m_dismiss()["type"] == "dismiss"
+    assert Decoder().feed(b'{"type":"dismiss"}\n') == [], "the feed must not deliver upstream verbs"
+    # The clearing rule is loaded, not restated — the drift this exists to prevent (S-01) was
+    # the schema and this reducer teaching opposite rules for a day.
+    assert clears_turn() == {"listening", "thinking"}, sorted(clears_turn())
+    assert "idle" not in clears_turn(), "D24: idle means the daemon is free, not blank the island"
 
     # --- framing ---
     d = Decoder()
@@ -184,24 +230,26 @@ def _selfcheck() -> None:
     for word in ("It's ", "clear ", "in ", "Tokyo."):
         s.apply({"type": "response", "delta": word})
     assert s.reply == "It's clear in Tokyo." and not s.done
-    # the reply must SURVIVE the flip to speaking — this is the whole point of CLEARS_TURN
+    # the reply must SURVIVE the flip to speaking — this is the whole point of `clearsTurn`
     s.apply({"type": "state", "state": "speaking"})
     assert s.reply == "It's clear in Tokyo.", "speaking must not clear the reply"
     assert s.transcript == "what's the weather", "speaking must not clear the prompt"
     s.apply({"type": "response", "done": True})
     assert s.done
-    # The mic opening must NOT wipe the answer. This is the live bug of 2026-07-22: a held
-    # answer was published, then erased milliseconds later by the follow-up window opening
-    # the mic behind it — the one surface meant to let you read it destroyed it instead.
-    # spec/50 rule 4 forbids solving that by staying quiet about an open mic, so `listening`
-    # cannot be the thing that ends a turn.
+    # ...and it must survive `idle` too (D24). `idle` now means the DAEMON has finished, not
+    # "blank the island": the overlay owns that, because only it knows how much text is left to
+    # reveal. While the daemon owned it, it was timing a reveal it could not see, and long
+    # answers went dark mid-sentence.
+    s.apply({"type": "state", "state": "idle"})
+    assert s.reply == "It's clear in Tokyo.", "idle must not wipe the answer (D24)"
+    assert s.transcript == "what's the weather", "idle must not wipe the prompt (D24)"
+    # The NEXT capture window is what ends a turn. `listening` clearing is what makes it
+    # impossible to draw the mic bars over a stale answer — the barge-in bug of 2026-07-22,
+    # which existed because that clear lived in one caller instead of in the state itself.
     s.apply({"type": "state", "state": "listening"})
-    assert s.reply == "It's clear in Tokyo.", "an open mic must not wipe the answer"
-    assert s.transcript == "what's the weather", "an open mic must not wipe the prompt"
-    # a new turn clears the last one — but NOT the session's prompt history
-    s.apply({"type": "state", "state": "thinking"})
-    assert s.reply == "" and s.transcript == "" and not s.done
+    assert s.reply == "" and s.transcript == "" and not s.done, "listening must clear the turn"
     assert s.history == ["what's the weather"], s.history
+    s.apply({"type": "state", "state": "thinking"})
     s.apply({"type": "transcript", "text": "set a timer"})
     s.apply({"type": "transcript", "text": "partial", "final": False})   # partials excluded
     s.apply({"type": "state", "state": "idle"})
@@ -221,11 +269,17 @@ def _selfcheck() -> None:
     s.apply({"type": "latency", "metric": "first_word", "ms": 3400})
     assert (s.feedback_ms, s.first_word_ms) == (900.0, 3400.0)
     s.apply({"type": "state", "state": "idle"})
-    assert s.error == "" and s.state == "idle"
+    assert s.state == "idle"
+    assert s.error == "no kind given", "idle must not wipe a fault (D24)"
+    assert (s.feedback_ms, s.first_word_ms) == (900.0, 3400.0), \
+        "idle must not reset the instrument — the readout is still on screen (D24)"
+    s.apply({"type": "state", "state": "listening"})              # the next turn opens
+    assert s.error == "" and s.kind == ""
     assert (s.feedback_ms, s.first_word_ms) == (0.0, 0.0), "latency must reset with the turn"
 
     print("selfcheck OK: framing survives arbitrary chunking, junk/unknown types ignored, "
-          "reducer keeps the reply through SPEAKING and clears it on a new turn")
+          "upstream verbs never delivered downstream, reducer keeps the reply through SPEAKING "
+          "and idle, and clears it when the next capture opens")
 
 
 def main() -> None:

@@ -23,7 +23,10 @@ M0-close gate in STATE — the missing piece being a **config source: file → p
   QWebView was considered and rejected: it is Chromium-heavy, the exact weight the overlay
   deliberately avoids.
 - **Config flow** — the settings window edits a **config file**; the **bridge reads** that
-  file. No control channel back into the voice loop — the UI process stays a clean satellite.
+  file. No *configuration* travels back into the voice loop — the UI process stays a clean
+  satellite. *(Amended by D24: this was written as "no control channel back" outright. The UI
+  now sends exactly one upstream message, `dismiss`, which can only cancel work in flight and
+  can never command — spec/50 rule 12. Settings still travel by file, not by socket.)*
   Reuses the routing config reserved in spec/20.
 - **Adapter-aware** — never a flat global form. Knobs group by adapter, and only the active
   adapter's knobs apply (effort/thinking are Claude-only; a local B2 has temperature instead).
