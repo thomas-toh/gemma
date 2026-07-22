@@ -135,6 +135,12 @@ async def _drive(brain, session: Session, utterance: str, on_delta=None,
         p.cancel()
     if turn in done:
         return turn.result()
+    # Wait for the cancelled turn to finish unwinding before returning. Its `finally` is what
+    # closes the provider's stream (below), and with one long-lived loop nothing else will:
+    # `asyncio.run` used to shut down abandoned async generators at turn end, and there is no
+    # per-turn `asyncio.run` any more. Without this the abort returns while the HTTP request
+    # is still open, and "dismiss drops the request" quietly becomes "dismiss stops reading it".
+    await asyncio.gather(turn, return_exceptions=True)
     return "", "aborted"
 
 
@@ -145,29 +151,43 @@ async def _collect(brain, session: Session, utterance: str,
     streamed to the console and, via on_delta, to the overlay teleprompter (D14)."""
     parts: list[str] = []
     err: str | None = None
-    async for ev in brain.converse(session, utterance, []):   # M0: zero tools
-        if isinstance(ev, TextDelta):
-            parts.append(ev.text)
-            if on_delta:
-                on_delta(ev.text)
-            print(ev.text, end="", flush=True)
-        elif isinstance(ev, ToolCall):   # impossible with zero tools; loud if it happens
-            log.warning("ignoring tool call %r at M0", ev.name)
-        elif isinstance(ev, Done):
-            log.info("brain done: %s", ev.usage)
-        elif isinstance(ev, Error):
-            err = ev.kind
-            log.error("brain error/%s: %s", ev.kind, ev.detail)
+    stream = brain.converse(session, utterance, [])           # M0: zero tools
+    try:
+        async for ev in stream:
+            if isinstance(ev, TextDelta):
+                parts.append(ev.text)
+                if on_delta:
+                    on_delta(ev.text)
+                print(ev.text, end="", flush=True)
+            elif isinstance(ev, ToolCall):   # impossible with zero tools; loud if it happens
+                log.warning("ignoring tool call %r at M0", ev.name)
+            elif isinstance(ev, Done):
+                log.info("brain done: %s", ev.usage)
+            elif isinstance(ev, Error):
+                err = ev.kind
+                log.error("brain error/%s: %s", ev.kind, ev.detail)
+    finally:
+        # Contract B (spec/20): the orchestrator closes the generator deterministically, so an
+        # adapter's `finally`/`async with` releases the provider stream AT the abort. Held
+        # open, a dismissed turn keeps billing tokens we will never show anyone.
+        await stream.aclose()
     if parts:
         print()
     return "".join(parts).strip(), err
 
 
 def latency_table(trace) -> str:
-    """Render per-turn latencies from an event trace against the spec/40 targets.
-    Printed at the end of every live session and every replay case (docs/04 §7)."""
+    """Render per-turn latencies from an event trace against the targets (spec/schemas/
+    targets.json — one source, D25). Printed at the end of every live session and every replay
+    case (docs/04 §7)."""
+    from bridge.config import load_schemas
+    tg = load_schemas()["targets"]["targets"]
+    # 'word' carries a [measured] tag, not a '<', because first_word is a diagnostic, not a
+    # gate (D25): under generate-then-play it is a reply-length proxy, so a fixed ceiling on it
+    # would be a length cap wearing a stopwatch's clothes.
     out = [f"{'turn':<6}{'wake->awake':>12}{'eos->feedback':>15}{'eos->word':>11}"
-           "   (targets <300 / <1500 / <4000 ms, spec/40)"]
+           f"   (wake<{tg['wake_ack']['ms']} / feedback<{tg['feedback']['ms']} / "
+           f"word {tg['first_word']['ms']}[measured] ms, targets.json)"]
     wake_t = awake = cur = None
     turns: list[dict] = []
     for t, ev, detail in trace:
@@ -179,7 +199,10 @@ def latency_table(trace) -> str:
             cur = {"eos": t, "awake": awake, "fb": None, "word": None}
             turns.append(cur)
             awake = None
-        elif cur is not None and ev in ("earcon", "speak"):
+        # 'thinking' counts as feedback now (D25): the overlay state change is perceptible
+        # feedback (D16) and on a normal turn it is the FIRST of the three, so the column
+        # finally reflects the screen instead of only the audio path.
+        elif cur is not None and ev in ("thinking", "earcon", "speak"):
             if cur["fb"] is None:
                 cur["fb"] = (t - cur["eos"]) * 1000
             if ev == "speak" and cur["word"] is None:
@@ -208,9 +231,12 @@ class Orchestrator:
         self.bc = broadcaster or Broadcaster(on_dismiss=self._dismiss.set)
         self.trace: list[tuple[float, str, str]] = []    # (t, event, detail) — latency_table
         self.session = Session(id="boot")
-        self.audible = True                     # has this turn produced sound yet?
+        self.fed_back = True                    # has this turn recorded perceptible feedback?
+                                                # True at rest so a stray mark before any turn
+                                                # cannot publish; reset to False per turn.
         self.working = threading.Timer(0, lambda: None)
         self.t_eos = time.perf_counter()        # spec/40 clock: VAD declared the turn over
+        self._loop: asyncio.AbstractEventLoop | None = None   # see _run_async()
         self.pump: OutputPump | None = None
         self.mic = None
         self.vad: SileroVAD | None = None
@@ -248,6 +274,29 @@ class Orchestrator:
         rather than in whichever caller remembered to blank first."""
         self.bc.publish(m_state(name))
 
+    def _run_async(self, coro):
+        """Run a coroutine on the daemon's ONE long-lived event loop, and block until it is
+        done. This is the sync loop's only door into asyncio.
+
+        Every turn used to get a fresh `asyncio.run()`, which quietly made connection reuse
+        impossible for **every** provider rather than just B1: an HTTP connection pool belongs
+        to the loop that created it, and that loop died with the turn. So each turn paid a new
+        TCP+TLS handshake on the end-of-speech -> first-word path, and no adapter could have
+        avoided it however well written. One loop for the process's life is the fix, and it is
+        the orchestrator's to give — hence Contract B's one-loop guarantee (spec/20); what an
+        adapter keeps across turns is then its own business.
+
+        `serve()` deliberately stays synchronous. Making it a coroutine looks tempting and is
+        a trap: mic reads, the wake model, the VAD, whisper and Kokoro are all blocking C
+        calls, so an async `serve()` would starve the loop unless every one of them were
+        pushed to an executor — a rewrite of the daemon to save a thread.
+        """
+        if self._loop is None:
+            self._loop = asyncio.new_event_loop()
+            threading.Thread(target=self._loop.run_forever, name="gemma-brain",
+                             daemon=True).start()
+        return asyncio.run_coroutine_threadsafe(coro, self._loop).result()
+
     def _dismissed(self) -> bool:
         """Has the overlay reported a dismiss since we last looked? Consumes the signal."""
         if self._dismiss.is_set():
@@ -259,18 +308,29 @@ class Orchestrator:
         """The Event a streaming brain call races against (the abort seam in `_drive`)."""
         return self._dismiss
 
-    # --- feedback bookkeeping (D11: something audible < 1.5 s after end of speech) ---
+    # --- feedback bookkeeping (D11: something PERCEPTIBLE < 1.5 s after end of speech) ---
 
-    def _mark_audible(self, what: str) -> None:
-        # ponytail: this check-then-set races the working-timer thread — worst case a
-        # duplicate 'feedback' latency line (debug-only, spec/40); not worth a lock for an
-        # instrument reading, and the pre-existing double-log is equally benign.
-        self.working.cancel()                   # no-op if it already fired
-        if not self.audible:
-            self.audible = True
+    def _feedback(self, what: str) -> None:
+        """Record time-to-first-perceptible-feedback, ONCE per turn (D11/D16/D25).
+        Perceptible = the overlay's flip to THINKING, an earcon, or the first spoken word —
+        whichever lands first. Since D23 the screen is the primary surface, so on a normal
+        turn the near-instant THINKING state IS the feedback; the 'working' earcon is the
+        speech-mode audio fallback. The instrument used to credit only AUDIO, so it reported
+        our own 1.4 s working-timer every turn and gave the screen zero credit — a headset-era
+        measurement outliving the headset (D25)."""
+        # ponytail: check-then-set races the working-timer thread — worst case a duplicate
+        # latency line, not worth a lock for an instrument reading.
+        if not self.fed_back:
+            self.fed_back = True
             ms = (time.perf_counter() - self.t_eos) * 1000
             self.bc.publish(m_latency("feedback", ms))
-            log.info("audible feedback (%s) %.0f ms after end of speech", what, ms)
+            log.info("perceptible feedback (%s) %.0f ms after end of speech", what, ms)
+
+    def _mark_audible(self, what: str) -> None:
+        """An AUDIBLE event happened — cancel the pending working earcon (the turn no longer
+        needs it) and record feedback if nothing has yet."""
+        self.working.cancel()                   # no-op if it already fired
+        self._feedback(what)
 
     def _working_ping(self) -> None:
         # Timer thread — pump.play is thread-safe. THINKING outlived the feedback
@@ -367,9 +427,11 @@ class Orchestrator:
     def _turn(self, audio):
         """THINKING → SPEAKING, or held (shown, not spoken), for one utterance. Returns the
         next utterance's audio — only a barge-in produces one now — or None to end the chain,
-        after which the answer dwells on the island until IDLE blanks it."""
+        after which the answer stays on the island until the overlay hides it (D24)."""
+        self.fed_back = False
         self._ev("thinking", show="[thinking]")
-        self.audible = False
+        self._feedback("overlay thinking")      # D25: the screen is the feedback now (D23) —
+                                                # near-instant, and finally credited
         self.working = threading.Timer(WORKING_AFTER_S, self._working_ping)
         self.working.daemon = True
         self.working.start()
@@ -382,7 +444,7 @@ class Orchestrator:
             return None                         # ends the chain; the wake watch resumes
         self._ev("transcript", text, show=f"> {text}")
 
-        reply, err = asyncio.run(_drive(
+        reply, err = self._run_async(_drive(
             self.brain, self.session, text,
             on_delta=lambda d: self.bc.publish(m_response(delta=d)),
             abort=self._abort_flag(),
@@ -661,6 +723,45 @@ def _selfcheck() -> None:
     reply, err = asyncio.run(_drive(FakeReply("Fine."), Session(id="t"), "hi"))
     assert (reply, err) == ("Fine.", None), (reply, err)
 
+    # ONE event loop for the process, not one per turn (spec/20 adapter lifetime). A per-turn
+    # loop made connection reuse impossible for EVERY provider, not just B1 — an HTTP pool
+    # belongs to the loop that built it, and that loop died with the turn.
+    loops = Orchestrator(brain=object(), broadcaster=_Rec())
+
+    async def _which():
+        return asyncio.get_running_loop()
+
+    first_loop = loops._run_async(_which())
+    assert loops._run_async(_which()) is first_loop, "each turn built a fresh event loop"
+    assert first_loop.is_running(), \
+        "the brain loop must still be alive BETWEEN turns — that is the whole point of it"
+
+    # ...and an aborted turn must CLOSE the brain's stream, not merely stop reading it. Driven
+    # through _run_async deliberately: on the long-lived loop there is no per-turn
+    # `shutdown_asyncgens` to close an abandoned generator, so only the explicit aclose() in
+    # _collect (and _drive waiting for the unwind) can do it. Left open, a dismissed turn goes
+    # on generating tokens nobody will ever see.
+    closed: list[str] = []
+
+    class _HangingWatched:
+        async def converse(self, session, utterance, tools):
+            try:
+                await asyncio.sleep(30)
+                yield TextDelta("should never arrive")   # pragma: no cover
+            finally:
+                # Tearing down a real HTTPS stream is not instantaneous. Without the delay
+                # this check passes by winning a race rather than by the fix being present.
+                await asyncio.sleep(0.05)
+                closed.append("closed")
+
+    flag2 = threading.Event()
+    threading.Timer(0.15, flag2.set).start()
+    reply, err = loops._run_async(
+        _drive(_HangingWatched(), Session(id="t"), "hi", abort=flag2))
+    assert (reply, err) == ("", "aborted"), (reply, err)
+    assert closed == ["closed"], \
+        "an aborted turn must close the brain's stream before _drive returns"
+
     # D24: the dismiss signal is no longer a key this process owns — it arrives as a Contract P
     # line from the Teleprompter, which holds bare Esc because it alone knows when it is on
     # screen. Drive the WHOLE seam: a line off the wire must cancel a streaming brain call
@@ -700,9 +801,37 @@ def _selfcheck() -> None:
     assert len(lines) == 3, tbl
     assert "100" in lines[1] and "1200" in lines[1] and "2500" in lines[1], lines[1]
     assert lines[2].count("800") == 2 and "-" in lines[2], lines[2]
+    # The header quotes targets.json, not four hardcoded copies (D25), and first_word is a
+    # measured diagnostic, not a gate — so it is tagged, never a "<".
+    assert "targets.json" in lines[0] and "[measured]" in lines[0], lines[0]
+
+    # D25 reframe: the overlay's flip to THINKING is perceptible feedback (D16), and on a
+    # normal turn it lands FIRST — so the feedback column must credit it, not the later earcon.
+    # Without 'thinking' in the crediting set the instrument reports our own 1.4 s working
+    # timer and gives the screen zero credit (the headset-era measurement it replaces).
+    tbl2 = latency_table([(0.0, "eos", ""), (0.05, "thinking", ""),
+                          (1.4, "earcon", "working"), (3.0, "speak", "")])
+    assert "50" in tbl2.splitlines()[1], tbl2   # feedback = 50 ms (thinking), not 1400
+
+    # ...and the runtime recorder agrees: _feedback publishes ONCE, at the earliest event, and
+    # a later _mark_audible does not double-count. Guards the fed_back once-only flag.
+    class _Lat:
+        started = False
+        def __init__(self): self.fb = []
+        def publish(self, m):
+            if m.get("type") == "latency" and m["metric"] == "feedback":
+                self.fb.append(m["ms"])
+
+    fb = Orchestrator(brain=object(), broadcaster=_Lat())
+    fb.fed_back = False
+    fb.t_eos = time.perf_counter()
+    fb._feedback("overlay thinking")            # screen feedback, near-instant
+    fb.working = threading.Timer(0, lambda: None)
+    fb._mark_audible("'working' earcon")        # the later audio event must NOT re-publish
+    assert len(fb.bc.fb) == 1, f"feedback recorded {len(fb.bc.fb)} times, must be once"
 
     print("selfcheck OK: speak/hold split, capture endpoint, barge-in counter, "
-          "error lines, latency table")
+          "error lines, latency table + targets, feedback credits the screen (D25)")
 
 
 def main() -> None:

@@ -14,7 +14,7 @@ import os
 import sys
 from typing import AsyncIterator
 
-from .base import Done, Error, Session, TextDelta, ToolCall, ToolSpec
+from .base import Done, Error, Session, TextDelta, ToolCall, ToolSpec, ssl_context
 
 # Default model per the standing rule; override for the voice loop (latency/cost) via env.
 # Sensible alternatives for an always-listening assistant: claude-sonnet-5, claude-haiku-4-5.
@@ -86,6 +86,29 @@ class ClaudeBrain:
     def __init__(self, model: str = DEFAULT_MODEL, api_key: str | None = None):
         self.model = model
         self._api_key = api_key or _get_key()
+        self._client = None          # built on first use, then kept — see _client_once()
+
+    def _client_once(self):
+        """One client for this adapter's life, resting on Contract B's one-loop guarantee
+        (spec/20). It used to be rebuilt per turn, which cost two separate things on the
+        end-of-speech -> first-word path: a fresh TCP+TLS handshake (unavoidable then, since
+        an httpx pool belongs to the loop that made it and the loop died with the turn), and
+        ~190 ms of plain CPU re-reading this machine's CA bundle. Only the second is fixed
+        here; the first is fixed by there being one loop at all.
+
+        `DefaultAsyncHttpxClient`, NOT a bare `httpx.AsyncClient`: the SDK passes a supplied
+        client through verbatim, and a bare one silently swaps the SDK's 600 s read timeout
+        for httpx's 5 s default — which would abort exactly the slow-first-token turns this
+        is meant to make faster (this repo has already recorded a 9.1 s cold turn).
+        """
+        import anthropic
+
+        if self._client is None:
+            self._client = anthropic.AsyncAnthropic(
+                api_key=self._api_key,
+                http_client=anthropic.DefaultAsyncHttpxClient(verify=ssl_context()),
+            )
+        return self._client
 
     async def converse(
         self,
@@ -100,9 +123,7 @@ class ClaudeBrain:
             yield Error("auth", "no API key (keyring service 'gemma' or ANTHROPIC_API_KEY)")
             return
 
-        import anthropic
-
-        client = anthropic.AsyncAnthropic(api_key=self._api_key)
+        client = self._client_once()
         messages = list(session.history) + [{"role": "user", "content": utterance}]
         kwargs = dict(
             model=self.model,
@@ -157,7 +178,29 @@ def _selfcheck() -> None:
     assert _classify_badrequest("input length and max_tokens exceed context limit") == "context"
     assert _classify_badrequest("messages.0.role: unexpected value") == "unknown"
     assert DEFAULT_SYSTEM and "voice" in DEFAULT_SYSTEM.lower()
-    print("selfcheck OK: error-kind classifier + defaults")
+
+    # Client lifetime (spec/20 adapter lifetime). No network: every cost here is local CPU.
+    import time
+
+    assert ssl_context() is ssl_context(), "the CA bundle must be parsed once per process"
+    brain = ClaudeBrain(api_key="x")
+    first = brain._client_once()                    # also warms `import anthropic` (~600 ms,
+    assert brain._client_once() is first, \
+        "the client must be built once and kept"    # ...paid once at startup, not per turn)
+    # Time a genuinely FRESH build, imports warm — this is the per-turn cost that used to be
+    # paid on every question. ~190 ms unmemoised vs ~0.2 ms memoised (measured 2026-07-22),
+    # so 50 ms sits ~4x under the failure and ~250x over the pass.
+    t0 = time.perf_counter()
+    ClaudeBrain(api_key="x")._client_once()
+    build_ms = (time.perf_counter() - t0) * 1000
+    assert build_ms < 50, f"building the client took {build_ms:.0f} ms — CA bundle reloaded?"
+    # A supplied http_client is used VERBATIM by the SDK, so a bare httpx.AsyncClient would
+    # silently swap the SDK's 600 s read timeout for httpx's 5 s default and start killing
+    # slow first tokens — the exact turns this whole change exists to speed up.
+    assert first.timeout.read >= 60, f"custom client dropped the SDK read timeout: {first.timeout}"
+
+    print("selfcheck OK: error-kind classifier, defaults, client built once with the "
+          "trust store memoised and the SDK's long read timeout intact")
 
 
 def main() -> None:

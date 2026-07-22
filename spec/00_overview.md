@@ -104,6 +104,10 @@ events), never a spoken mode the user must remember to enter or exit.
 *(Amended by D16: "audible feedback" is now "perceptible feedback" at the desk —
 earcon, first spoken word, or overlay state change; audible alone must still satisfy
 the guarantee away from the screen.)*
+*(Amended by D25: the 4 s / 5 s first-word numbers are **demoted from pass/fail gates to
+measured diagnostics** — under generate-then-play they are a reply-length proxy, and D23 made
+the streaming text, not the first spoken word, the first feedback. The fast-**feedback**
+guarantee stands and is now met by the screen. All numbers live in `spec/schemas/targets.json`.)*
 
 **D12 (2026-07-18): dictation joins as an assistant-internal feature.**
 The project re-centres on bridge + brain + tools: audio I/O runs on commodity gear
@@ -404,4 +408,34 @@ it knows.
 
 Source: the adversarial review of 2026-07-22 (G-01, G-02, P-01's class, and STATE's own
 refactor brief — *"a fact living on two sides of a seam, and one side not being told"*).
+
+**D25 (2026-07-22): latency targets re-derived for the desk, and made a single source.** The
+acceptance criteria are **D11 (2026-07-12) — written for the eyes-free headset era**, and never
+re-derived after D18 cancelled the headset or D23 made the screen the spine. Audited 2026-07-22.
+Two things were wrong and one was messy:
+
+- **`first_word` (< 4 s B1 / < 5 s B2) was a latency gate that is really a reply-length cap.**
+  Under generate-then-play (D11) the first spoken word waits for the *whole* reply to be
+  generated and synthesised, so its latency scales with reply length — the acceptance run fits
+  ≈ 2100 ms + ~45 ms/output token, i.e. the 4 s "gate" is a ceiling of ~42 tokens dressed as a
+  stopwatch. And since D23 the streaming text on the island, not the first spoken word, is the
+  first feedback. **Demoted to `measured`:** recorded per turn as a diagnostic, never pass/fail.
+  M0's acceptance test already treated it this way ("measured when speech on, not pass/fail");
+  this makes the spec and the overlay agree. A first-word *target* becomes meaningful again only
+  with sentence-streamed TTS (parked, D11) — reopen that with the measured number, not on feel.
+- **The `feedback` gate measured the headset, not the desk.** The instrument credited only
+  *audible* events, so it reported our own 1.4 s `working`-earcon timer every turn and gave the
+  screen zero credit — even though D16 says an overlay state change is perceptible feedback. The
+  instrument now credits the near-instant flip to THINKING; the earcon is the speech-mode
+  fallback. The fast-feedback guarantee stands and is now honestly met by the screen.
+- **The numbers lived in four places** (spec/40 prose · `Overlay.qml` · the orchestrator's
+  latency table · scattered comments) and had already drifted once (frozen docs/02 still carry
+  the pre-D11 values). Consolidated into **`spec/schemas/targets.json`** (executable truth, hard
+  rule 3), each target carrying its value, its `kind` (`floor` / `gate` / `measured`), and its
+  clock. The overlay's readout and the latency table load it; the reclassification is now *data*
+  the renderer obeys, so first_word cannot be coloured over-budget by a stray literal.
+
+Kept unchanged and still sound: the 300 ms acknowledgement floors (wake, key-press), the 250 ms
+barge-in stop, and the 1.5 s feedback *principle*. Source: the gates audit of 2026-07-22
+(follows the B-01 finding, which is what surfaced the reply-length relationship in the log).
 

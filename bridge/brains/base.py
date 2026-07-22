@@ -6,8 +6,29 @@ calls to the orchestrator rather than executing anything themselves (B3 excepted
 """
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Protocol, Union, runtime_checkable
+
+
+@functools.cache
+def ssl_context():
+    """The machine's TLS trust store, parsed ONCE for the life of the process.
+
+    Deliberately provider-agnostic and deliberately NOT in an adapter: this describes this
+    computer, not Anthropic. Every cloud SDK we are likely to sit behind Contract B —
+    Anthropic, Groq (dictation cleanup, D19), OpenAI — is built on httpx, and httpx rebuilds
+    this per client with no memoisation of its own. Measured on the PC 2026-07-22: ~190 ms of
+    main-thread CPU each time, re-reading the CA bundle from disk, burned on the
+    end-of-speech -> first-word path before a single packet moves. Reused, it is ~0.2 ms.
+
+    Any HTTP-based adapter should pass this to its client. A local B2 (Ollama over plain
+    HTTP) needs none of it, which is why this is a helper rather than something the contract
+    obliges anyone to use.
+    """
+    import httpx
+
+    return httpx.create_ssl_context()
 
 # A Contract T registry entry — the shape of an item in spec/schemas/tools.json,
 # loaded (hard rule 3), never redefined here. M0 passes an empty list.
@@ -74,5 +95,16 @@ class BrainAdapter(Protocol):
         tools: list[ToolSpec],
     ) -> AsyncIterator[BrainEvent]:
         """Stream BrainEvents for one turn. Implemented as an async generator, so the
-        orchestrator drives it with `async for ev in brain.converse(...)`."""
+        orchestrator drives it with `async for ev in brain.converse(...)`.
+
+        ONE LOOP PER ADAPTER (spec/20). Every call for the life of an adapter instance is
+        awaited on the same event loop, so an adapter MAY build a client, connection pool or
+        session once and keep it across turns. This is a guarantee the orchestrator owes the
+        adapter, not the other way round: it used to run each turn in its own `asyncio.run()`,
+        and because an HTTP connection pool belongs to the loop that created it, no adapter
+        of any provider could reuse a connection even if it tried.
+
+        The orchestrator closes this generator deterministically (`aclose()`) when a turn is
+        aborted, so `finally`/`__aexit__` blocks are the right place to release a stream —
+        they run at the abort, not whenever the GC gets round to it."""
         ...

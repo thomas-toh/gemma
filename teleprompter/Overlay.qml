@@ -438,11 +438,16 @@ Window {
 
     // ---- latency readout: D13's instrument for the M0 acceptance run ----
     // status.json calls this "not user-facing chrome by default", so it is off unless asked
-    // for (--latency, or the tray toggle). spec/40 targets: perceptible feedback < 1500 ms,
-    // first spoken word < 4000 ms — a reading past its target renders at full strength so a
-    // miss is obvious at a glance during the run.
-    readonly property int fbTarget: 1500
-    readonly property int fwTarget: 4000
+    // for (--latency, or the tray toggle). Targets come from spec/schemas/targets.json via the
+    // `targets` context property (D25) — no longer hardcoded here, so a number cannot be quoted
+    // two ways. A reading past a GATE renders at full strength so a miss is obvious at a glance.
+    readonly property int fbTarget: targets.feedback.ms
+    readonly property int fwTarget: targets.first_word.ms
+    // first_word is 'measured', not a gate (D25): under generate-then-play it is a reply-length
+    // proxy, so the readout must show it neutrally and NEVER flag it red. If targets.json ever
+    // reclassifies it to a gate, this expression starts colouring it — the reclassification is
+    // data, not something baked into the renderer.
+    readonly property bool fwIsGate: targets.first_word.kind !== "measured"
 
     FontMetrics { id: latencyFm; font: latencyText.font }
 
@@ -452,7 +457,8 @@ Window {
         visible: overlay.showLatency && (overlay.feedbackMs > 0 || overlay.firstWordMs > 0)
         x: root.islandX + root.animW - root.flare - root.padSide - width
         y: root.padTop
-        color: (overlay.feedbackMs > root.fbTarget || overlay.firstWordMs > root.fwTarget)
+        color: (overlay.feedbackMs > root.fbTarget
+                || (root.fwIsGate && overlay.firstWordMs > root.fwTarget))
                ? Theme.textPrimary : Theme.textMuted
         font.family: fontFamily
         font.pixelSize: 11

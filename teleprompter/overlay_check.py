@@ -41,6 +41,7 @@ from PySide6.QtCore import QObject, QUrl  # noqa: E402
 from PySide6.QtGui import QFontDatabase, QGuiApplication  # noqa: E402
 from PySide6.QtQml import QQmlApplicationEngine  # noqa: E402
 
+from teleprompter.decode import targets  # noqa: E402
 from teleprompter.model import OverlayModel  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
@@ -70,6 +71,7 @@ def main() -> int:
     engine.rootContext().setContextProperty("overlay", model)
     engine.rootContext().setContextProperty("fontFamily", "Inter")
     engine.rootContext().setContextProperty("reducedMotion", False)
+    engine.rootContext().setContextProperty("targets", targets())
     engine.load(QUrl.fromLocalFile(str(HERE / "Overlay.qml")))
     assert engine.rootObjects(), "Overlay.qml failed to load"
     win = engine.rootObjects()[0]
@@ -173,6 +175,22 @@ def main() -> int:
     assert float(latency.property("x")) >= text_right - 0.5, (
         f"latency readout starts at x={latency.property('x'):.0f} but the reply runs to "
         f"{text_right:.0f} — the instrument overlaps the text")
+
+    # --- the reclassification is DATA the renderer obeys (D25) ---
+    # first_word is 'measured', not a gate, so a first-word reading way over target must NOT
+    # colour the readout — while a feedback reading over its gate MUST. If someone flips the
+    # colour expression back to treating first_word as a gate, the first assert fails.
+    tg = targets()
+    assert tg["first_word"]["kind"] == "measured", "test fixture assumes first_word is measured"
+    model.apply({"type": "latency", "metric": "feedback", "ms": 200})       # well under gate
+    model.apply({"type": "latency", "metric": "first_word", "ms": 99999})   # absurdly over
+    _pump(app, 60)
+    calm = latency.property("color")
+    model.apply({"type": "latency", "metric": "feedback", "ms": 99999})     # now over the gate
+    _pump(app, 60)
+    hot = latency.property("color")
+    assert calm != hot, ("first_word over target coloured the readout — it is 'measured', "
+                         "only the feedback GATE may (D25)")
 
     # --- the reply must not cut the prompt off mid-reveal (D24) ---
     # The live defect: `bodyText` flipped to the reply on the FIRST brain delta, the prefix

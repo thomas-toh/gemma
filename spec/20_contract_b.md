@@ -1,6 +1,6 @@
 # Spec 20 — Contract B: brain adapters
 
-**Last reconciled: 2026-07-12** · Build progress: [STATE.md](../STATE.md) · Rationale: docs/02 §3
+**Last reconciled: 2026-07-22** · Build progress: [STATE.md](../STATE.md) · Rationale: docs/02 §3
 
 *(Interface contract. Build status + the standalone B1 API smoke test
 (`scripts/b1_smoke.py`) live in STATE, Tracks G & B.)*
@@ -24,6 +24,27 @@ Rules: adapters MUST stream (no buffer-then-return); MUST surface tool calls to 
 orchestrator rather than executing anything themselves (B3 excepted, see below); MUST
 map provider errors to the shared `Error` kinds (auth · rate_limit · context ·
 unavailable · malformed_tool_call · unknown).
+
+**Adapter lifetime (added 2026-07-22).** Two guarantees the *orchestrator* owes every
+adapter, provider-agnostic by design — they exist so that no adapter has to rebuild
+per-turn what it could hold for a session:
+
+- **One event loop per adapter.** Every `converse()` for the life of an adapter instance is
+  awaited on the same event loop, so an adapter MAY create a client, connection pool or
+  session once and reuse it. This was not true until 2026-07-22: each turn ran in its own
+  `asyncio.run()`, and since an HTTP connection pool belongs to the loop that made it, *no*
+  adapter could reuse a connection even by trying. Cost of that, measured on the PC: a fresh
+  TCP+TLS handshake every turn, on top of ~190 ms of CPU re-parsing the CA bundle — both on
+  the end-of-speech → first-word path. `bridge/brains/base.py::ssl_context()` memoises the
+  trust store for any HTTP-based adapter; it is a helper, not an obligation (a local B2 over
+  plain HTTP wants none of it).
+- **Deterministic close.** The orchestrator calls `aclose()` on the generator when a turn is
+  aborted, so `finally` / `async with` blocks release the provider stream at the abort rather
+  than whenever the GC notices. An aborted turn must actually *drop* the request, not merely
+  stop reading it.
+
+Neither is a change to the `converse()` signature, so no adapter needs updating; B1 takes
+advantage of both.
 
 ## Adapters
 

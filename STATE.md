@@ -26,9 +26,33 @@ deleting the code they lived in rather than patching it. G-08 was adjudicated *k
 broadcaster · orchestrator · decode · overlay_check; **replay 4/4 on the PC**, transcripts
 verbatim; **D24 verified live** (2026-07-22) — prompt gate, Esc on a displayed answer, Esc
 mid-thought, and Esc handed back to other apps when the island is hidden.
-**Remaining:** G-03 · G-05 · G-06 · G-07 · P-01–P-04 · U-01 · U-02 · B-01 · B-02 ·
-S-02–S-09 · X-01. B-01 (a fresh API client + event loop per turn) is the one remaining *class*
-fix and is the next decision.
+**B-01 done (2026-07-22), API-agnostically** (Thomas's constraint: Gemma will run several
+providers, so the fix had to be one). The daemon now keeps **one event loop for the process**
+(`Orchestrator._run_async`) instead of an `asyncio.run()` per turn — a per-turn loop made
+connection reuse impossible for *every* provider, since an HTTP pool belongs to the loop that
+made it. That, plus deterministic `aclose()` on abort, is written into **spec/20 as an adapter
+lifetime guarantee the orchestrator owes**, not as B1 behaviour. `base.py::ssl_context()`
+memoises the machine's CA bundle for any HTTP adapter (Anthropic · Groq · OpenAI all sit on
+httpx, which rebuilds it per client): **measured 187 ms per turn of main-thread CPU, recovered**
+— guarded by a timing assertion, verified to fail at 187 ms when reverted. `serve()` stays
+synchronous on purpose: mic, wake model, VAD, whisper and Kokoro are all blocking C calls, so
+an async `serve()` would starve the loop unless every one moved to an executor.
+**D25 done (2026-07-22): latency gates audited + made a single source.** Thomas's call — the
+D11 numbers were headset-era (2026-07-12) and never re-derived after D18/D23. `first_word`
+(4 s/5 s) demoted from pass/fail **gate** to **measured** diagnostic (under generate-then-play
+it is a reply-length proxy, ~45 ms/token; and the streaming text, not the first word, is the
+first feedback since D23). The `feedback` instrument now credits the overlay's flip to THINKING
+(D16) instead of only audio, so the replay table's `eos->feedback` column dropped from ~1400 ms
+(our own working-timer) to **0–1 ms** (the screen). All numbers consolidated into
+`spec/schemas/targets.json` (they had drifted across four files); the overlay readout + latency
+table load it, and the `kind` reclassification is data both obey — guarded in decode, overlay
+and orchestrator selfchecks, each verified to fail when first_word is flipped back to a gate.
+**G-07 folded in** (stale derived-constant comments in `listen.py`, deleted).
+**Remaining review items:** G-03 · G-05 · G-06 · P-01–P-04 · U-01 · U-02 · B-02 · S-02–S-09 · X-01.
+**Next (Thomas's sequencing):** sentence-streamed TTS — start speaking the moment Claude starts
+writing, cut at sentence terminators (`synth()` is already per-sentence). Forces the speak/hold
+decision (M0.5's model-tagged split, or drop the heuristic) because the length is no longer
+known before speech starts.
 
 | # | Action | Track | Why now |
 |---|--------|-------|---------|
@@ -185,8 +209,18 @@ Two open questions owed a decision:
   latency and should not be quoted as if it were.
   **First spoken word** (measured, not pass/fail post-D23): 7/10 under the 4 s target · median
   ≈ 3320 ms · min 2704 · max 5992. Breaches: turn 1 **4681** (cold-start artefact — but a big
-  improvement on the 9142 ms of the previous run), turn 4 **4631**, turn 10 **5992**. Turns 4
-  and 10 are NOT cold and are unexplained — the outstanding question from this run.
+  improvement on the 9142 ms of the previous run), turn 4 **4631**, turn 10 **5992**.
+  **~~Turns 4 and 10 are NOT cold and are unexplained.~~ EXPLAINED 2026-07-22 — and the answer
+  is uncomfortable.** Pairing `brain done` usage lines with `first spoken word` lines in
+  `logs/gemma.log` for that run, by output tokens: 19→2704 · 29→2910 · 33→3215 · 30→3299 ·
+  45→3321 · 56→3575 · 49→4631 · 72→4875 · 80→5992. The two "outliers" are simply **the two
+  longest replies**, and the run fits ≈ **2100 ms + 45 ms per output token**. That is exactly
+  what D11's generate-then-play guarantees: first word = STT + the WHOLE reply generated + the
+  WHOLE reply synthesised, so first-word latency is a function of reply length by construction.
+  Nothing was anomalous. **The real consequence: the 4 s first-word target is not a latency
+  target at all under generate-then-play — it is a reply-length cap** (~42 output tokens). Any
+  serious attempt to hold it wants sentence-streamed TTS, which is parked under D11
+  ("feedback beats speed") and should be reopened *with this number*, not on feel.
   **Press → `awake` earcon: 1 ms** against a 300 ms target.
   **Instrument defect found by the run and fixed the same day:** only 4 of 10 turns recorded a
   press→indication figure. Six turns were deliberate **key-interrupts** (Thomas pressing the
@@ -518,7 +552,12 @@ Two open questions owed a decision:
   in the preamble above); **Teleprompter formalised (D19): component P · Contract P ·
   front/back split; `status.json` → v0.2.0 (+`error` message)**; **two-door
   interaction model recorded (D20)**; **Rust port evaluated & deferred with re-open
-  triggers + anti-relitigation clause (D21)**; docs 01, 02, 04 frozen
+  triggers + anti-relitigation clause (D21)**; **D24 — Teleprompter owns the display; Contract P
+  gains the `dismiss` upstream verb; `status.json` → v0.3.0 (`clearsTurn`/`upstream` promoted to
+  loaded data); spec/50 rule 12; spec/20 adapter-lifetime guarantees (one loop, deterministic
+  close)**; **D25 — latency gates re-derived for the desk: `first_word` demoted to `measured`,
+  `feedback` credits the screen, all numbers consolidated into `spec/schemas/targets.json`**;
+  docs 01, 02, 04 frozen
 - **In flight:** —
 - **Next:** —
 

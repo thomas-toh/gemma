@@ -31,7 +31,7 @@ from PySide6.QtCore import QAbstractNativeEventFilter, QUrl              # noqa:
 from PySide6.QtQml import QQmlApplicationEngine                          # noqa: E402
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon              # noqa: E402
 
-from teleprompter.decode import HOST, PORT, m_dismiss                    # noqa: E402
+from teleprompter.decode import HOST, PORT, m_dismiss, targets           # noqa: E402
 from teleprompter.feed import Feed                                       # noqa: E402
 from teleprompter.model import OverlayModel                              # noqa: E402
 from teleprompter.tray import Tray                                       # noqa: E402
@@ -217,6 +217,7 @@ def main() -> int:
     engine.addImportPath(str(Path(__file__).resolve().parent.parent))
     engine.rootContext().setContextProperty("overlay", model)   # not "model": Repeater shadows it
     engine.rootContext().setContextProperty("fontFamily", pick_font())
+    engine.rootContext().setContextProperty("targets", targets())   # latency targets (D25)
     reduce = reduced_motion()
     engine.rootContext().setContextProperty("reducedMotion", reduce)
     if reduce:

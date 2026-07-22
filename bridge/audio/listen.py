@@ -39,10 +39,13 @@ NOSPEECH_MS = 5000                                # spec/40: give up if nothing 
 PREROLL_MS = 200                                  # pre-roll from ring buffer (tune: onset vs
                                                   # bleeding the wake word into the transcript)
 
-SILENCE_CHUNKS = (SILENCE_MS + VAD_CHUNK_MS - 1) // VAD_CHUNK_MS   # ceil -> 32 (~1024 ms)
-MAX_CHUNKS = MAX_UTTERANCE_S * 1000 // VAD_CHUNK_MS                # 937 (~30 s)
-NOSPEECH_CHUNKS = NOSPEECH_MS // VAD_CHUNK_MS                      # 93 (~3 s)
-PREROLL_BLOCKS = PREROLL_MS // BLOCK_MS                            # 2 (~160 ms)
+# Derived chunk counts. No hand-computed values in the comments: they are the one part that
+# can lie (the give-up count read "93 (~3 s)" long after NOSPEECH_MS became 5000 → 156). The
+# selfcheck prints the live numbers instead.
+SILENCE_CHUNKS = (SILENCE_MS + VAD_CHUNK_MS - 1) // VAD_CHUNK_MS   # ceil: end-of-speech silence
+MAX_CHUNKS = MAX_UTTERANCE_S * 1000 // VAD_CHUNK_MS                # runaway cap
+NOSPEECH_CHUNKS = NOSPEECH_MS // VAD_CHUNK_MS                      # give up if speech never starts
+PREROLL_BLOCKS = PREROLL_MS // BLOCK_MS                            # pre-roll from the ring
 
 WHISPER_MODEL = "small.en"                        # spec/40 decision 2
 

@@ -63,21 +63,38 @@ IDLE ──wake──▶ LISTENING ──end-of-speech──▶ THINKING ──�
 > speak vs hold, plus TTS-safe formatting and speech normalization — so length isn't
 > guessed post-hoc. *(planned, M0.5)*
 
-## Latency acceptance criteria (M0/M1 gates, measured not vibes — spec/00 D11)
+## Latency targets (numbers in [`spec/schemas/targets.json`](schemas/targets.json), loaded — D11/D25)
 
-| Turn class | Metric | Target |
-|------------|--------|--------|
-| any | Wake detect → `awake` earcon | < 300 ms |
-| any | Ask-hotkey press → listening indication (overlay + earcon) | < 300 ms* |
-| any | End of speech → perceptible feedback (first spoken word, `working` earcon, or overlay THINKING — audible alone must satisfy this away from the screen; D16) | < 1.5 s |
-| no-tool answer | End of speech → first spoken word (B1) | < 4 s* |
-| no-tool answer | End of speech → first spoken word (B2) | < 5 s* |
-| tool turn | End of speech → starter-tool (Tier 2) action executed | < 1.5 s |
+The **values live in `targets.json`** (hard rule 3), loaded by the overlay's readout and the
+orchestrator's latency table; they had drifted across four files, so this table describes what
+each is and its **kind**, and never restates the number.
+
+**Kinds (D25).** `floor` = a sub-second responsiveness acknowledgement — a real product
+requirement independent of the screen. `gate` = a pass/fail feedback guarantee. `measured` =
+recorded per turn as a diagnostic, shown neutrally, **never pass/fail** — the overlay must not
+flag it over-budget.
+
+| Turn class | Metric | Kind |
+|------------|--------|------|
+| any | Wake detect → `awake` earcon (`wake_ack`) | floor |
+| any | Ask-hotkey press → listening indication (`press_ack`) | floor |
+| any | End of speech → perceptible feedback (`feedback`) — the overlay's flip to THINKING, the `working` earcon, or the first spoken word, whichever first (D16). Since D23 the screen is primary, so on a normal turn this is the near-instant THINKING state; the earcon is the speech-mode fallback. | gate |
+| no-tool answer | End of speech → first spoken word, B1 (`first_word`) / B2 (`first_word_b2`) | **measured** |
+| tool turn | End of speech → starter-tool (Tier 2) action executed (`tool_ack`) | gate |
 | tool turn | Completion of longer work | unbounded — ends with `task-complete`/`error` earcon |
-| any | Barge-in → TTS stopped | < 250 ms |
+| any | Barge-in → TTS stopped (`barge_stop`) | floor |
 
-*Provisional (D11) — confirm with the owed measurements (STATE: step-3 live mic test,
-B1 first-token re-run), then fix or amend with data.
+**Why first_word is `measured`, not a gate (D25).** Under generate-then-play (D11) the first
+spoken word cannot arrive until the *whole* reply is generated and synthesised, so first-word
+latency scales with reply length (~45 ms/output token, measured 2026-07-22) — it is a
+reply-length proxy, not a latency the system can tighten, and a fixed ceiling on it is a
+length cap wearing a stopwatch's clothes. It also stopped being the *first* feedback the moment
+D23 put the streaming reply text on the island. It is kept as a diagnostic, not a gate.
+Sentence-streamed TTS (parked, D11 "feedback beats speed") is what would make a first-word
+*target* meaningful again — reopen it with this number, not on feel.
+
+*The `floor`/`gate` numbers are still provisional against the owed live measurements (STATE:
+step-3 live mic test); confirm or amend the values in `targets.json` with data.
 
 **Clock (binding).** "End of speech" = the moment VAD *declares* the turn over. The
 silence timer (1 s) runs before this clock starts — it is a turn-taking cost, tuned

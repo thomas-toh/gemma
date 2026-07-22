@@ -35,6 +35,16 @@ def status_schema() -> dict:
 
 
 @lru_cache(maxsize=1)
+def targets() -> dict:
+    """spec/schemas/targets.json — the latency targets (hard rule 3), read straight from the
+    repo like status_schema() so the front-end stays decoupled from the daemon. The overlay's
+    readout quotes these instead of hardcoding 1500/4000, which used to live in four places."""
+    root = Path(__file__).resolve().parent.parent
+    raw = (root / "spec" / "schemas" / "targets.json").read_text(encoding="utf-8")
+    return json.loads(raw)["targets"]
+
+
+@lru_cache(maxsize=1)
 def known_types() -> frozenset[str]:
     """The 'type' consts the schema defines. Anything else is ignored (protocol: log once)."""
     return frozenset(d["properties"]["type"]["const"]
@@ -201,6 +211,14 @@ def _selfcheck() -> None:
     # the schema and this reducer teaching opposite rules for a day.
     assert clears_turn() == {"listening", "thinking"}, sorted(clears_turn())
     assert "idle" not in clears_turn(), "D24: idle means the daemon is free, not blank the island"
+
+    # Latency targets are loaded, not hardcoded (D25 — they had drifted across four files).
+    # The reclassification is DATA the overlay obeys: first_word is 'measured', so the readout
+    # must never flag it over-budget; feedback stays a pass/fail 'gate'.
+    tg = targets()
+    assert tg["first_word"]["kind"] == "measured", "D25: first_word is a diagnostic, not a gate"
+    assert tg["feedback"]["kind"] == "gate" and tg["feedback"]["ms"] == 1500
+    assert {t["kind"] for t in tg.values()} <= {"floor", "gate", "measured"}, "unknown target kind"
 
     # --- framing ---
     d = Decoder()
