@@ -120,21 +120,47 @@ async def _wait_flag(flag) -> None:
         await asyncio.sleep(0.05)
 
 
+async def _working_deadline(on_working, delay: float) -> None:
+    """Fire the 'working' earcon `delay` s into a brain turn, unless the turn finishes or is
+    dismissed first — in which case `_drive` cancels this task before it fires.
+
+    A loop task, NOT a `threading.Timer` (G-03). The Timer's `cancel()` was a no-op once its
+    callback had begun, so the earcon could sound into a turn already dismissed and cut; and it
+    ran on its own thread, which the dismiss path raced. Here the deadline lives on the SAME
+    loop as the brain call, so `_drive` cancelling it is deterministic: single-threaded, the
+    earcon has either fully fired or been cancelled — never half-way, never after the turn is
+    gone. This also removes the sibling window in `_speak` (a ping landing between the reply
+    playing and the timer being cancelled), because the deadline no longer outlives `_drive`."""
+    if delay > 0:
+        await asyncio.sleep(delay)
+    on_working()
+
+
 async def _drive(brain, session: Session, utterance: str, on_delta=None,
-                 abort=None) -> tuple[str, str | None]:
+                 abort=None, on_working=None, working_after: float = WORKING_AFTER_S
+                 ) -> tuple[str, str | None]:
     """Run one brain turn, racing it against the dismiss signal. This is THE abort seam:
     without it a dismiss could not interrupt THINKING, which is exactly when you most want
     to bail (a misheard prompt, a question you have thought better of). Cancelling the task
-    closes the stream, so the HTTP request is dropped rather than drained."""
+    closes the stream, so the HTTP request is dropped rather than drained.
+
+    `on_working`/`working_after` (G-03): the 'still working' earcon's deadline, run as a loop
+    task here rather than a free-running Timer, so it cannot fire after this turn ends."""
     turn = asyncio.create_task(_collect(brain, session, utterance, on_delta))
-    if abort is None:
-        return await turn
-    watch = asyncio.create_task(_wait_flag(abort))
-    done, pending = await asyncio.wait({turn, watch}, return_when=asyncio.FIRST_COMPLETED)
-    for p in pending:
-        p.cancel()
-    if turn in done:
-        return turn.result()
+    ping = (asyncio.create_task(_working_deadline(on_working, working_after))
+            if on_working is not None else None)
+    try:
+        if abort is None:
+            return await turn
+        watch = asyncio.create_task(_wait_flag(abort))
+        done, pending = await asyncio.wait({turn, watch}, return_when=asyncio.FIRST_COMPLETED)
+        for p in pending:
+            p.cancel()
+        if turn in done:
+            return turn.result()
+    finally:
+        if ping is not None:
+            ping.cancel()            # deterministic: same loop, so it has fired or it hasn't
     # Wait for the cancelled turn to finish unwinding before returning. Its `finally` is what
     # closes the provider's stream (below), and with one long-lived loop nothing else will:
     # `asyncio.run` used to shut down abandoned async generators at turn end, and there is no
@@ -234,7 +260,6 @@ class Orchestrator:
         self.fed_back = True                    # has this turn recorded perceptible feedback?
                                                 # True at rest so a stray mark before any turn
                                                 # cannot publish; reset to False per turn.
-        self.working = threading.Timer(0, lambda: None)
         self.t_eos = time.perf_counter()        # spec/40 clock: VAD declared the turn over
         self._loop: asyncio.AbstractEventLoop | None = None   # see _run_async()
         self.pump: OutputPump | None = None
@@ -318,31 +343,26 @@ class Orchestrator:
         speech-mode audio fallback. The instrument used to credit only AUDIO, so it reported
         our own 1.4 s working-timer every turn and gave the screen zero credit — a headset-era
         measurement outliving the headset (D25)."""
-        # ponytail: check-then-set races the working-timer thread — worst case a duplicate
-        # latency line, not worth a lock for an instrument reading.
+        # ponytail: the check-then-set can race the working deadline firing on the loop thread
+        # — worst case a duplicate latency line, not worth a lock for an instrument reading.
         if not self.fed_back:
             self.fed_back = True
             ms = (time.perf_counter() - self.t_eos) * 1000
             self.bc.publish(m_latency("feedback", ms))
             log.info("perceptible feedback (%s) %.0f ms after end of speech", what, ms)
 
-    def _mark_audible(self, what: str) -> None:
-        """An AUDIBLE event happened — cancel the pending working earcon (the turn no longer
-        needs it) and record feedback if nothing has yet."""
-        self.working.cancel()                   # no-op if it already fired
-        self._feedback(what)
-
     def _working_ping(self) -> None:
-        # Timer thread — pump.play is thread-safe. THINKING outlived the feedback
-        # budget, so the earcon IS the feedback.
+        """The 'still working' earcon. Runs on the brain loop (G-03), fired by the deadline in
+        `_drive` — which cancels it deterministically the moment the turn ends, so it can no
+        longer sound into a turn already dismissed. pump.play is thread-safe."""
         self.pump.play(tone_samples("working"))
         self._ev("earcon", "working")
-        self._mark_audible("'working' earcon")
+        self._feedback("'working' earcon")
 
     def _ping(self, name: str) -> None:
         self.pump.play(tone_samples(name))
         self._ev("earcon", name)
-        self._mark_audible(f"'{name}' earcon")
+        self._feedback(f"'{name}' earcon")
 
     # --- mic helpers ---
 
@@ -432,9 +452,6 @@ class Orchestrator:
         self._ev("thinking", show="[thinking]")
         self._feedback("overlay thinking")      # D25: the screen is the feedback now (D23) —
                                                 # near-instant, and finally credited
-        self.working = threading.Timer(WORKING_AFTER_S, self._working_ping)
-        self.working.daemon = True
-        self.working.start()
 
         text = transcribe(audio)
         if not text:
@@ -444,10 +461,16 @@ class Orchestrator:
             return None                         # ends the chain; the wake watch resumes
         self._ev("transcript", text, show=f"> {text}")
 
+        # The 'still working' earcon rides ON the brain call now (G-03): its deadline is a task
+        # inside _drive, cancelled the instant the turn resolves, so it can never sound into a
+        # dismissed turn the way the old free-running Timer could. Measured from eos so the 1.4 s
+        # budget is against end-of-speech, not against however long transcribe took.
         reply, err = self._run_async(_drive(
             self.brain, self.session, text,
             on_delta=lambda d: self.bc.publish(m_response(delta=d)),
             abort=self._abort_flag(),
+            on_working=self._working_ping,
+            working_after=max(0.0, WORKING_AFTER_S - (time.perf_counter() - self.t_eos)),
         ))
         if err == "aborted":
             self._dismissed()                   # consume the signal the race saw
@@ -481,7 +504,7 @@ class Orchestrator:
         self._publish_state(state)
         self.pump.play(samples)
         self._ev("speak")
-        self._mark_audible("speech")
+        self._feedback("speech")
         first_word_ms = (time.perf_counter() - self.t_eos) * 1000
         self.bc.publish(m_latency("first_word", first_word_ms))
         log.info("first spoken word %.0f ms after end of speech", first_word_ms)
@@ -589,7 +612,8 @@ class Orchestrator:
                 # One handler for every state (spec/40): whatever was in flight — an open
                 # mic, a streaming brain call, TTS mid-sentence — stops here. The island is
                 # already gone; it hid itself the instant Esc landed and told us afterwards.
-                self.working.cancel()
+                # The working-earcon deadline needs no cancel here: it lives inside _drive and
+                # was already cancelled when the aborted turn returned (G-03).
                 pump.cut()
                 if self.hk is not None:
                     self.hk.reset()             # no door left mid-toggle by the abandon
@@ -814,7 +838,7 @@ def _selfcheck() -> None:
     assert "50" in tbl2.splitlines()[1], tbl2   # feedback = 50 ms (thinking), not 1400
 
     # ...and the runtime recorder agrees: _feedback publishes ONCE, at the earliest event, and
-    # a later _mark_audible does not double-count. Guards the fed_back once-only flag.
+    # a later audible event does not double-count. Guards the fed_back once-only flag.
     class _Lat:
         started = False
         def __init__(self): self.fb = []
@@ -826,12 +850,24 @@ def _selfcheck() -> None:
     fb.fed_back = False
     fb.t_eos = time.perf_counter()
     fb._feedback("overlay thinking")            # screen feedback, near-instant
-    fb.working = threading.Timer(0, lambda: None)
-    fb._mark_audible("'working' earcon")        # the later audio event must NOT re-publish
+    fb._feedback("'working' earcon")            # a later audio event must NOT re-publish
     assert len(fb.bc.fb) == 1, f"feedback recorded {len(fb.bc.fb)} times, must be once"
 
-    print("selfcheck OK: speak/hold split, capture endpoint, barge-in counter, "
-          "error lines, latency table + targets, feedback credits the screen (D25)")
+    # G-03: the 'working' earcon's deadline is a task on the brain loop, cancelled the instant
+    # the turn resolves — it can no longer fire into a turn that has already ended. Driven
+    # through the PERSISTENT loop (not asyncio.run, which would reap a leaked task on close and
+    # hide the bug): a fast turn must leave no deadline behind that fires afterwards.
+    g3 = Orchestrator(brain=object(), broadcaster=_Rec())
+    rang: list[int] = []
+    reply, err = g3._run_async(_drive(FakeReply("Quick."), Session(id="t"), "hi",
+                                      on_working=lambda: rang.append(1), working_after=0.2))
+    assert (reply, err) == ("Quick.", None), (reply, err)
+    time.sleep(0.35)                            # the loop stays alive; a leaked ping would fire
+    assert rang == [], "the working earcon fired after the turn finished — deadline not cancelled"
+
+    print("selfcheck OK: speak/hold split, capture endpoint, barge-in counter, error lines, "
+          "latency table + targets, feedback credits the screen (D25), working deadline "
+          "cancels with the turn (G-03)")
 
 
 def main() -> None:

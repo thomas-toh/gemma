@@ -1,11 +1,11 @@
 {
   "$comment": "Earcon vocabulary — SINGLE SOURCE OF TRUTH for ids, meanings and maxMs. Design rationale (ring-out, onset-vs-length, sound mapping) lives in spec/40 § Voice out. The bridge maps ids to sounds (M0: generated tones in bridge/audio/speak.py; later: WAV files in bridge/assets/earcons/).",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "earcons": [
     { "id": "awake",         "meaning": "wake word heard, now listening",                     "maxMs": 1100 },
     { "id": "working",       "meaning": "thinking has exceeded 1.5 s",                         "maxMs": 1000 },
     { "id": "task-complete", "meaning": "a tool action succeeded",                             "maxMs": 1200 },
-    { "id": "ask",           "meaning": "Tier 3 gate: about to do something destructive — say 'confirm' within 8 s to proceed", "maxMs": 1100 },
+    { "id": "ask",           "meaning": "Tier 3 gate: about to do something consequential — a keypress on the rendered proposal confirms (propose-then-tap, D20/D26); this earcon sounds only with speech on, where saying 'confirm' within 8 s is the equivalent gate", "maxMs": 1100 },
     { "id": "answer-ready",  "meaning": "long answer held; say 'read it' to hear it",          "maxMs": 1150 },
     { "id": "timer",         "meaning": "a named timer fired",                                 "maxMs": 1500 },
     { "id": "error",         "meaning": "something went wrong: a tool action failed (a spoken reason follows) or the pipeline broke (brain unreachable, STT failed)", "maxMs": 1100 }

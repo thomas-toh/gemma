@@ -48,7 +48,18 @@ first feedback since D23). The `feedback` instrument now credits the overlay's f
 table load it, and the `kind` reclassification is data both obey — guarded in decode, overlay
 and orchestrator selfchecks, each verified to fail when first_word is flipped back to a gate.
 **G-07 folded in** (stale derived-constant comments in `listen.py`, deleted).
-**Remaining review items:** G-03 · G-05 · G-06 · P-01–P-04 · U-01 · U-02 · B-02 · S-02–S-09 · X-01.
+**Done since (2026-07-23):** **G-03** — the 'still working' earcon deadline moved off its
+`threading.Timer` onto the brain loop as a task inside `_drive`, cancelled deterministically
+when the turn resolves (kills the after-dismiss fire AND the sibling stray-tone-in-`_speak`
+window; the Timer is gone). **D26** (S-02) — Tier-3 confirmation becomes a keypress on the
+rendered proposal (propose-then-tap), spoken "confirm" the alt when speech is on; the old
+spoken-only gate could not run in the mic-closed default. **S-06** — cleanup engine is per-role
+and configurable (dictation = Groq, assistant `--clean-prompts` = local for now), recorded in
+D15 + spec/70; config plumbing waits on the config source. **S-07/S-09** — prose de-headseted
+(pyproject, CLAUDE.md intro) and the repo map now lists `teleprompter/`/`tests/`/`scripts/`;
+the `bridge/` → `daemon/` rename is parked.
+**Remaining review items:** G-05 · G-06 · P-01–P-04 · U-01 · U-02 · B-02 · S-03 · S-04 · S-05 ·
+S-08 · X-01.
 **Next (Thomas's sequencing):** sentence-streamed TTS — start speaking the moment Claude starts
 writing, cut at sentence terminators (`synth()` is already per-sentence). Forces the speak/hold
 decision (M0.5's model-tagged split, or drop the heuristic) because the length is no longer
@@ -557,9 +568,17 @@ Two open questions owed a decision:
   loaded data); spec/50 rule 12; spec/20 adapter-lifetime guarantees (one loop, deterministic
   close)**; **D25 — latency gates re-derived for the desk: `first_word` demoted to `measured`,
   `feedback` credits the screen, all numbers consolidated into `spec/schemas/targets.json`**;
-  docs 01, 02, 04 frozen
+  **D26 — Tier-3 confirmation is a keypress (propose-then-tap), spoken alt when speech on;
+  `earcons.json` → v0.3.1 (`ask`)**; docs 01, 02, 04 frozen
 - **In flight:** —
 - **Next:** —
+- **Parked — rename `bridge/` → `daemon/` (S-07, 2026-07-23).** The package is named for the
+  cancelled headset it bridged to the brains (D18); it is now just the daemon, a dead metaphor
+  every doc then re-explains. The prose is de-headseted (pyproject, CLAUDE.md); the rename itself
+  is real churn (imports · `pyproject` packages · `checks.yml` · README · the spec/00 legend "G")
+  and wants a naturally-churny moment — the spec/70 config build, or a pre-Track-D tidy. Frozen
+  docs stay per hard rule 2; a terminology note covers the old name. The letter **G** survives
+  either way (it is "Gemma", not "bridge").
 
 ## Parked / someday
 

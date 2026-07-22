@@ -1,6 +1,6 @@
 # Spec 30 — Contract T: tools & safety tiers
 
-**Last reconciled: 2026-07-12** · Build progress: [STATE.md](../STATE.md) · Registry (executable): [schemas/tools.json](schemas/tools.json)
+**Last reconciled: 2026-07-23** · Build progress: [STATE.md](../STATE.md) · Registry (executable): [schemas/tools.json](schemas/tools.json)
 
 *(planned — executor and per-OS backends land at M1; the registry file itself is live
 already, loaded by `bridge/config.py`. See STATE, Track T.)*
@@ -15,7 +15,7 @@ the executor refuses any call not present in it. Code never hardcodes a tool def
 |------|---------|------|-----|
 | 1 | Read-only | none | audit |
 | 2 | Reversible action | earcon announce (`task-complete`/`error`) | audit |
-| 3 | Destructive / consequential | **spoken confirmation** — orchestrator plays the `ask` earcon, requires the user to say "confirm" within 8 s, else cancels | audit |
+| 3 | Destructive / consequential | **confirmation (D26)** — the action is rendered on the Teleprompter and a **keypress** confirms it (propose-then-tap, D20); with speech on, the `ask` earcon sounds and saying "confirm" within 8 s is the equivalent gate. No confirmation → cancels. | audit |
 
 ## Rules (binding)
 

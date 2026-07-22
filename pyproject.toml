@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "gemma-bridge"
 version = "0.0.0"
-description = "Bridge daemon for Project Gemma (headset <-> LLM brains). See spec/ and docs/04."
+description = "The Gemma daemon: audio pipeline, orchestrator, and swappable LLM brains for a UI-first desk voice assistant. See spec/ and docs/04."
 requires-python = ">=3.12"
 # ponytail: only what the code imports today. TTS deps land when step 4 (docs/04
 # §8) needs them, not speculatively.

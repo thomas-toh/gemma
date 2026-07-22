@@ -1,9 +1,14 @@
 # Project Gemma — CLAUDE.md
 
-Gemma is a personal prototyping project: an always-listening voice assistant +
-dictation bridge on a Windows PC, backed by swappable LLM brains (Claude API first,
-local LLM second). Built by Thomas — a lawyer learning to code — with AI assistance.
-Not a commercial product.
+Gemma is a personal prototyping project: a **UI-first desk voice assistant + dictation
+tool** on a Windows PC (a Teleprompter overlay is the primary surface), backed by swappable
+LLM brains (Claude API first, local LLM second). Reached through two hotkey doors — ask and
+dictate; an always-on wake word and spoken replies are opt-in switches, **off by default**
+(D23). Built by Thomas — a lawyer learning to code — with AI assistance. Not a commercial
+product.
+
+*(The package `bridge/` is named for the cancelled headset it once bridged to the brains
+(D18); it is now just the daemon. A rename to `daemon/` is parked — STATE, Specs.)*
 
 ## Repo map
 
@@ -22,7 +27,10 @@ spec/              ← CURRENT TRUTH of the system. Read the relevant file befor
   50_security.md      binding security & privacy posture
   schemas/            EXECUTABLE truth — JSON the code imports (never copy values into code)
 docs/              ← frozen decision records (01 scoping, 02 architecture, …). Never retro-edited.
-bridge/            ← Python daemon — Doc 04 defines it; build status in STATE.md
+bridge/            ← Python daemon (audio · orchestrator · brains) — Doc 04 defines it; build status in STATE.md
+teleprompter/      ← the overlay (component P) — PySide6/QML front-end on Contract P (D19); the spine (D23)
+tests/             ← replay harness (recorded WAVs → real pipeline → real orchestrator); WAVs untracked
+scripts/           ← one-off smoke tests (e.g. b1_smoke.py)
 ```
 
 ## Hard rules (do not relax)
@@ -41,9 +49,10 @@ bridge/            ← Python daemon — Doc 04 defines it; build status in STAT
    Never duplicate their contents into code or prose — import/reference them. Adding a
    tool, earcon, or message type means editing the schema file, not scattering literals.
 4. **Safety invariants (from spec/50):** no raw shell tool below Tier 3; Tier 3 requires
-   spoken confirmation; every tool call is audit-logged; raw audio is never written to
-   disk; the overlay's listening indicator truthfully reflects audio capture. These are
-   design constants, not preferences.
+   explicit confirmation — a keypress on the proposal rendered on the Teleprompter
+   (propose-then-tap, D20/D26), or a spoken "confirm" when speech is on; every tool call
+   is audit-logged; raw audio is never written to disk; the overlay's listening indicator
+   truthfully reflects audio capture. These are design constants, not preferences.
 5. **Keep this file thin.** If a section here grows past a screen, it belongs in `spec/`.
 
 ## Conventions

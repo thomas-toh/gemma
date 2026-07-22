@@ -1,6 +1,6 @@
 # Spec 00 — System overview & status
 
-**Last reconciled: 2026-07-22** · Build progress: [STATE.md](../STATE.md) · Decisions record: [docs/02](../docs/02_architecture/02_system_architecture.md)
+**Last reconciled: 2026-07-23** · Build progress: [STATE.md](../STATE.md) · Decisions record: [docs/02](../docs/02_architecture/02_system_architecture.md)
 
 ## The system in one paragraph
 
@@ -178,6 +178,13 @@ its own row in the per-turn latency table, and an A/B on ~20 real transcripts (r
 cleaned → compare brain answers) decides default-on or delete. D11's bounds apply to
 the flag-off path; flag-on latency is precisely what the experiment measures. The
 overlay shows raw → cleaned whenever the flag is on (D14 teleprompter).
+*(Amended 2026-07-18/D19 and 2026-07-23/S-06: the cleanup **engine is per-role and
+configurable**, not one global choice. **Dictation** cleanup uses **Groq** (cloud, fast/cheap;
+key in the tray → `("gemma","groq")`), revising this decision's "not the cloud brain" for that
+path. The **assistant-path `--clean-prompts`** engine **stays local for now** — this decision's
+latency/privacy argument holds there. Each role selects its own engine in settings (spec/70),
+default local; the config plumbing waits on the config source, M0-close gate. Composes with the
+parked multi-provider routing.)*
 
 **D16 (2026-07-20): re-founding — the desk product.** Adversarial review of the
 accumulated D12–D15 patches against the original eyes-free spec; every survivor below
@@ -438,4 +445,21 @@ Two things were wrong and one was messy:
 Kept unchanged and still sound: the 300 ms acknowledgement floors (wake, key-press), the 250 ms
 barge-in stop, and the 1.5 s feedback *principle*. Source: the gates audit of 2026-07-22
 (follows the B-01 finding, which is what surfaced the reply-length relationship in the log).
+
+**D26 (2026-07-23): Tier-3 confirmation is a keypress, spoken alt when speech on.** The Tier-3
+gate — the binding confirmation before a destructive tool runs — was written 2026-07-12 as
+"play the `ask` earcon, user says 'confirm' within 8 s." That predates D20 and D23: the default
+product now opens the mic only on a keypress and ships with speech off, so **there is no channel
+on which to say "confirm"** — the safety gate on the most dangerous actions was unexecutable in
+the default configuration. D20 had already invented the desk-native equivalent (propose-then-tap:
+a proposal renders on the Teleprompter, a keypress applies it), so Tier 3 adopts it:
+
+- **The proposed action renders on the Teleprompter; a keypress confirms it.** This is the same
+  gesture D20 defined for ask-door rewrites — one confirmation mechanism, not two.
+- **Spoken "confirm" within 8 s remains the equivalent gate when speech is on**, with the `ask`
+  earcon (which now sounds only in that mode).
+- Nothing was decided wrongly in 2026-07-12; Tier 3 simply was never revisited when the
+  interaction model changed underneath it. Updates spec/30 (tier table), CLAUDE.md hard rule 4,
+  `earcons.json` (`ask`), spec/40 narration. **No code** — Tier-3 tools are M1, unbuilt; this
+  records the executable gate so it is right when the executor lands. Source: review S-02.
 

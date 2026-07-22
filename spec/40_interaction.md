@@ -1,6 +1,6 @@
 # Spec 40 — Interaction model
 
-**Last reconciled: 2026-07-22** · Build progress: [STATE.md](../STATE.md) (Tracks G · P) · Earcon ids: [schemas/earcons.json](schemas/earcons.json)
+**Last reconciled: 2026-07-23** · Build progress: [STATE.md](../STATE.md) (Tracks G · P) · Earcon ids: [schemas/earcons.json](schemas/earcons.json)
 
 ## State machine (orchestrator: `bridge/orchestrator.py`)
 
@@ -53,7 +53,10 @@ IDLE ──wake──▶ LISTENING ──end-of-speech──▶ THINKING ──�
   survives across wakes, since with no follow-up window a re-wake is the only way to
   reach it). Never lecture uninvited. M0.5 upgrades this to a model-tagged spoken TL;DR over displayed detail.
 - Successful Tier 2 actions: `task-complete` earcon only. Failures: `error` earcon + one-sentence explanation.
-- Tier 3: `ask` earcon + spoken one-line summary of what will happen.
+- Tier 3 (D26): the proposed action renders on the Teleprompter and a **keypress** confirms it
+  (propose-then-tap, D20); with speech on, the `ask` earcon + a spoken one-line summary of what
+  will happen, confirmed by saying "confirm". The keypress gate is what makes Tier 3 executable
+  in the default (screen-only, mic-closed) product — a spoken-only gate could not run there.
 - Tool progress (M1, planned — D11): during `ACTING`, the `working` ping then silence
   by default; spoken step narration ("Fetching X…") is a config flag, **default off**.
   The overlay's tool-activity icon is the always-on visual.
@@ -150,9 +153,11 @@ RAM-only, discarded after transcription (spec/50 rule 3).
 **Transcript hygiene (planned, D15).** Every transcript passes the deterministic
 word-replacement table (known mishearings; schema-defined) before use — both paths.
 The assistant path additionally supports `--clean-prompts` (**default off**): a
-per-prompt `transform()` pass ("fix errors and structure only") via a small local
-model, added as its own row in the latency table and judged by A/B before ever
-becoming default. The overlay shows raw → cleaned when the flag is on.
+per-prompt `transform()` pass ("fix errors and structure only"), added as its own row in
+the latency table and judged by A/B before ever becoming default. The overlay shows raw →
+cleaned when the flag is on. **Cleanup engine is per-role and configurable (S-06):** dictation
+cleanup uses Groq; the assistant-path `--clean-prompts` stays a small local model for now; each
+is set in settings (spec/70, default local).
 
 ## Voice out — earcons & TTS (M0)
 
