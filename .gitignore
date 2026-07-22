@@ -20,3 +20,6 @@ tests/replay/wav/
 
 # Scratch space for throwaway mockups/experiments — never committed.
 sandbox/
+
+# Local logs (spec/50: transcripts land here; delete the folder to purge in one action)
+logs/

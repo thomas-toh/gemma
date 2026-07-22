@@ -18,6 +18,7 @@ jobs:
           cache: pip
       - run: pip install -e .
       - run: python -m bridge.config
+      - run: python -m bridge.log
       - run: python -m bridge.audio.wake --selfcheck
       - run: python -m bridge.audio.listen --selfcheck
       - run: python -m bridge.audio.speak --selfcheck

@@ -71,3 +71,16 @@ history.
   ctypes fallback on the HWND (the pure Qt flag is spotty on Windows).
 - The concave top-corner "flare" is a filled `Canvas` path (QML `border-radius` only rounds
   inward); bottom corners use normal radius. Reference shape: `sandbox/qml_spike/Overlay.qml`.
+
+## Claude API content filtering (Track B, seen live 2026-07-22)
+
+- **Song lyrics get blocked at the END of a stream, not the start.** "State the first stanza
+  of the US national anthem" streamed the whole stanza as normal `TextDelta`s, then closed
+  with `invalid_request_error: Output blocked by content filtering policy`. Reproduced 4×.
+  Nothing to fix in Gemma — the API will not return that text — but it is the clearest live
+  example of the shape: a *usable partial reply plus a terminal error*. `_collect()` returns
+  `(partial, err)` and the orchestrator throws the partial away for a generic apology, which
+  is why the overlay showed the anthem and then replaced it with a fault. See STATE (Track P)
+  for the parked design question about rendering partials.
+- Diagnosing this needed the daemon's console, which at the time went only to stderr — in a
+  Claude Code background-task file nobody would ever find. Hence `logs/gemma.log`.

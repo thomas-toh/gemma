@@ -1,6 +1,6 @@
 """Track G step 6 (docs/04 §8): the orchestrator — the spec/40 state machine as one daemon.
 
-    IDLE ──wake──▶ LISTENING ──end-of-speech──▶ THINKING ──▶ SPEAKING ─▶ FOLLOW-UP ─▶ IDLE
+    IDLE ──wake──▶ LISTENING ──end-of-speech──▶ THINKING ──▶ SPEAKING ─▶ dwell ─▶ IDLE
 
 Wires steps 2–5 together: wake (openWakeWord) → listen (Silero VAD + faster-whisper) →
 think (Contract B brain) → speak (earcons + Kokoro through a persistent warm output
@@ -40,7 +40,10 @@ from bridge.log import setup_logging
 log = logging.getLogger("gemma.orchestrator")
 
 # --- interaction timings (spec/40) ---
-FOLLOWUP_MS = 8000     # follow-up window: speech accepted without re-wake
+ANSWER_DWELL_S = 8.0   # how long the answer stays on the island after a turn ends. The mic
+                       # is CLOSED throughout — this replaced the old 8 s follow-up window,
+                       # which held the mic open and so had to publish `listening`, wiping
+                       # the very answer it existed to let you respond to.
 WORKING_AFTER_S = 1.4  # 'working' earcon if nothing audible yet — just inside D11's 1.5 s
 BARGE_CHUNKS = 4       # sustained speech chunks (~128 ms) to call it a barge-in; with the
                        # low-latency pump the cut lands ≤ 250 ms (spec/40 binding).
@@ -55,12 +58,6 @@ def sentences(text: str) -> int:
     """Count sentences for the speak/hold split. ponytail: M0 heuristic (spec/40) —
     terminator runs; 'Dr.' overcounts. Retired at M0.5 when the model tags spoken/held."""
     return len(re.findall(r"[.!?]+(?=\s|$)", text.strip()))
-
-
-def wants_readback(text: str) -> bool:
-    """'read it' in the follow-up window speaks a held answer (spec/40).
-    ponytail: keyword match — STT renders the phrase many ways."""
-    return bool(re.search(r"\bread\b", text, re.IGNORECASE))
 
 
 # Error.kind (spec/20) -> one spoken sentence (spec/40 narration rules).
@@ -151,7 +148,6 @@ class Orchestrator:
         self.bc = broadcaster or Broadcaster()           # Contract P feed; unstarted in replay
         self.trace: list[tuple[float, str, str]] = []    # (t, event, detail) — latency_table
         self.session = Session(id="boot")
-        self.held: str | None = None            # long answer awaiting "read it"
         self.audible = True                     # has this turn produced sound yet?
         self.working = threading.Timer(0, lambda: None)
         self.t_eos = time.perf_counter()        # spec/40 clock: VAD declared the turn over
@@ -261,8 +257,9 @@ class Orchestrator:
     # --- the states ---
 
     def _turn(self, audio):
-        """THINKING → SPEAKING/held → FOLLOW-UP for one utterance. Returns the next
-        utterance's audio (from follow-up or barge-in), or None — the chain ends."""
+        """THINKING → SPEAKING, or held (shown, not spoken), for one utterance. Returns the
+        next utterance's audio — only a barge-in produces one now — or None to end the chain,
+        after which the answer dwells on the island until IDLE blanks it."""
         self._ev("thinking", show="[thinking]")
         self.audible = False
         self.working = threading.Timer(WORKING_AFTER_S, self._working_ping)
@@ -274,12 +271,8 @@ class Orchestrator:
             self.bc.publish(m_error("I didn't catch that.", "no_transcript"))
             self._ping("error")                 # narration rules: the pipeline broke
             self._ev("no-transcript", show="(no transcript)")
-            return self._followup()             # mic re-opens -> _capture emits state:listening
+            return None                         # ends the chain; the wake watch resumes
         self._ev("transcript", text, show=f"> {text}")
-
-        if self.held and wants_readback(text):
-            held, self.held = self.held, None
-            return self._speak(self.synth(held, self.voice))
 
         reply, err = asyncio.run(_collect(
             self.brain, self.session, text,
@@ -294,12 +287,14 @@ class Orchestrator:
 
         self.session.history += [{"role": "user", "content": text},
                                  {"role": "assistant", "content": reply}]
-        self.held = None
-        if sentences(reply) > 2:                # spec/40: long answers held, never lectured
+        # The hold survives; the "say 'read it'" escape hatch does not. Holding is what stops
+        # a long answer being read AT you (spec/40, never lecture uninvited) — it now means
+        # SHOWN, not spoken. Whether anything speaks a long answer on request folds into the
+        # TTS switch (spec/70), decided with "listen to me".
+        if sentences(reply) > 2:
             self._ping("answer-ready")
-            self.held = reply
-            self._ev("held", show="[answer held — say 'read it']")
-            return self._followup()
+            self._ev("held", show="[answer shown, not spoken]")
+            return None
         return self._speak(self.synth(reply, self.voice))
 
     def _speak(self, samples, state: str = "speaking"):
@@ -326,13 +321,7 @@ class Orchestrator:
                 self.pump.cut()
                 self._ev("barge-in", show="[barge-in]")
                 return self._capture(seed=list(recent))
-        return self._followup()
-
-    def _followup(self):
-        """FOLLOW-UP: 8 s window, mic open, no re-wake (spec/40). None ends the chain."""
-        self._ev("follow-up", show="[follow-up window]")
-        self._flush_mic()
-        return self._capture(nospeech_ms=FOLLOWUP_MS)
+        return None
 
     # --- the daemon ---
 
@@ -353,14 +342,25 @@ class Orchestrator:
         devices from run(), fakes from the replay harness (tests/replay.py)."""
         self.pump, self.mic = pump, mic
         ring: deque = deque(maxlen=BUFFER_BLOCKS)   # ≤3 s pre-trigger audio, RAM only (spec/50)
+        # When the last turn's answer should stop being shown. `idle` both clears the turn and
+        # hides the island, so publishing it the moment a turn ends would blank the answer as
+        # it finished arriving. The wake watch below runs THROUGHOUT the dwell — this delays
+        # the blanking, never Gemma's readiness.
+        blank_at: float | None = None
         while True:
             # IDLE: wake watch
             block, _ = mic.read(BLOCK_SAMPLES)
             frame = block[:, 0]
             ring.append(frame)
+            if blank_at is not None and time.perf_counter() >= blank_at:
+                blank_at = None
+                self._ev("idle", show="[idle]")
             if not any(s >= THRESHOLD for s in wake_model.predict(frame).values()):
                 continue
             t_wake = time.perf_counter()
+            if blank_at is not None:            # a new turn supersedes the dwell: clear the
+                blank_at = None                 # old answer BEFORE the mic opens, so the
+                self._ev("idle", show="[idle]")  # island never shows bars over stale text
             self._ev("wake", show="[wake] listening...")
             pump.play(tone_samples("awake"))    # < 300 ms: enqueued immediately
             self._ev("earcon", "awake")
@@ -369,16 +369,15 @@ class Orchestrator:
             # ponytail: fresh history each wake-chain — whether it should persist
             # across wakes is an open question (parked; STATE), so it dies at IDLE.
             self.session = Session(id=time.strftime("%H%M%S"))
-            self.held = None
 
             utt = self._capture(preroll=list(ring)[-PREROLL_BLOCKS:])
             ring.clear()
             if utt is None:
                 self._ev("nothing-heard", show="[nothing heard]")
-            while utt is not None:              # the turn chain: follow-ups, barge-ins
+            while utt is not None:              # the turn chain: barge-ins
                 utt = self._turn(utt)
             self._flush_wake(wake_model)        # else the old phrase re-triggers
-            self._ev("idle", show="[idle]")
+            blank_at = time.perf_counter() + ANSWER_DWELL_S   # leave the answer up to be read
 
     def run(self) -> None:
         import numpy as np
@@ -414,12 +413,6 @@ def _selfcheck() -> None:
     assert sentences("no terminator") == 0            # still spoken: 0 <= 2
     assert sentences("Wait... sure.") == 2            # a '...' run counts once
 
-    # readback matcher
-    assert wants_readback("read it")
-    assert wants_readback("Please read it out.")
-    assert wants_readback("Read that back to me")
-    assert not wants_readback("what's the weather")
-    assert not wants_readback("I'm ready")            # \b: no match inside 'ready'
 
     # barge-in: only sustained speech triggers
     b = BargeIn(chunks=4)
@@ -441,7 +434,7 @@ def _selfcheck() -> None:
     assert "100" in lines[1] and "1200" in lines[1] and "2500" in lines[1], lines[1]
     assert lines[2].count("800") == 2 and "-" in lines[2], lines[2]
 
-    print("selfcheck OK: speak/hold split, readback match, barge-in counter, "
+    print("selfcheck OK: speak/hold split, barge-in counter, "
           "error lines, latency table")
 
 

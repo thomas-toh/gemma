@@ -22,7 +22,33 @@ Teleprompter → TTS). The renderer's defects from the first live run are fixed 
 | 2 | M0 acceptance run, desk-shaped (D16) | G ③ | ×10 ask-hotkey turns + ×3 wake-word. Blocked by 1. Also unblocks Track D. |
 | 3 | M0-close gate — settings surface | G ④ | Thomas's gate, beyond docs/04 §8. |
 
+**Fixed 2026-07-22 (late) — the held-answer wipe.** A long answer was erased milliseconds
+after arriving. Root cause: `listening` meant two things — "the user asked for the mic" and
+"the mic happens to be open" — and the 8 s follow-up window published it right after an
+answer, ending the turn. spec/50 rule 4 forbids fixing that by going quiet about an open mic,
+so `listening` cannot be a turn boundary: `CLEARS_TURN` is now `{thinking, idle}`. The
+follow-up window is **removed** (Thomas, 2026-07-22): every `listening` is now user-initiated,
+which also removes the "mic open with text on screen" case entirely, so no new indicator is
+needed. In its place the answer **dwells** on the island for `ANSWER_DWELL_S` (8 s) with the
+mic CLOSED; the wake watch runs throughout, and a new wake supersedes the dwell — clearing the
+old answer *before* the mic opens. **"read it" readback is retired** with it; whether anything
+speaks a long answer on request folds into the TTS switch decision (spec/70, with "listen to
+me"). The hold itself survives and now means SHOWN, not spoken.
+
 Parked, not blocking, pick up by mood:
+
+- **"Listen to me" / the follow-up question (owed design).** Reviving any always-open-mic mode
+  must answer spec/50 rule 4 truthfully. Thomas' view: a config-time warning that the mic is
+  always on may do the same job as a live indicator. Pushback on record: consent to a
+  *capability* is not the same as signalling *current* capture — a config checkbox cannot
+  reveal a window that failed to close. Note spec/50 already separates the always-on wake ring
+  (rule 3, ≤3 s RAM, discarded) from triggered capture (rule 4), so the argument may hold for
+  the former and not the latter. If the conclusion is that rule 4 should change, that wants a
+  D-number and a written rationale — not a quiet edit.
+- **Partial replies on a brain error (owed design).** A blocked or failed stream currently
+  discards everything received and shows a generic apology. Keeping the partial with a fault
+  marker would have made the anthem case self-explanatory. Needs a rendering decision (what a
+  half-answer plus a fault looks like), which is why it is parked rather than patched.
 
 - **Prompt dwell** (owed fix 3 below) — the prompt still flashes for ~1 s. Pairs with the
   **7a/7b dead-air gaps**; same underlying problem, so do them together.

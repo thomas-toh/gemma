@@ -180,7 +180,10 @@ def main() -> int:
     # window move racing a native resize looked like (the pill contracted faster on the left).
     # The containment assert covers the other half: the silhouette is drawn at animH, so if
     # that ever exceeded the frame its bottom corners would be clipped away mid-growth.
-    model.apply({"type": "state", "state": "listening"})   # open -> compact: the widest change
+    # `idle` is what contracts the island now — the widest change it makes. It used to be
+    # `listening`, but an open mic no longer ends a turn (spec/50 rule 4; see decode.py's
+    # CLEARS_TURN), so listening leaves the answer up and the island open.
+    model.apply({"type": "state", "state": "idle"})
     frame_w, frame_h = float(win.property("width")), float(win.property("height"))
     frame_x = float(win.property("x"))
     centre, drift, widths = frame_w / 2, 0.0, []

@@ -1,18 +1,27 @@
 # Spec 40 — Interaction model
 
-**Last reconciled: 2026-07-21** · Build progress: [STATE.md](../STATE.md) (Tracks G · P) · Earcon ids: [schemas/earcons.json](schemas/earcons.json)
+**Last reconciled: 2026-07-22** · Build progress: [STATE.md](../STATE.md) (Tracks G · P) · Earcon ids: [schemas/earcons.json](schemas/earcons.json)
 
 ## State machine (orchestrator: `bridge/orchestrator.py`)
 
 ```
-IDLE ──wake──▶ LISTENING ──end-of-speech──▶ THINKING ──┬─▶ SPEAKING ─▶ FOLLOW-UP ─▶ IDLE
+IDLE ──wake──▶ LISTENING ──end-of-speech──▶ THINKING ──┬─▶ SPEAKING ─▶ dwell ─▶ IDLE
                    │                                    └─▶ ACTING(tools) ─▶ earcon ─┘
                    └── timeout 5 s / mute ──▶ IDLE
 ```
 
 - `LISTENING` opens on WAKE; end-of-speech = VAD silence (initial: 1 s, tune in M0);
   give-up if speech never starts: 5 s (decided 2026-07-13; was 10 s).
-- `FOLLOW-UP`: 8 s window accepting speech without re-wake. Mic open, overlay `listening`.
+- **Answer dwell**: when a turn ends, the answer stays on the island for 8 s before `IDLE`
+  blanks it — the mic is CLOSED throughout and the wake watch runs, so a new wake supersedes
+  the dwell (clearing the old answer *before* the mic opens). This replaced an 8 s FOLLOW-UP
+  window that accepted speech without re-wake: because it held the mic open it had to publish
+  `listening` (spec/50 rule 4 — no dark listening), and `listening` ended the previous turn,
+  so it erased the answer it existed to let you respond to. Removing it makes every
+  `listening` user-initiated. Whether a follow-up window returns — and how it would signal an
+  open mic truthfully — is deferred to the "listen to me" design (STATE, Track P).
+- `listening` therefore does **not** end a turn: a turn ends when the next one starts
+  (`thinking`) or the session does (`idle`). See `teleprompter/decode.py` `CLEARS_TURN`.
 - **Barge-in (binding):** user speech during `SPEAKING` stops TTS ≤ 250 ms and routes
   the speech as new input.
 - `THINKING` that outlives the 1.5 s feedback budget fires the `working` earcon once
@@ -33,8 +42,9 @@ IDLE ──wake──▶ LISTENING ──end-of-speech──▶ THINKING ──�
   applies only when speech is enabled.
 - Speech on, answers ≤ 2 sentences: spoken automatically.
 - Longer answers: full text on the overlay; the spoken channel plays `answer-ready`
-  and speaks on "read it" (unchanged away-from-screen behaviour). Never lecture
-  uninvited. M0.5 upgrades this to a model-tagged spoken TL;DR over displayed detail.
+  and speaks on "read it" (unchanged away-from-screen behaviour — the held answer now
+  survives across wakes, since with no follow-up window a re-wake is the only way to
+  reach it). Never lecture uninvited. M0.5 upgrades this to a model-tagged spoken TL;DR over displayed detail.
 - Successful Tier 2 actions: `task-complete` earcon only. Failures: `error` earcon + one-sentence explanation.
 - Tier 3: `ask` earcon + spoken one-line summary of what will happen.
 - Tool progress (M1, planned — D11): during `ACTING`, the `working` ping then silence
@@ -184,7 +194,7 @@ Architecture (D13, spec/00):
 
 Custom wake phrase (replace the `hey_jarvis` stand-in) + false-accept testing (D8) ·
 end-of-speech silence threshold (1 s start, `--silence-ms` to tune live) · pre-roll
-length · follow-up window length · earcon sound design (synthesise vs buy — genuinely
+length · answer-dwell length · earcon sound design (synthesise vs buy — genuinely
 fun sub-project).
 
 **End-of-speech: semantic endpointing (planned, M1).** A fixed silence timer can't be

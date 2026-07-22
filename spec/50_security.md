@@ -8,7 +8,9 @@
 2. **Audit everything.** Every tool invocation logged per spec/30 rule 2.
 3. **No raw audio at rest.** Untriggered audio lives only in a ≤ 3 s RAM ring buffer and
    is discarded. Triggered-session audio is processed in memory; never written to disk.
-   Transcripts are logged locally and are user-purgeable in one action.
+   Transcripts are logged locally and are user-purgeable in one action — they reach
+   `logs/gemma.log` (rotating, gitignored) via the daemon's turn events, so deleting the
+   `logs/` folder is that one action.
 4. **Truthful signalling.** The overlay's listening indicator must reflect actual pipeline
    state; `listening` ⇔ audio is being captured/processed. No dark listening, ever.
 5. **Mute is software (desk product).** With commodity audio gear there is no hardware mute

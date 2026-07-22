@@ -81,7 +81,13 @@ class Decoder:
 # and fault. 'speaking'/'error' must NOT clear: the reply streams in during THINKING and the
 # island flips to SPEAKING while it is read, so clearing there would blank the text exactly
 # as the user starts reading it.
-CLEARS_TURN = frozenset({"listening", "thinking", "idle"})
+#
+# 'listening' is NOT here, and cannot be. spec/50 rule 4 binds `listening` to mean "audio is
+# being captured" — so it is published whenever the mic opens, which is not the same thing as
+# "a new turn has begun". While both meanings shared one value, a long answer was wiped
+# milliseconds after arriving by the mic opening behind it. A turn ends when the next one
+# STARTS ('thinking') or the session does ('idle'); the mic opening says nothing about either.
+CLEARS_TURN = frozenset({"thinking", "idle"})
 
 
 # Prior prompts. RAM only — spec/50 forbids writing any of this to disk.
@@ -184,11 +190,18 @@ def _selfcheck() -> None:
     assert s.transcript == "what's the weather", "speaking must not clear the prompt"
     s.apply({"type": "response", "done": True})
     assert s.done
-    # a new turn clears the last one — but NOT the session's prompt history
+    # The mic opening must NOT wipe the answer. This is the live bug of 2026-07-22: a held
+    # answer was published, then erased milliseconds later by the follow-up window opening
+    # the mic behind it — the one surface meant to let you read it destroyed it instead.
+    # spec/50 rule 4 forbids solving that by staying quiet about an open mic, so `listening`
+    # cannot be the thing that ends a turn.
     s.apply({"type": "state", "state": "listening"})
+    assert s.reply == "It's clear in Tokyo.", "an open mic must not wipe the answer"
+    assert s.transcript == "what's the weather", "an open mic must not wipe the prompt"
+    # a new turn clears the last one — but NOT the session's prompt history
+    s.apply({"type": "state", "state": "thinking"})
     assert s.reply == "" and s.transcript == "" and not s.done
     assert s.history == ["what's the weather"], s.history
-    s.apply({"type": "state", "state": "thinking"})
     s.apply({"type": "transcript", "text": "set a timer"})
     s.apply({"type": "transcript", "text": "partial", "final": False})   # partials excluded
     s.apply({"type": "state", "state": "idle"})
