@@ -118,7 +118,7 @@ def main() -> int:
 
     line_box = int(win.property("lineBox"))
     pad_bottom, base_h = int(win.property("padBottom")), int(win.property("baseH"))
-    fade_top, max_lines = float(win.property("fadeTop")), int(win.property("maxLines"))
+    max_lines = int(win.property("maxLines"))
     short: list[str] = []
     below: list[str] = []
     revealed, peak_lines = 0, 0
@@ -137,7 +137,7 @@ def main() -> int:
             if height < needed - 0.5:
                 short.append(f"t={at}ms {lines} lines revealed, island {height:.0f}px, "
                              f"needs {needed}px")
-            ink_bottom, inner = y + lines * line_box, height - fade_top - pad_bottom
+            ink_bottom, inner = y + lines * line_box, height - pad_bottom
             if ink_bottom > inner + 0.5:
                 below.append(f"t={at}ms {lines} lines, ink to {ink_bottom:.0f}px, "
                              f"inner edge {inner:.0f}px")
@@ -257,9 +257,30 @@ def main() -> int:
     _pump(app, 200)
     assert win.property("showing") and not win.property("hidden"), "a new turn must come back"
     model.dismissed.emit()                                      # what __main__.py's Esc does
+    model.apply({"type": "state", "state": "idle"})             # ...and the daemon's dismiss
+                                                                # handler then publishes idle
     _pump(app, 50)
     assert win.property("hidden") and not win.property("showing"), \
         "a dismiss must hide the island immediately — it never waits on the daemon"
+
+    # ...and when a NEW turn re-opens the pill, it must appear at the CORRECT width, not fade in
+    # at the last turn's width and animate down (the wide-then-shrink bug). Since idle no longer
+    # clears the turn (D24), animW sits at the wide value while hidden; the fix snaps size while
+    # the pill is not fully shown, so it is right the instant it re-appears — for ANY re-open
+    # path, not just this one.
+    deadline2 = time.monotonic() + 1.0
+    while time.monotonic() < deadline2 and float(win.property("entrance")) > 0.02:
+        _pump(app, 20)
+    assert float(win.property("entrance")) < 0.05, "the pill never finished hiding"
+    assert float(win.property("animW")) > 400, \
+        f"precondition: the hidden pill should still be wide (animW={win.property('animW'):.0f})"
+    compact_w = float(win.property("compactW")) + 2 * float(win.property("flare"))
+    model.apply({"type": "state", "state": "listening"})        # a new turn re-opens the pill
+    _pump(app, 40)                                              # far less than the resize anim
+    assert win.property("showing"), "a new turn must re-open the pill"
+    assert float(win.property("animW")) <= compact_w + 8, (
+        f"the pill re-appeared at animW={win.property('animW'):.0f}px and is animating down to "
+        f"{compact_w:.0f} — its width must be set BEFORE it appears, not after (re-open bug)")
 
     # --- both edges must move at the same rate, and the island must stay inside its frame ---
     # The island is centred in a FIXED window, so its centre is a constant no matter how wide
@@ -299,6 +320,22 @@ def main() -> int:
     print(f"contraction: {len(widths)} frames, {max(widths) - min(widths):.0f}px of travel, "
           f"worst centre drift {drift:.3f}px")
     assert drift < 0.5, f"the island's two edges moved at different rates (drift {drift:.2f}px)"
+
+    # --- U-01: the native filter routes WM_SETTINGCHANGE to the reduced-motion re-query ---
+    # Pure Win32 message dispatch, no window needed. Proves the live-update wiring survives an
+    # edit that (e.g.) re-adds an `if not armed: return` guard and silently kills settings.
+    from ctypes import addressof, wintypes
+
+    from teleprompter.__main__ import _WM_SETTINGCHANGE, DismissKey
+    settings_hits: list[int] = []
+    filt = DismissKey(lambda: None, on_settings=lambda: settings_hits.append(1))
+    sc = wintypes.MSG(); sc.message = _WM_SETTINGCHANGE
+    handled, _ = filt.nativeEventFilter(b"windows_generic_MSG", addressof(sc))
+    assert settings_hits == [1], "WM_SETTINGCHANGE must reach the re-query even while Esc is disarmed"
+    assert handled is False, "a settings change must not be consumed — every window needs it"
+    other = wintypes.MSG(); other.message = 0x0000
+    filt.nativeEventFilter(b"windows_generic_MSG", addressof(other))
+    assert settings_hits == [1], "only WM_SETTINGCHANGE should trigger the re-query"
 
     print(f"selfcheck OK: entrance binds to state, status word wipes and rotates, and across "
           f"{revealed} revealed words at up to {peak_lines} lines (scrolled "

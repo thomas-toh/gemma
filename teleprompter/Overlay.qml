@@ -37,8 +37,9 @@ Window {
     readonly property int padTop: Math.floor((baseH - lineBox) / 2)                // 11
     readonly property int padBottom: baseH - padTop - lineBox                      // 12
     readonly property int maxLines: 3                    // island stops growing here, then scrolls
-    readonly property real fadeTop: 0                    // viewport starts at the screen edge, so
-                                                         // the scrolled-off line peeks through
+    // (The viewport starts at the very top of the window — y = 0 — so a scrolled-off line peeks
+    // through above rather than being clipped. There was a `fadeTop` knob for a non-zero top
+    // inset; it was always 0, so it is gone, U-02.)
     // FINAL layout width — the text never reflows mid-animation. Shrinks by the gutter when
     // the latency readout is on, so an instrument can never overlap a reply.
     readonly property real textW: openW - 2 * padSide - latencyGutter
@@ -157,8 +158,10 @@ Window {
     readonly property int islandH: open ? baseH + (shownLines - 1) * lineBox : baseH
     property real animW: islandW
     property real animH: islandH
-    Behavior on animW { NumberAnimation { duration: root.moveMs; easing.type: Easing.InOutCubic } }
-    Behavior on animH { NumberAnimation { duration: root.moveMs; easing.type: Easing.InOutCubic } }
+    // enabled only once fully shown (`appeared`) — see that property. Appearing/disappearing
+    // snaps the size so a re-opened pill never animates down from a stale width.
+    Behavior on animW { enabled: root.appeared; NumberAnimation { duration: root.moveMs; easing.type: Easing.InOutCubic } }
+    Behavior on animH { enabled: root.appeared; NumberAnimation { duration: root.moveMs; easing.type: Easing.InOutCubic } }
     // Centred in the fixed frame. Both edges therefore move by the same amount in the same
     // frame — the asymmetry came from this being a native window move racing a native resize.
     readonly property real islandX: (width - animW) / 2
@@ -210,6 +213,16 @@ Window {
     Behavior on entrance {
         NumberAnimation { duration: root.fadeMs; easing.type: Easing.OutCubic }
     }
+    // The entrance fade has fully settled. The island's SIZE animates only while this is true
+    // (see the animW/animH Behaviors): a resize that coincides with the pill appearing or
+    // disappearing SNAPS instead of animating, so a re-opened pill is already the right size the
+    // instant it shows — rather than fading in at the last turn's width and shrinking, because
+    // `idle` no longer clears the turn (D24) so the width lingers while hidden. Keys off the
+    // pill's own visibility, so it holds for ANY re-open path (new turn · wake word · a future
+    // expanded-view hotkey), not just the one that produced the bug. `entrance` LAGS `showing`
+    // (it fades over fadeMs), which is exactly why gating on it works where gating on `showing`
+    // would not — the target-change and the appearance no longer coincide.
+    readonly property bool appeared: entrance > 0.99
 
     // ---- the silhouette: a plain box, with the two flares stuck on the sides ----
     // The moving part is a plain Rectangle — cheap, and antialiased without help. The only real
@@ -375,9 +388,9 @@ Window {
     Item {
         id: viewport
         x: root.islandX + root.flare + root.padSide
-        y: root.fadeTop
+        y: 0
         width: Math.max(0, root.animW - 2 * (root.flare + root.padSide))
-        height: Math.max(0, root.animH - root.fadeTop - root.padBottom)
+        height: Math.max(0, root.animH - root.padBottom)
         clip: true
         visible: root.open
 
@@ -388,7 +401,7 @@ Window {
             // Top-anchored at a fixed offset and scrolled by whole lines. Deliberately does NOT
             // read the island height: that dependency is what made the text jump while the
             // height animated. The island grows downward around it instead.
-            y: root.padTop - root.fadeTop - root.scrolled * root.lineBox
+            y: root.padTop - root.scrolled * root.lineBox
             Behavior on y { NumberAnimation { duration: root.scrollMs; easing.type: Easing.OutCubic } }
             wrapMode: Text.WordWrap
             color: root.isError ? Theme.textMuted : Theme.textPrimary
@@ -408,7 +421,7 @@ Window {
             id: statusWord
             visible: root.loaderOn
             x: 0
-            y: root.padTop - root.fadeTop
+            y: root.padTop
             text: sweep.shown ? sweep.shown + "…" : ""
             color: Theme.textMuted                  // a status word, not content
             font.family: fontFamily
@@ -490,7 +503,7 @@ Window {
             // Hold the word back until the island has FINISHED moving — BOTH the height and the
             // scroll. `measure` already counts the pending word, so islandH and the scroll offset
             // are the targets. Gating only growth let words land mid-scroll past three lines.
-            var targetY = root.padTop - root.fadeTop - root.scrolled * root.lineBox;
+            var targetY = root.padTop - root.scrolled * root.lineBox;
             if (Math.abs(root.animH - root.islandH) > 0.5
                     || Math.abs(textItem.y - targetY) > 0.5)
                 return;

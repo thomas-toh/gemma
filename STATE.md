@@ -165,11 +165,17 @@ individual misbehaviours.
 daemon no longer guesses what the island shows or times a reveal it cannot see; the clear moved
 off a caller and onto the `listening` state itself; and the `_armed` set that the arming
 protocol raced across two threads went with the protocol.
-**Still open on this brief:** `Door.open` vs orchestrator capture state (fixed once via
-`Door.close()`, but the two-Events-plus-a-flag shape remains — a monotonic press counter owned
-by the module would make lost updates impossible by construction; review G-06) · the daemon
-building a fresh API client and event loop per turn (review B-01) · no snapshot for a
-reconnecting overlay, so a mid-turn restart renders nothing (review P-02).
+**Still open on this brief:** the **`Door` interface** (review G-06). The root is layering, not
+the transport: the Door does two jobs at once — reporting raw key up/down events AND deciding
+tap-vs-hold → open/close — and job two duplicates the capture lifecycle the *orchestrator*
+already owns, so `close()` has to reach across the thread seam and clear shared flags (the G-06
+race, and the D24 "stuck door" bug, both live here). The genuine fix is to **split mechanism
+from policy**: the Door emits only raw key events across the thread boundary (a `queue.Queue` of
+presses/releases is the idiomatic transport — each consumed exactly once, no shared flag to
+clear; a monotonic counter is a cruder alternative), and the orchestrator's state machine turns
+those into open/close. Then `Door.open`/`close()` cease to exist and neither race can happen.
+(B-01's per-turn client + loop was on this brief and is now **done**; P-02's reconnect snapshot
+is now **done**.)
 
 Parked, not blocking, pick up by mood:
 

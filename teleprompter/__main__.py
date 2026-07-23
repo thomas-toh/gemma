@@ -105,10 +105,12 @@ def reduced_motion() -> bool:
 # Win32 (winuser.h). The id is this process's own — the daemon's doors live in a different
 # process and cannot collide. RegisterHotKey with a NULL window requires id < 0xC000.
 _VK_ESCAPE, _MOD_NOREPEAT, _WM_HOTKEY, _ESC_ID = 0x1B, 0x4000, 0x0312, 0x0E5C
+_WM_SETTINGCHANGE = 0x001A
 
 
 class DismissKey(QAbstractNativeEventFilter):
-    """Bare Esc — owned by the surface it dismisses (spec/00 D24).
+    """The overlay's one Win32 message hook: bare Esc (spec/00 D24) + a re-read of the machine
+    settings the overlay mirrors into QML (U-01).
 
     Esc is registered ONLY while the island is on screen and released the instant it hides.
     The daemon used to attempt exactly this discipline and could not keep it: it armed the key
@@ -122,11 +124,18 @@ class DismissKey(QAbstractNativeEventFilter):
 
     Narrow registration, no keyboard hook: spec/50 rule 11 governs this exactly as it governs
     the daemon's doors — RegisterHotKey delivers only this combo and nothing else is observed.
+
+    `on_settings` (U-01): the OS broadcasts WM_SETTINGCHANGE when any system setting changes, so
+    we re-query reduced-motion (the one setting we mirror) event-driven — only when it actually
+    changes — rather than polling it every time the island shows. It fires regardless of whether
+    Esc is armed, because a setting can change while the island is hidden. Folded onto this one
+    filter rather than a second: it is the same native-message stream.
     """
 
-    def __init__(self, on_press) -> None:
+    def __init__(self, on_press, on_settings=None) -> None:
         super().__init__()
         self._on_press = on_press
+        self._on_settings = on_settings
         self._armed = False
 
     def arm(self, on: bool) -> None:
@@ -144,9 +153,8 @@ class DismissKey(QAbstractNativeEventFilter):
 
     def nativeEventFilter(self, event_type, message):
         # Qt hands us every message it pumps, including thread messages like WM_HOTKEY (which
-        # has no window). Cheapest possible guard first: while disarmed this costs one bool.
-        if not self._armed:
-            return False, 0
+        # has no window). We must look even while Esc is disarmed, because WM_SETTINGCHANGE
+        # (U-01) is not gated by the island being on screen.
         # `event_type` is bytes or a QByteArray depending on the binding's mood; both convert,
         # and matching on a substring rather than the exact tag covers Qt's two Windows
         # dispatchers ("windows_generic_MSG" and "windows_dispatcher_MSG") without listing them.
@@ -156,13 +164,16 @@ class DismissKey(QAbstractNativeEventFilter):
             kind = str(event_type).encode("utf-8", "replace")
         if b"windows" not in kind:
             return False, 0
-        import ctypes
         from ctypes import wintypes
         try:
             msg = wintypes.MSG.from_address(int(message))
         except (TypeError, ValueError):      # pragma: no cover — Qt changed the payload shape
             return False, 0
-        if msg.message == _WM_HOTKEY and msg.wParam == _ESC_ID:
+        if msg.message == _WM_SETTINGCHANGE:
+            if self._on_settings is not None:
+                self._on_settings()          # a machine setting changed — re-read what we mirror
+            return False, 0                  # never consume: every other window needs it too
+        if self._armed and msg.message == _WM_HOTKEY and msg.wParam == _ESC_ID:
             self._on_press()
             return True, 0                   # consumed: nobody else should see this Esc
         return False, 0
@@ -218,9 +229,9 @@ def main() -> int:
     engine.rootContext().setContextProperty("overlay", model)   # not "model": Repeater shadows it
     engine.rootContext().setContextProperty("fontFamily", pick_font())
     engine.rootContext().setContextProperty("targets", targets())   # latency targets (D25)
-    reduce = reduced_motion()
-    engine.rootContext().setContextProperty("reducedMotion", reduce)
-    if reduce:
+    reduce_state = reduced_motion()
+    engine.rootContext().setContextProperty("reducedMotion", reduce_state)
+    if reduce_state:
         log.info("system 'show animations' is off — island transitions run instant")
     engine.load(QUrl.fromLocalFile(str(Path(__file__).resolve().parent / "Overlay.qml")))
     roots = engine.rootObjects()
@@ -238,7 +249,18 @@ def main() -> int:
         model.dismissed.emit()
         feed.send(m_dismiss())
 
-    dismiss_key = DismissKey(on_dismiss)
+    def on_settings_change() -> None:
+        # WM_SETTINGCHANGE (U-01): re-read reduced-motion and push it only if it actually
+        # flipped, so a user who toggles 'show animations' — the person most likely doing so
+        # because motion is bothering them right now — sees it apply without restarting.
+        nonlocal reduce_state
+        now = reduced_motion()
+        if now != reduce_state:
+            reduce_state = now
+            engine.rootContext().setContextProperty("reducedMotion", now)
+            log.info("reduced-motion changed -> %s (live)", now)
+
+    dismiss_key = DismissKey(on_dismiss, on_settings_change)
     app.installNativeEventFilter(dismiss_key)
 
     def restamp() -> None:

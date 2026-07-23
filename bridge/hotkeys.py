@@ -107,7 +107,14 @@ class Door:
         presses, and the two must never be left disagreeing. They were: a capture that
         ended without a second press left `open` set, so the next press was read as the
         closing tap — it fired `end`, opened nothing, and the user had to press twice to
-        get going again. Called from _capture()'s finally, so no exit path can skip it."""
+        get going again. Called from _capture()'s finally, so no exit path can skip it.
+
+        ponytail: KNOWN RACE (G-06, accepted). This clears `start` unconditionally from the
+        orchestrator thread. A press that lands in the sliver between the capture's real end
+        and this `finally` running is recorded by `_fire` (`start.set()`) on the pump thread
+        and then erased here — one silently lost press. The window is ~ms and self-heals (press
+        again), so it is accepted. The real fix is not local to `close()`: it is the Door
+        redesign parked in STATE (mechanism vs policy — see there), so noted, not patched."""
         self.open = False
         self.start.clear()
         self.end.clear()
@@ -122,9 +129,17 @@ class Hotkeys:
     # --- the tap/hold state machine (pure enough to selfcheck; _down is injectable) ---
 
     def _fire(self, door: Door) -> None:
-        """One WM_HOTKEY on `door`. ponytail: this blocks the message loop for the whole
-        of a push-to-talk hold, so the other door is deaf while one is held — you cannot
-        dictate and ask at the same moment anyway. Revisit if a third door lands."""
+        """One WM_HOTKEY on `door`. The hold-vs-tap split is deliberate and is a FEATURE, not
+        a quirk to design around: a tap toggles the capture, a hold ≥ HOLD_S is push-to-talk
+        that ends on release — like hold-to-crouch vs tap-to-toggle-crouch in a game.
+
+        ponytail: watching for the release busy-polls the message-pump thread, so while ONE
+        door is held the OTHER door (dictate vs ask) is deaf until release. Accepted (G-05):
+        you don't dictate and ask in the same instant, there is only ever one turn, and D24
+        already moved the one key that mattered here (Esc) off this thread to the overlay. The
+        real fix — watch the release off the pump thread (a GetAsyncKeyState poll, or fold it
+        into the orchestrator's loop) — is worth it only if a third door lands or simultaneous
+        doors ever matter."""
         if door.open:                                   # second tap: the endpoint
             door.open = False
             door.end.set()
