@@ -14,16 +14,12 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
 log = logging.getLogger("gemma.teleprompter")
-
-# Contract P transport (spec/00 D19; the docs/04 §5 reserved port). Mirrored here rather
-# than imported from bridge/broadcaster.py — keeping the front/back split honest (D21).
-HOST = "127.0.0.1"
-PORT = 8990
 
 
 @lru_cache(maxsize=1)
@@ -32,6 +28,24 @@ def status_schema() -> dict:
     the repo rather than via bridge.config, so the front-end stays decoupled from the daemon."""
     root = Path(__file__).resolve().parent.parent
     return json.loads((root / "spec" / "schemas" / "status.json").read_text(encoding="utf-8"))
+
+
+# Contract P transport (spec/00 D19). LOADED from status.json, not restated — the daemon
+# (bridge/broadcaster.py) reads the same key and honours the same env override, so the two
+# sides cannot disagree about where the feed lives. The port used to sit in three places while
+# only the daemon read the env var, so setting it moved the daemon and left the overlay
+# reconnecting to the old port forever, silently.
+def status_host() -> str:
+    return status_schema()["transport"]["host"]
+
+
+def status_port() -> int:
+    t = status_schema()["transport"]
+    return int(os.environ.get(t["portEnv"], t["port"]))
+
+
+HOST = status_host()
+PORT = status_port()
 
 
 @lru_cache(maxsize=1)
@@ -79,6 +93,13 @@ class Decoder:
     def __init__(self) -> None:
         self._buf = b""
         self._warned: set[str] = set()
+
+    def reset(self) -> None:
+        """Drop the partial trailing line — call at the START of a new connection, so a remnant
+        left by a connection that died mid-line is not glued onto the next stream's first
+        message (P-03). Keeps `_warned`: 'log each malformed kind once' stays per-process, not
+        per-connection."""
+        self._buf = b""
 
     def feed(self, data: bytes) -> list[dict]:
         self._buf += data
@@ -220,6 +241,17 @@ def _selfcheck() -> None:
     assert tg["feedback"]["kind"] == "gate" and tg["feedback"]["ms"] == 1500
     assert {t["kind"] for t in tg.values()} <= {"floor", "gate", "measured"}, "unknown target kind"
 
+    # Transport is loaded from status.json (P-01), and the daemon's port override reaches the
+    # overlay — the split that used to leave a moved daemon talking to a deaf overlay. The
+    # daemon (bridge/broadcaster.py) reads the SAME key with the same env, so they can't drift.
+    tp = status_schema()["transport"]
+    assert (status_host(), status_port()) == (tp["host"], int(os.environ.get(tp["portEnv"], tp["port"])))
+    os.environ[tp["portEnv"]] = "9911"
+    try:
+        assert status_port() == 9911, "the overlay must honour the daemon's GEMMA_STATUS_PORT"
+    finally:
+        os.environ.pop(tp["portEnv"], None)
+
     # --- framing ---
     d = Decoder()
     assert d.feed(b'{"type":"state","state":"idle"}\n') == [{"type": "state", "state": "idle"}]
@@ -236,6 +268,12 @@ def _selfcheck() -> None:
     assert d.feed(b'{"type":"future_thing","x":1}\n') == []       # unknown type: ignored
     assert d.feed(b'\n\n') == []                                  # blank lines
     assert d.feed(b'{"type":"state","state":"idle"}\n') == [{"type": "state", "state": "idle"}]
+
+    # a connection that dies mid-line must not glue its remnant onto the next one (P-03)
+    d.feed(b'{"type":"mic","level":0.5')                 # daemon dies mid-message
+    d.reset()                                            # ...the overlay reconnects
+    assert d.feed(b'{"type":"state","state":"idle"}\n') == [{"type": "state", "state": "idle"}], \
+        "a partial line from the dead connection was glued onto the next one"
 
     # --- reducer ---
     s = OverlayState()

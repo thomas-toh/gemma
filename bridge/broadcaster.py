@@ -37,11 +37,32 @@ from bridge.log import setup_logging
 
 log = logging.getLogger("gemma.status")
 
-HOST = "127.0.0.1"
-PORT = int(os.environ.get("GEMMA_STATUS_PORT", "8990"))   # Contract P transport (docs/04 §5
-# reserved 'web' port); localhost only. ponytail: one number, constant + env override — no
-# config system for it, and no cross-package import (the teleprompter mirrors these two).
+# Contract P transport (spec/00 D19; docs/04 §5 reserved 'web' port); localhost only. LOADED
+# from status.json (hard rule 3), the same key the overlay reads — one home, so the port and
+# the env-var name cannot drift between the two packages. Falls back to the literals if the
+# schema can't be read, because orchestrator.py imports this module: a spec/ problem must not
+# take down the voice loop (that would invert D19's crash-isolation).
+def _transport() -> dict:
+    try:
+        return load_schemas()["status"]["transport"]
+    except Exception:
+        return {"host": "127.0.0.1", "port": 8990, "portEnv": "GEMMA_STATUS_PORT"}
+
+
+def status_host() -> str:
+    return _transport()["host"]
+
+
+def status_port() -> int:
+    t = _transport()
+    return int(os.environ.get(t["portEnv"], t["port"]))
+
+
+HOST = status_host()
+PORT = status_port()
 QUEUE_MAX = 256   # publish() drops when full — mic frames are droppable (status.json).
+SNAPSHOT_MAX = 512   # cap on the retained-turn log (P-02); a turn is a handful of messages,
+                     # this is only a runaway backstop for a pathologically long stream.
 UPSTREAM_MAX = 4096   # bytes a client may send without a newline before we discard them. The
                       # upstream verbs are a dozen bytes each; anything larger is a client
                       # gone wrong, and unbounded buffering would be its lever on us.
@@ -97,6 +118,38 @@ class Broadcaster:
         # rule 12) — it can only stop work already in flight, so the worst a hostile local
         # process can do with it is interrupt a turn it can already read off this same socket.
         self._on_dismiss = on_dismiss
+        # P-02: the current turn, retained so a client that (re)connects mid-turn can be caught
+        # up — otherwise a restart during a turn (or a held-answer dwell) shows a blank island,
+        # and a reconnect mid-capture shows nothing while the mic is open (spec/50 rule 4).
+        self._log: list[dict] = []
+        # The boundary the log clears at is the SAME one the overlay's reducer uses
+        # (status.json `clearsTurn`), loaded not restated — so the daemon never re-implements
+        # the front-end's clearing rules; the joiner's own reducer rebuilds state from the replay.
+        try:
+            self._clears = frozenset(load_schemas()["status"]["clearsTurn"])
+        except Exception:
+            self._clears = frozenset({"listening", "thinking"})
+
+    def _remember(self, msg: dict) -> None:
+        """Retain one message for the mid-turn snapshot (P-02). Clears at a turn boundary,
+        skips droppable/stale `mic`, and caps the log."""
+        t = msg.get("type")
+        if t == "mic":
+            return                              # stale bars; the feed watchdog drops them anyway
+        if t == "state" and msg.get("state") in self._clears:
+            self._log.clear()
+        self._log.append(msg)
+        del self._log[:-SNAPSHOT_MAX]
+
+    def _snapshot_msgs(self) -> list[dict]:
+        """The retained turn as messages (for the selfcheck; the wire form is `_snapshot`)."""
+        return list(self._log)
+
+    def _snapshot(self) -> bytes:
+        """The retained turn as NDJSON bytes — replayed verbatim to a joining client, so its
+        reducer reconstructs exactly the state an already-connected client holds."""
+        return b"".join((json.dumps(m, separators=(",", ":")) + "\n").encode("utf-8")
+                        for m in self._log)
 
     @property
     def started(self) -> bool:
@@ -105,7 +158,8 @@ class Broadcaster:
     def start(self) -> None:
         if self._started:
             return
-        try:
+        srv = None                              # so the except can close it without NameError
+        try:                                    # if socket() itself raised (P-04)
             srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             if sys.platform != "win32":
                 # Unix: avoid TIME_WAIT rebind pain. Skipped on Windows, where SO_REUSEADDR
@@ -115,6 +169,8 @@ class Broadcaster:
             srv.listen()
         except OSError as e:
             # Port busy / bind refused: run deaf, never take down the daemon (crash-isolation).
+            if srv is not None:
+                srv.close()                     # P-04: don't leak the listener on bind failure
             log.warning("status feed disabled (%s:%d: %s)", self.host, self.port, e)
             return
         self._srv = srv
@@ -146,8 +202,18 @@ class Broadcaster:
             except OSError:
                 conn.close()   # died between accept and setup — drop it, keep serving
                 continue
+            # Snapshot + admit under ONE lock (P-02): capturing the turn and adding the client
+            # must be atomic, or a message published in the gap is lost or replayed out of
+            # order. The burst goes out while holding the lock — briefly blocking the send
+            # thread, the module's already-declared ceiling — so it leaves before any live
+            # message. Only admit the client if the snapshot reached it.
             with self._lock:
-                self._clients.add(conn)
+                snap = self._snapshot()
+                ok = _try_send(conn, snap) if snap else True
+                if ok:
+                    self._clients.add(conn)
+            if not ok:
+                continue       # died on the snapshot burst — never admitted, nothing to remove
             log.info("overlay connected (%d subscriber(s))", len(self._clients))
             threading.Thread(target=self._read_client, args=(conn,),
                              name="status-recv", daemon=True).start()
@@ -190,17 +256,26 @@ class Broadcaster:
             self._on_dismiss()
 
     def _send(self) -> None:
-        # ponytail: blocking sendall to localhost is the known ceiling — a wedged client
-        # slows only the FEED (this thread), never the voice loop, which only touches the
-        # queue. Go per-client non-blocking with buffers only if that ever actually bites.
+        # One thread delivers each message to every client serially, with the blocking sendall
+        # OUTSIDE the lock (P-04) so a wedged subscriber cannot block _accept from admitting a
+        # new one (which would sit looking connected, receiving nothing). It never touches the
+        # voice loop, which only touches the queue.
+        # Ceiling left in place on purpose: because it is ONE serial thread, a frozen subscriber
+        # also stalls delivery to any OTHER subscriber behind it (head-of-line blocking). That
+        # has no trigger today — the overlay is the only subscriber, and the expanded view will
+        # be another window in the SAME process sharing this one connection, not a second one.
+        # ponytail: single serial send thread; upgrade to a per-client queue + thread ONLY if a
+        # second SIMULTANEOUS subscriber ever exists (e.g. a debug tap run alongside the overlay).
         while True:
             msg = self._q.get()
             line = (json.dumps(msg, separators=(",", ":")) + "\n").encode("utf-8")
             with self._lock:
-                dead = [c for c in self._clients if not _try_send(c, line)]
-                for c in dead:
-                    self._clients.discard(c)
+                self._remember(msg)                 # P-02: retain for late joiners
+                clients = list(self._clients)       # snapshot the set, then send unlocked
+            dead = [c for c in clients if not _try_send(c, line)]
             if dead:
+                with self._lock:
+                    self._clients.difference_update(dead)
                 log.info("overlay disconnected (%d subscriber(s))", len(self._clients))
 
 
@@ -360,9 +435,79 @@ def _selfcheck() -> None:
         up._upstream(bad)
     assert fired == [1], "only 'dismiss' may cross the upstream channel"
 
+    # --- transport loaded from status.json (P-01), env override honoured ---
+    tp = load_schemas()["status"]["transport"]
+    assert (status_host(), status_port()) == (tp["host"], int(os.environ.get(tp["portEnv"], tp["port"])))
+    os.environ[tp["portEnv"]] = "9911"
+    try:
+        assert status_port() == 9911, "the daemon must read its port from status.json + the env"
+    finally:
+        os.environ.pop(tp["portEnv"], None)
+
+    # --- mid-turn snapshot (P-02): a joining client is caught up by replaying the turn ---
+    snap_bc = Broadcaster()
+    for m in [m_state("thinking"), m_transcript("last turn"), m_response(delta="old"),
+              m_state("idle"),                     # dwell: idle does NOT clear the turn (D24)
+              m_state("listening")]:               # the NEXT capture opens -> clears the log
+        snap_bc._remember(m)
+    # reconnect DURING capture must carry 'listening', not leave the joiner at idle with the
+    # mic open (spec/50 rule 4 — no dark listening).
+    assert snap_bc._snapshot_msgs() == [m_state("listening")], snap_bc._snapshot_msgs()
+    for m in [m_state("thinking"), m_transcript("what's the weather"),
+              m_response(delta="It's "), m_response(delta="clear."), m_mic(0.6),
+              m_state("speaking")]:
+        snap_bc._remember(m)
+    snap = snap_bc._snapshot_msgs()
+    assert snap[0] == m_state("thinking"), "replay must start at the turn boundary, not earlier"
+    assert [s["text"] for s in snap if s["type"] == "transcript"] == ["what's the weather"], \
+        "the previous turn's prompt leaked into the snapshot"
+    assert "".join(s.get("delta", "") for s in snap if s["type"] == "response") == "It's clear.", \
+        "the streamed reply must be replayed accumulated, not one delta"
+    assert all(s["type"] != "mic" for s in snap), "a snapshot must not carry stale bars"
+    assert all(_validate(s) == [] for s in snap), "a snapshot is still Contract P"
+
+    # --- P-04: a wedged subscriber must not hold the client lock during its blocking send ---
+    entered, release = threading.Event(), threading.Event()
+
+    class _Wedged:
+        def sendall(self, b): entered.set(); release.wait(2.0)
+        def close(self): pass
+
+    wb = Broadcaster()
+    wb._started = True
+    wb._clients = {_Wedged()}
+    threading.Thread(target=wb._send, name="wedge-send", daemon=True).start()
+    wb._q.put(m_state("thinking"))
+    assert entered.wait(1.0), "the send thread never reached sendall"
+    assert wb._lock.acquire(timeout=1.0), \
+        "a wedged subscriber holds the client lock — a new overlay could never be admitted (P-04)"
+    wb._lock.release()
+    release.set()
+
+    # --- P-04: a bind failure must close the listener socket, not leak it ---
+    real_socket = socket.socket
+
+    class _FakeSrv:
+        def __init__(self, *a, **k): self.closed = False
+        def setsockopt(self, *a): pass
+        def bind(self, *a): raise OSError("in use")
+        def listen(self, *a): pass
+        def close(self): self.closed = True
+
+    made: list = []
+    socket.socket = lambda *a, **k: made.append(_FakeSrv()) or made[-1]
+    try:
+        bb = Broadcaster()
+        bb.start()
+        assert bb.started is False and made and made[0].closed, \
+            "a bind failure must close the listener socket, not leak it (P-04)"
+    finally:
+        socket.socket = real_socket
+
     print("selfcheck OK: 7 message types validate against status.json, malformed rejected, "
           "NDJSON round-trips, scripted feed valid, publish() drops safely under backpressure, "
-          "upstream accepts 'dismiss' and nothing else")
+          "upstream accepts only 'dismiss', transport loads from status.json, mid-turn snapshot "
+          "replays the turn, and a wedged/bind-failed client neither blocks nor leaks")
 
 
 def main() -> None:

@@ -84,13 +84,21 @@ def main() -> int:
     _pump(app, 400)
     assert float(win.property("entrance")) < 0.01, "idle should leave the island faded out"
     model.apply({"type": "state", "state": "thinking"})
-    _pump(app, 90)
-    midway = float(win.property("entrance"))
-    _pump(app, 400)
+    # Sample the WHOLE fade rather than one fixed-time reading. A single _pump(90) of a 220 ms
+    # fade reads ~0.79 on this box, but on a slow CI runner (X-01) that pump can overrun the
+    # fade and read ~1.0 — a false failure. Catching ANY mid-range frame proves it animated
+    # through the middle instead of snapping, and is robust to how fast the runner is.
+    saw_mid = False
+    end = time.monotonic() + 1.5
+    while time.monotonic() < end and float(win.property("entrance")) < 0.99:
+        app.processEvents()
+        time.sleep(0.002)
+        if 0.01 < float(win.property("entrance")) < 0.99:
+            saw_mid = True
     assert float(win.property("entrance")) > 0.99, "a live state should fade the island in"
     # Reaching 1.0 alone would also pass if the Behavior were dead and it simply snapped, so
-    # the fade is only proven by catching it part-way.
-    assert 0.01 < midway < 0.99, f"the island snapped in rather than fading (entrance={midway})"
+    # the fade is only proven by having seen it part-way.
+    assert saw_mid, "the island snapped in rather than fading (no mid-fade frame seen)"
 
 
     # --- the status word wipes between words rather than cutting ---

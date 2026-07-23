@@ -27,7 +27,12 @@ jobs:
       - run: python -m bridge.broadcaster --selfcheck
       # Parsing + the tap/hold machine only; RegisterHotKey itself is proven live on the box.
       - run: python -m bridge.hotkeys --selfcheck
-      # The Teleprompter's Qt-free half. PySide6 is an optional [ui] extra and is NOT installed
-      # here (and QML needs a display), so the renderer can't be tested in CI — but the framing
-      # and the reducer deliberately import no Qt, and that is where the sharp edges are.
+      # The Teleprompter's Qt-free half: NDJSON framing + the reducer (imports no Qt).
       - run: python -m teleprompter.decode --selfcheck
+      # The renderer itself. PySide6 is a CORE dependency (D23), so `pip install -e .` above
+      # already installed it; overlay_check runs headless on Qt's offscreen platform (it sets
+      # QT_QPA_PLATFORM itself), so no display is needed. This is the check guarding the module
+      # where every renderer bug this cycle lived (X-01). Software RHI: no GPU on the runner.
+      - run: python -m teleprompter.overlay_check
+        env:
+          QSG_RHI_BACKEND: software

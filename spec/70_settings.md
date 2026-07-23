@@ -55,6 +55,9 @@ types / defaults / validation:
   `GEMMA_HOTKEY_ASK` / `GEMMA_HOTKEY_DICTATE` until this file's config source exists) ·
   **`auto_end`** (default off): end a keyed turn on VAD silence as well, so one tap is
   enough instead of two (`--auto-end`; spec/40 §Triggers).
+- **Transport (Contract P):** the status-feed host/port live in `spec/schemas/status.json`
+  `transport` (loaded by both the daemon and the overlay, P-01); the port has an env override
+  `GEMMA_STATUS_PORT` (both sides honour it) until this config source exists.
 - *(add more as they surface)*
 
 ## 4. Open questions (OWED)

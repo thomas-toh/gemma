@@ -40,7 +40,9 @@ gpu-cuda = ["nvidia-cublas-cu12", "nvidia-cudnn-cu12", "nvidia-cuda-runtime-cu12
 [tool.setuptools]
 packages = ["bridge", "teleprompter"]
 
-# The QML and the bundled font are loaded from disk relative to the package, so a non-editable
-# install has to carry them too.
+# The QML, its qmldir, and the bundled font are loaded from disk relative to the package, so a
+# non-editable install has to carry them too. `qmldir` has no extension, so the *.qml glob
+# misses it — without it, `import teleprompter` (the Theme singleton) dies with "module not
+# installed" off an editable install. CI's `pip install -e .` masks it, so name it explicitly.
 [tool.setuptools.package-data]
-teleprompter = ["*.qml", "fonts/*.ttf"]
+teleprompter = ["*.qml", "qmldir", "fonts/*.ttf"]

@@ -58,8 +58,17 @@ and configurable (dictation = Groq, assistant `--clean-prompts` = local for now)
 D15 + spec/70; config plumbing waits on the config source. **S-07/S-09** — prose de-headseted
 (pyproject, CLAUDE.md intro) and the repo map now lists `teleprompter/`/`tests/`/`scripts/`;
 the `bridge/` → `daemon/` rename is parked.
-**Remaining review items:** G-05 · G-06 · P-01–P-04 · U-01 · U-02 · B-02 · S-03 · S-04 · S-05 ·
-S-08 · X-01.
+**Done 2026-07-23 (Contract P cluster + CI):** **P-01** — transport (host/port/env-var) moved
+into `status.json` `transport`, loaded by both daemon and overlay, so a moved daemon can't leave
+a deaf overlay. **P-02** — the broadcaster retains the current turn and replays it to a client
+that (re)connects mid-turn (clears at the same `clearsTurn` boundary the reducer uses; fixes the
+blank-island-on-restart and the spec/50 rule-4 gap on reconnect-mid-capture). **P-03** — the
+decoder resets its partial-line buffer on each new connection (no remnant glued onto the next
+stream). **P-04** — the blocking `sendall` moved outside the client lock (a wedged overlay no
+longer blocks admitting a new one), and a bind failure closes the listener. **X-01** — CI now
+runs `overlay_check` (headless, software RHI); fixed the `qmldir` package-data glob (bonus find)
+and STATE's self-contradiction about PySide6. `status.json` → v0.3.1.
+**Remaining review items:** G-05 · G-06 · U-01 · U-02 · B-02 · S-03 · S-04 · S-05 · S-08.
 **Next (Thomas's sequencing):** sentence-streamed TTS — start speaking the moment Claude starts
 writing, cut at sentence terminators (`synth()` is already per-sentence). Forces the speak/hold
 decision (M0.5's model-tagged split, or drop the heuristic) because the length is no longer
@@ -188,13 +197,14 @@ Parked, not blocking, pick up by mood:
   on 2026-07-22. Reserve numbers by taking them, not by naming them in advance — the D18/D19
   collision came from exactly this.)*
 
-Two open questions owed a decision:
+One open question owed a decision:
 
 - **Earcons** — gated by the speech switch, or always on? (see D23 note under Track P)
-- **CI and the renderer** — `overlay_check` is NOT wired in. PySide6 is a core dependency
-  (D23) but `checks.yml` still calls it an optional `[ui]` extra and claims QML "needs a
-  display", which is **wrong**: it runs headless under `QT_QPA_PLATFORM=offscreen`. Decide
-  whether CI carries it. Recommended yes — every bug this week was in the renderer.
+
+*(Resolved 2026-07-23, X-01: `overlay_check` is now wired into CI — `checks.yml` runs it headless
+under the software RHI backend, and its stale "PySide6 is an optional `[ui]` extra" comment is
+gone. Also fixed the `qmldir` package-data glob that would have shipped a broken non-editable
+install.)*
 
 ## Track G — Bridge (Doc 04 → M0, M1, M2)
 
@@ -431,9 +441,9 @@ Two open questions owed a decision:
   Rectangle antialiases slightly smoother.
   New: `python -m teleprompter.overlay_check` — the renderer's offline check, on Qt's
   `offscreen` platform so it needs no display. Every assertion in it was verified to FAIL when
-  its bug is reintroduced. **Not yet in CI:** PySide6 is an optional `[ui]` extra and CI does
-  not install it; `checks.yml`'s note that "QML needs a display" is now wrong. Decide whether
-  the pipeline should carry the UI extra.
+  its bug is reintroduced. **Wired into CI 2026-07-23 (X-01):** PySide6 is a core dependency
+  (D23), so `pip install -e .` already installs it; the check runs headless under the software
+  RHI backend. The fade assertion was made sample-based so a slow runner cannot false-fail it.
 - **Open question raised by D23:** are **earcons** gated by the speech switch, or always on?
   They are not TTS, and the `working` earcon is currently the only thing meeting D11's 1.5 s
   budget on the audio side — with speech off, the overlay's `thinking` state carries it alone

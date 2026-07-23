@@ -32,7 +32,7 @@ class Feed(QObject):
 
         self._sock = QTcpSocket(self)
         self._sock.readyRead.connect(self._on_ready)
-        self._sock.connected.connect(lambda: log.info("feed connected (%s:%d)", host, port))
+        self._sock.connected.connect(self._on_connected)
         self._sock.disconnected.connect(self._on_closed)
         self._sock.errorOccurred.connect(lambda _err: self._on_closed())
 
@@ -50,6 +50,13 @@ class Feed(QObject):
     def _connect(self) -> None:
         if self._sock.state() == QAbstractSocket.SocketState.UnconnectedState:
             self._sock.connectToHost(self._host, self._port)
+
+    def _on_connected(self) -> None:
+        # A remnant left in the decoder by a connection that died mid-line must not glue onto
+        # this stream's first message (P-03) — which, with the snapshot on connect, is the
+        # state message that tells the island what the daemon is doing.
+        self._dec.reset()
+        log.info("feed connected (%s:%d)", self._host, self._port)
 
     def _on_ready(self) -> None:
         for msg in self._dec.feed(bytes(self._sock.readAll().data())):

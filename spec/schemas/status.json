@@ -2,9 +2,10 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "gemma/overlay/status",
   "title": "Overlay status feed messages",
-  "version": "0.3.0",
-  "description": "JSON status events the orchestrator broadcasts over a localhost-only socket for the Teleprompter overlay to render (spec/00 D13/D19, Contract P). Transport is one JSON object per line (NDJSON) on 127.0.0.1. Protocol: receivers ignore unknown message types (log once); every message carries 'type'. The 'state' values are the overlay's own; its listening indicator inherits spec/50's truthful-indicator rule (shows 'listening' only while audio is actually being captured). Nearly all traffic is orchestrator->overlay; 'upstream' below lists the sole exception (D24).",
-  "$comment": "'clearsTurn' and 'upstream' are Contract P RULES that the code loads at run time (hard rule 3), not JSON Schema keywords — draft 2020-12 ignores unknown top-level keys, so they travel with the message shapes they govern instead of being restated as literals in teleprompter/decode.py and bridge/broadcaster.py. Both were prose before, and both drifted from the code that implements them.",
+  "version": "0.3.1",
+  "description": "JSON status events the orchestrator broadcasts over a localhost-only socket for the Teleprompter overlay to render (spec/00 D13/D19, Contract P). Transport is one JSON object per line (NDJSON); host/port/env-var in 'transport' below. Protocol: receivers ignore unknown message types (log once); every message carries 'type'. The 'state' values are the overlay's own; its listening indicator inherits spec/50's truthful-indicator rule (shows 'listening' only while audio is actually being captured). Nearly all traffic is orchestrator->overlay; 'upstream' below lists the sole exception (D24).",
+  "$comment": "'transport', 'clearsTurn' and 'upstream' are Contract P RULES the code loads at run time (hard rule 3), not JSON Schema keywords — draft 2020-12 ignores unknown top-level keys, so they travel with the message shapes they govern instead of being restated as literals in teleprompter/decode.py and bridge/broadcaster.py. 'transport' is the one home both packages read (and the Rust back-end D21 plans will too — a Python constant is unreachable from Rust); the port used to live in three places and the env override in only one, so setting it moved the daemon and left the overlay reconnecting to the old port forever.",
+  "transport": { "host": "127.0.0.1", "port": 8990, "portEnv": "GEMMA_STATUS_PORT" },
   "clearsTurn": ["listening", "thinking"],
   "upstream": ["dismiss"],
   "oneOf": [
