@@ -1,5 +1,12 @@
 # Project Gemma — CLAUDE.md
 
+> # ***<u>RULE 0 — NEVER PROCEED WITHOUT THE SAY-SO.</u>***
+> ***<u>When Thomas expressly says to gate something on his approval — or asks a question,
+> raises an option, or flags a decision as his — STOP. Ask, then WAIT for his explicit
+> go-ahead. Do not implement, edit, or "just start." A recommendation is not permission;
+> answering your own question is not permission. Silence is not permission. Only an explicit
+> "yes / go ahead / do it" from Thomas is. This overrides every other instinct in this file.</u>***
+
 Gemma is a personal prototyping project: a **UI-first desk voice assistant + dictation
 tool** on a Windows PC (a Teleprompter overlay is the primary surface), backed by swappable
 LLM brains (Claude API first, local LLM second). Reached through two hotkey doors — ask and
