@@ -46,6 +46,7 @@ Every new terminal — reactivate, then run:
 
 ```bash
 source .venv/bin/activate         # Windows: .venv\Scripts\activate
+python run.py                          # start BOTH — daemon + Teleprompter — in one window; Ctrl-C stops both
 python -m bridge.orchestrator          # THE M0 LOOP (step 6): press ctrl+alt+1 (the ask door), ask, hear the answer
 python -m bridge.audio.listen          # wake -> listen -> transcribe (step 3); say "hey jarvis" (wake word is opt-in, D23)
 python -m bridge.audio.wake            # just the wake-word listener (step 2)

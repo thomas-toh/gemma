@@ -36,7 +36,11 @@ teleprompter width fix. Every code fix is guarded; replay 4/4; all selfchecks gr
 
 **Parked, not in the sequence:** **local B2 brain (Ollama)** — deferred; M2 "it's local" and the
 *local* cleanup-engine option (S-06) both wait on it. **Launcher / packaging** (tray autostart,
-C2, daemon-death visible in the tray) — still owed, wants a D-number.
+C2, daemon-death visible in the tray) — still owed, wants a D-number. *A dev launcher `run.py`
+now starts both procs from one command (2026-07-23); what's still owed for the SHIPPED app is
+the **true single-process merge** — one thing to launch, one crash to restart everything, which
+is what a user wants. Two procs is deliberately kept for dev: independence = restart only the
+component you changed. Merge belongs with packaging, not the dev launcher.*
 
 ---
 
