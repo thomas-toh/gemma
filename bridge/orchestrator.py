@@ -83,7 +83,9 @@ def sentences(text: str) -> int:
 SPOKEN_ERRORS = {
     "auth": "I can't reach my brain: the API key is missing or rejected.",
     "rate_limit": "I'm being rate limited. Give me a moment and try again.",
-    "context": "This conversation got too long for me. Wake me afresh to reset it.",
+    # B1 no longer emits 'context' (B-02) — kept for other adapters. Door-neutral wording
+    # (was "Wake me afresh", wake-word framing for a product whose wake word is off by default).
+    "context": "This conversation got too long for me. Start a new turn to reset me.",
     "unavailable": "My brain is unreachable right now.",
 }
 

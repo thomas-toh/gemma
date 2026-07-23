@@ -7,8 +7,8 @@ Identical audio every run: if a wake/VAD/STT/tuning change alters behaviour, thi
 catches it in one command — on the PC and, with the copied wav/ folder, on the Mac.
 
     python -m tests.replay                          # run every case in cases.json
-    python -m tests.replay --case wake_short        # one case
-    python -m tests.replay --record wake_short      # record that case's WAV (mic)
+    python -m tests.replay --case key_short         # one case
+    python -m tests.replay --record key_short       # record that case's WAV (mic)
 
 The WAVs are Thomas's voice and deliberately untracked (tests/replay/wav/ is
 gitignored); cases.json (text only) is committed. Recording fixtures is consented,

@@ -48,10 +48,13 @@ IDLE ──wake──▶ LISTENING ──end-of-speech──▶ THINKING ──�
   spoken channel is a capability behind a switch (**default off**, spec/70); everything below
   applies only when speech is enabled.
 - Speech on, answers ≤ 2 sentences: spoken automatically.
-- Longer answers: full text on the overlay; the spoken channel plays `answer-ready`
-  and speaks on "read it" (unchanged away-from-screen behaviour — the held answer now
-  survives across wakes, since with no follow-up window a re-wake is the only way to
-  reach it). Never lecture uninvited. M0.5 upgrades this to a model-tagged spoken TL;DR over displayed detail.
+- Longer answers (M0 heuristic): full text on the overlay; **held — SHOWN, not spoken.** The
+  hold stops a long answer being read AT you (never lecture uninvited). **"read it" is retired**
+  (S-03): there is no spoken-on-request escape hatch, and nothing parses utterances for one.
+  Whether a held answer is ever spoken on request folds into the speech switch (spec/70) —
+  **direction (Thomas, 2026-07-23): with TTS on, read all by default** rather than holding long
+  answers silently; finalised at the TTS-switch / M0.5 stage, which also replaces this
+  sentence-count heuristic with a model-tagged spoken TL;DR over displayed detail.
 - Successful Tier 2 actions: `task-complete` earcon only. Failures: `error` earcon + one-sentence explanation.
 - Tier 3 (D26): the proposed action renders on the Teleprompter and a **keypress** confirms it
   (propose-then-tap, D20); with speech on, the `ask` earcon + a spoken one-line summary of what
@@ -119,7 +122,8 @@ spec constants.
   text is selected warns on the Teleprompter before pasting over it.
 - **Ask** — the assistant: utterance + context (selection · clipboard) to the brain,
   which is the toolpicker (Contract B tool-calling over tools.json). Answers render on
-  the Teleprompter and speak (D16). Write-actions (rewrite of the selection, etc.) are
+  the Teleprompter **always** and are **spoken only with speech enabled** (D16 as amended
+  by D23/S-04 — default off). Write-actions (rewrite of the selection, etc.) are
   **propose-then-tap**: proposal on the Teleprompter, second tap of the ask key
   applies — only a user keypress ever pastes (D12). `auto_apply` (spec/70, default
   off) bypasses the tap knowingly.
@@ -185,13 +189,19 @@ buzz at each earcon/reply onset. Wired output is unaffected. The daemon MUST hol
 (the orchestrator's `OutputPump`). The standalone `speak.py` CLI opens/closes the device
 per sound, so it exhibits the glitch by design — it disappears under the warm stream.
 
-## Visual output — the Teleprompter (component P; D13/D19; v0 planned, pre-M0-run)
+## Visual output — the Teleprompter (component P; D13/D19/D22)
 
-A supplementary on-screen indicator on the hub PC: a Dynamic-Island-style overlay — a
-small pill/panel near the top of the screen — showing, at a glance, session **state**
-(pulsing dot = awake/listening · spinner = thinking · gone = asleep), the current
-**response text**, and small **status icons** (mute, tool activity, error). Component
-row in spec/00; the top-level `teleprompter/` package (component P, D19).
+**Locked design (D22; build status in STATE Track P).** A solid-black **Dynamic Island fused to
+the top screen edge**: bottom corners round inward, top corners flare **outward** into the edge
+(concave fillets). White on black. It has **two sizes and nothing else** — a compact pill showing
+a **bars** indicator driven by the *real mic level* (audio-reactive, the spec/50 truthful
+indicator, not decorative) while LISTENING, and a standard-width panel for every other visible
+state. Text is a **typewriter**: the transcribed prompt, then Gemma's reply *replaces* it — never
+stacked. While THINKING with no text yet, a **morphing status word** occupies the prompt's slot.
+**No state labels, no dot, no spinner, no status icons, and no controls** — the ⌄ handle was
+built and cut (D22); prior prompts and the full text of a long reply live in the expanded view.
+Idle hides the window outright. Component row in spec/00; the top-level `teleprompter/` package
+(component P, D19). Blueprint: `sandbox/teleprompter-mockup.html` (gitignored).
 
 Role and hard boundaries:
 - **The spine, not a supplement (D23).** The Teleprompter is *the* surface: a teleprompter of

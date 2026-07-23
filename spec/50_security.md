@@ -1,6 +1,6 @@
 # Spec 50 — Security & privacy posture
 
-**Status: BINDING (design constants, not preferences)** · Last reconciled: 2026-07-22 · Rationale: docs/01 §7, docs/02 §7
+**Status: BINDING (design constants, not preferences)** · Last reconciled: 2026-07-23 · Rationale: docs/01 §7, docs/02 §7
 
 1. **Tool containment is the defence, not model cleverness.** Assume everything a brain
    reads (web, files, screen contents) is hostile (prompt injection is unsolved).
@@ -14,7 +14,8 @@
 4. **Truthful signalling.** The overlay's listening indicator must reflect actual pipeline
    state; `listening` ⇔ audio is being captured/processed. No dark listening, ever.
 5. **Mute is software (desk product).** With commodity audio gear there is no hardware mute
-   line; the tray exposes a software mute that stops capture — honestly weaker than the
+   line; the tray exposes a software mute that stops capture *(planned — not in either tray
+   yet; spec/70 lists it)* — honestly weaker than the
    excised headset's physical switch (spec/00 D18), and truthfully reflected by rule 4.
 6. **`local_only` flag.** Per-session; forces B2, refuses B1/B3 with a spoken error if
    unavailable. Invoked by config or the "private mode" utterance. This is the

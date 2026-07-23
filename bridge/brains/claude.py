@@ -57,25 +57,27 @@ def _get_key() -> str | None:
     return os.environ.get("ANTHROPIC_API_KEY")
 
 
-def _classify_badrequest(message: str) -> str:
-    """A 400 that's really a context overflow vs. any other malformed request."""
-    m = message.lower()
-    return "context" if ("context" in m or "too long" in m) else "unknown"
-
-
 def _error_kind(exc: Exception) -> str:
-    """Map an SDK exception to a shared Contract B Error kind (spec/20)."""
+    """Map an SDK exception to a shared Contract B Error kind (spec/20) by its TYPE and status
+    code — never by matching the message prose (B-02).
+
+    No `context` case: a context overflow and any other malformed request are BOTH
+    `BadRequestError` / `type == "invalid_request_error"` (verified, anthropic 0.116.0) — the
+    provider gives no distinct code to switch on, so the only in-band signal is the message
+    text, and heuristics over prose mis-narrate (a 400 about a bad field said "conversation too
+    long"). A 400 therefore maps to `unknown` (the generic apology), which is what the API is
+    actually telling us. Detecting context overflow *properly* means counting tokens against the
+    model's window BEFORE the call — a proactive check, not an error heuristic — and that only
+    earns its keep once conversations persist across wakes (parked; STATE)."""
     import anthropic
 
     if isinstance(exc, anthropic.AuthenticationError):
         return "auth"
     if isinstance(exc, anthropic.RateLimitError):
         return "rate_limit"
-    if isinstance(exc, anthropic.BadRequestError):
-        return _classify_badrequest(str(getattr(exc, "message", exc)))
     if isinstance(exc, anthropic.APIConnectionError):
         return "unavailable"
-    if isinstance(exc, anthropic.APIStatusError):
+    if isinstance(exc, anthropic.APIStatusError):   # covers BadRequestError (400) -> unknown
         return "unavailable" if exc.status_code >= 500 else "unknown"
     return "unknown"
 
@@ -172,11 +174,25 @@ async def _run(question: str, model: str) -> int:
 
 
 def _selfcheck() -> None:
-    # The non-trivial branch is the 400 -> context/unknown split; the isinstance ladder
-    # is a plain lookup. Test the classifier without constructing SDK exceptions.
-    assert _classify_badrequest("prompt is too long: 250000 tokens > 200000") == "context"
-    assert _classify_badrequest("input length and max_tokens exceed context limit") == "context"
-    assert _classify_badrequest("messages.0.role: unexpected value") == "unknown"
+    # Error mapping is by exception TYPE and status code, never message prose (B-02). Build real
+    # SDK exception instances via __new__ (isinstance passes; no httpx.Response to fake), set
+    # only the status_code the ladder reads. A 400 maps to `unknown` — the generic apology —
+    # because Anthropic collapses context-overflow and other bad requests into one type.
+    import anthropic
+
+    def _exc(cls, status=None):
+        e = cls.__new__(cls)
+        if status is not None:
+            e.status_code = status
+        return e
+
+    assert _error_kind(_exc(anthropic.AuthenticationError)) == "auth"
+    assert _error_kind(_exc(anthropic.RateLimitError)) == "rate_limit"
+    assert _error_kind(_exc(anthropic.APIConnectionError)) == "unavailable"
+    assert _error_kind(_exc(anthropic.InternalServerError, 500)) == "unavailable"
+    assert _error_kind(_exc(anthropic.BadRequestError, 400)) == "unknown", \
+        "a 400 must map to the generic apology — no prose-guessing at 'context' (B-02)"
+    assert _error_kind(RuntimeError("boom")) == "unknown"
     assert DEFAULT_SYSTEM and "voice" in DEFAULT_SYSTEM.lower()
 
     # Client lifetime (spec/20 adapter lifetime). No network: every cost here is local CPU.
@@ -199,8 +215,8 @@ def _selfcheck() -> None:
     # slow first tokens — the exact turns this whole change exists to speed up.
     assert first.timeout.read >= 60, f"custom client dropped the SDK read timeout: {first.timeout}"
 
-    print("selfcheck OK: error-kind classifier, defaults, client built once with the "
-          "trust store memoised and the SDK's long read timeout intact")
+    print("selfcheck OK: error mapping by type/status (no prose), defaults, client built once "
+          "with the trust store memoised and the SDK's long read timeout intact")
 
 
 def main() -> None:

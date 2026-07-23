@@ -68,7 +68,26 @@ stream). **P-04** — the blocking `sendall` moved outside the client lock (a we
 longer blocks admitting a new one), and a bind failure closes the listener. **X-01** — CI now
 runs `overlay_check` (headless, software RHI); fixed the `qmldir` package-data glob (bonus find)
 and STATE's self-contradiction about PySide6. `status.json` → v0.3.1.
-**Remaining review items:** G-05 · G-06 · U-01 · U-02 · B-02 · S-03 · S-04 · S-05 · S-08.
+**Done 2026-07-23 (small code, committed `85c8b6b`):** **G-05** (hold-PTT deafness — accepted,
+documented; the hold-vs-tap split is a feature) · **G-06** (Door close-window race — documented,
+Door redesign parked) · **U-01** (reduced-motion re-read live on WM_SETTINGCHANGE via the D24
+native filter) · **U-02** (dead `fadeTop` knob deleted) · plus the **teleprompter width bug** (a
+re-opened pill animated down from the last turn's width — now snaps to size before it appears).
+**Done 2026-07-23:** **B-02** — B1 error mapping is by exception TYPE + status code, never
+message prose; a 400 → generic apology (Anthropic gives no distinct code for context-overflow —
+both are `invalid_request_error`). Guarded.
+**Spec reconciliation 2026-07-23 (S-03/04/05/08):** **S-03** — "read it" retired everywhere
+(spec/40 narration + `earcons.json`); a held long answer means SHOWN, not spoken; the incoherent
+"survives across wakes" line is gone. **S-04** — D20 and spec/40 §Triggers' "speak (D16)"
+annotated with D23 (render always, speak only with speech on). **S-05** — the locked visual
+design moved fully into spec/40 §Visual output (island fused to the edge, mic-driven bars,
+typewriter, no controls — D22); the stale "planned, pre-M0-run" build fragment dropped from the
+header. **S-08** — residue sweep: `status.json`/`earcons.json` descriptions (`working` = fires
+at 1.4 s, just inside the budget; `answer-ready` reworded), spec/00 `bridge/hotkeys.py` +
+M3-removed footnote, spec/50 mute tagged *(planned)*, README + `replay.py` de-wake-worded and
+`key_short`, orchestrator `SPOKEN_ERRORS["context"]` door-neutral. `earcons.json` → v0.3.2.
+**✅ THE 26-FINDING REVIEW IS CLOSED.** (Directions recorded for later: read-all-when-TTS-on at
+the TTS switch; the earcon redo below.)
 **Next (Thomas's sequencing):** sentence-streamed TTS — start speaking the moment Claude starts
 writing, cut at sentence terminators (`synth()` is already per-sentence). Forces the speak/hold
 decision (M0.5's model-tagged split, or drop the heuristic) because the length is no longer
@@ -191,6 +210,21 @@ Parked, not blocking, pick up by mood:
   discards everything received and shows a generic apology. Keeping the partial with a fault
   marker would have made the anthem case self-explanatory. Needs a rendering decision (what a
   half-answer plus a fault looks like), which is why it is parked rather than patched.
+- **The conversation / memory model (owed design; surfaced by B-02, 2026-07-23).** Today history
+  dies at IDLE (one wake-chain). The two poles are Claude's named, persistent **chats** and
+  Siri's **dump-everything-on-close** — Gemma wants something in between, and it is undecided.
+  This gates two low-tier things: (1) context-overflow can't actually happen while conversations
+  are this short, so B-02 dropped detection entirely; (2) the *proper* overflow guard is a
+  **proactive token count vs. the model's context window before the call** (not an error
+  heuristic — Anthropic gives no distinct 400 code for it), which only earns its keep once
+  conversations persist. Low-tier refactor candidate; decide the conversation model first.
+- **Earcon redo (owed design; Thomas, 2026-07-23).** A dedicated session to redo the earcon
+  **vocabulary and WAVs together**, folded in with the config source + "listen for me" work.
+  Direction: **cut the set to a few** cues that read as the device's own hum/ping rather than a
+  vocabulary of distinct meanings. Settles the deferred `answer-ready` fate (S-03), the open
+  "are earcons gated by the speech switch?" question, and the `working` earcon's role (D25 made
+  it the speech-mode fallback). Pairs with the **read-all-when-TTS-on** direction (spec/40
+  narration): both land at the TTS-switch / speech-config stage.
 
 - **Prompt dwell** (owed fix 3 below) — the prompt still flashes for ~1 s. Pairs with the
   **7a/7b dead-air gaps**; same underlying problem, so do them together.

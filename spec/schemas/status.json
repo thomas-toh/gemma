@@ -30,7 +30,7 @@
     },
     "transcript": {
       "type": "object",
-      "description": "orchestrator->overlay: the user's transcribed prompt AFTER the deterministic word-replacement/cleanup (spec/40, D15). 'final':false is reserved for streaming STT (deferred); M0 always sends final:true. The overlay accumulates finals for the expandable session history (D14, in-memory).",
+      "description": "orchestrator->overlay: the user's transcribed prompt AFTER the deterministic word-replacement/cleanup (spec/40, D15). 'final':false is reserved for streaming STT (deferred); M0 always sends final:true. The overlay accumulates finals for the expanded view (D22, in-memory; the ⌄ 'expandable' handle D14 named was cut).",
       "properties": {
         "type": { "const": "transcript" },
         "text": { "type": "string" },

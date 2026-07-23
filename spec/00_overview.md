@@ -49,7 +49,7 @@ per-track *sub-steps* live in `STATE.md`; the frozen M0 build order is in docs/0
 
 | Component | Spec | Code location | Lands at |
 |-----------|------|---------------|----------|
-| Hotkey triggers (ask-Gemma · dictation) | [40_interaction](40_interaction.md) + 60_dictation (owed) | `bridge/hotkeys/` | ask pre-M0-run (D16) · dictation at D1 |
+| Hotkey triggers (ask-Gemma · dictation) | [40_interaction](40_interaction.md) + 60_dictation (owed) | `bridge/hotkeys.py` | ask pre-M0-run (D16) · dictation at D1 |
 | Audio pipeline (wake, VAD, STT, TTS, earcons) | [40_interaction](40_interaction.md) | `bridge/audio/` | M0 |
 | **Teleprompter** (P) — overlay, separate process on the status feed | [40_interaction](40_interaction.md) § Visual output | `teleprompter/` | v0 pre-M0-run (D13/D19) · dictation states at D2 |
 | Orchestrator (state machine) | [40_interaction](40_interaction.md) | `bridge/orchestrator.py` | M0 (build step 6) |
@@ -70,6 +70,8 @@ Definitions only — live progress per track is in [STATE.md](../STATE.md).
 | **M2 — It's local** | M1 script passes with Wi-Fi unplugged (B2 brain) |
 | **MD — It types** *(feature milestone, parallel to the M-ladder)* | Hotkey → dictated speech lands in the focused app: ×10 consecutive dictations across ≥3 apps paste correctly after cleanup, zero answer-instead-of-transcript failures; capture in RAM; assistant loop unaffected |
 | **M4 — Experiments** | B3 adapter · per-request routing |
+
+*(No M3: it was the custom-headset milestone, removed when Contract H was excised — D18.)*
 
 ## Fixed platform decisions
 
@@ -273,7 +275,9 @@ ever. Safety rule: invoking dictate while text is selected warns on the Teleprom
 before pasting over it. **Ask:** the full assistant — utterance + context (selection,
 clipboard) go to the brain, which *is* the toolpicker: Contract B tool-calling over the
 tools.json registry routes intent (answer · rewrite · fetch · act). Answers render on
-the Teleprompter and speak (D16). **Rewrite is not a mode — it is an ask outcome**
+the Teleprompter and speak (D16). *(Amended by D23/S-04: answers render **always**;
+they are **spoken only with speech enabled** — default off. "and speak" reads as
+unconditional above; D23 made it a switch.)* **Rewrite is not a mode — it is an ask outcome**
 (supersedes D17's separate-slice framing; the selection is the content, the utterance
 is the instruction). Write-actions from the ask door are **propose-then-tap** by
 default: the proposal renders on the Teleprompter and a second tap of the ask key
