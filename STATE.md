@@ -10,7 +10,35 @@ instructions → README · findings → NOTES.md · decisions → a D-number in 
 
 Last updated: 2026-07-22
 
-## Handoff — start here (2026-07-22)
+## Handoff — start here (2026-07-23)
+
+**✅ THE 26-FINDING ADVERSARIAL REVIEW IS CLOSED** (all commits pushed to `origin/teleprompter`).
+It produced **D24** (Teleprompter owns the display; Contract P gains `dismiss`), **D25** (latency
+gates → `targets.json`), **D26** (Tier-3 keypress confirmation), **Rule 0** (CLAUDE.md), and a
+teleprompter width fix. Every code fix is guarded; replay 4/4; all selfchecks green.
+
+**Build sequence (Thomas, decided 2026-07-23) — do in this order:**
+1. **Expanded view** — Track P; wants its own D-number (widens D14). Fold in the small owed Track
+   P items here (7a/7b dead-air gaps, latency-readout styling).
+2. **Conversation / memory model** — the parked "chats vs dump-everything, want in between"
+   design (below). Unblocks the B-02 proactive-overflow guard.
+3. **Settings / config page + API tie-ins** — **this is the M0-close gate**; also the home for
+   multi-provider routing (per-role cleanup engine, S-06) and the "listen for me" switch.
+4. **Sentence-streamed TTS + earcon redo, together** — this is effectively **M0.5 "It speaks
+   well"**: streaming FORCES the speak/hold decision (model-tagged split replaces the ≤2-sentence
+   heuristic), and carries the persona prompt + speech normalization + the "read all when TTS on"
+   direction and the earcon-vocabulary cut.
+5. **Tools + dictation** — two distinct tracks, one phase: **Track T** (Contract T executor,
+   M1) **and Track D** (dictation — the dictate key is registered-but-unwired; needs the Groq
+   cleanup key + the `transform` Contract-B verb, both delivered by #3, so it slots naturally
+   here).
+6. **Mac parity (D10)** — last: full-loop Mac test + macOS hotkeys (Carbon `RegisterEventHotKey`).
+
+**Parked, not in the sequence:** **local B2 brain (Ollama)** — deferred; M2 "it's local" and the
+*local* cleanup-engine option (S-06) both wait on it. **Launcher / packaging** (tray autostart,
+C2, daemon-death visible in the tray) — still owed, wants a D-number.
+
+---
 
 Track P's island is built and live: real turns render end to end (wake word → STT → B1 →
 Teleprompter → TTS). The renderer's defects from the first live run are fixed and guarded by
