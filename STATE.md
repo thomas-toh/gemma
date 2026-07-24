@@ -8,7 +8,7 @@ start, update it in the same commit as the work · when a step closes, collapse 
 entry to one or two lines — durable knowledge moves out (behaviour → spec · run
 instructions → README · findings → NOTES.md · decisions → a D-number in spec/00).
 
-Last updated: 2026-07-22
+Last updated: 2026-07-23
 
 ## Handoff — start here (2026-07-23)
 
@@ -18,8 +18,11 @@ gates → `targets.json`), **D26** (Tier-3 keypress confirmation), **Rule 0** (C
 teleprompter width fix. Every code fix is guarded; replay 4/4; all selfchecks green.
 
 **Build sequence (Thomas, decided 2026-07-23) — do in this order:**
-1. **Expanded view** — Track P; wants its own D-number (widens D14). Fold in the small owed Track
-   P items here (7a/7b dead-air gaps, latency-readout styling).
+1. ~~**Expanded view**~~ **DONE — D27 (2026-07-23).** Track P; got its own D-number (widens D14).
+   The "peek" is built + guarded (`overlay_check`): hover-hint → click grows the island in place
+   into the full current turn (prompt pinned + collapsible, reply scroll + fade, Copy/Save); the
+   island now takes input over its silhouette when peekable (per-region `WM_NCHITTEST`, **amends
+   D22**). **Still owed, NOT folded in this pass:** 7a/7b dead-air gaps, latency-readout styling.
 2. **Conversation / memory model** — the parked "chats vs dump-everything, want in between"
    design (below). Unblocks the B-02 proactive-overflow guard.
 3. **Settings / config page + API tie-ins** — **this is the M0-close gate**; also the home for
@@ -544,16 +547,18 @@ install.)*
   clicks *without* taking focus. Only *per-region* click-through in ONE window is unproven; it
   needs `WM_NCHITTEST` → `HTTRANSPARENT` via a native event filter — and the expanded view
   wants its own window anyway, so it may never be needed.
-- **Owed (design, from 2026-07-21; overrides D14, wants a D-number):** an **expanded view** —
-  now the single home for everything the island deliberately does not carry: **prior prompts**
-  (moved here when the ⌄ was cut), the full text of a long reply, and copy / save / export.
-  Past ~3–4 lines the island stops
-  being glanceable, so a second surface shows the full turn with copy/save actions. Resolves
-  spec/40's "longer answers: full text on the overlay" honestly, and gives the ⌄ handle a
-  better job than history alone (so it widens D14's scope → wants its own D-number). Scope
-  caution: copy is safe; save/export must reuse spec/50's transcript-logging mechanism rather
-  than invent a second one; "send" is an integration and belongs behind Contract T (M1+), not
-  a button the overlay owns. `maxLines` is already a single knob, config-bound at spec/70.
+- **Built (D27, 2026-07-23) — the expanded view / "peek".** Hover a shown answer → hint (nudge +
+  pointer); click → the island grows *in place* into the current turn read in full (prompt pinned +
+  collapsible past 2 lines · reply scroll under a top/bottom fade · **Copy** + **Save**-to-file).
+  Content-clamped height (floor↔ceiling, then scroll); Esc collapses before dismissing; dwell pauses
+  while open. `teleprompter/PeekPanel.qml` + `Overlay.qml`; native per-region click-through +
+  Copy/Save in `__main__.py` (**amends D22** — the island takes input over its silhouette when
+  peekable). Guarded in `overlay_check`; blueprint `sandbox/teleprompter-expanded-mockup.html`.
+  **Deferred to the conversation/memory model:** cross-session scroll-back + the full session view
+  (prior prompts across turns); "send" stays a Contract-T integration (M1+), never an overlay button.
+  **Unproven live** (like D24's filter): the hover→click→peek path and the per-region hit-test have
+  only run offscreen (no real mouse) — the `WM_NCHITTEST` mechanism itself is proven in the spike.
+  Action icons are clean hand-drawn SVGs (copy/save/check); exact Material Symbols can drop in.
 - **Resolved (2026-07-21, from the C1 review):** barge-in detection is the **same species as
   the wake-word watch** — "always-on mic", not a capture window. `status.json`'s `mic` wording
   narrowed to match (v0.2.1): a `mic` message means a capture window (LISTENING/FOLLOW-UP) is

@@ -30,12 +30,15 @@ QtObject {
     // CSS semantics: the line box is lineHeight * fontSize (Overlay applies it via
     // Text.FixedHeight). Keep lineHeight above ~1.2 or descenders start to clip.
     readonly property int  fontSize: 18
+    readonly property int  fontSizePrompt: 16        // peek prompt (context) — one step under the reply (D27)
+    readonly property int  fontSizeSmall: 12         // quiet controls: peek more/less toggle, generating cue (D27)
     // 600, not the mockup's 500: that 500 was Instrument Sans. Inter reads optically lighter
     // at the same number (and Qt renders a touch thinner than a browser), so matching the
     // mockup's WEIGHT would not match its LOOK. Inter is variable, so 550 also works if 600
     // is a shade heavy.
     readonly property int  fontWeight: Font.DemiBold // 600
     readonly property real lineHeight: 1.3
+    readonly property real lineHeightTight: 1.15     // wrapped quiet context (peek prompt) — D27
 
     // A point on the scrim ramp: f is the fraction of full strength (1.0 = opaquest). Lets a
     // gradient keep its own CURVE while the colour and peak strength stay tokenised.
@@ -46,6 +49,8 @@ QtObject {
     readonly property int durationScroll: 200        // teleprompter glide
     readonly property int durationBars: 90           // mic bar smoothing
     readonly property int durationFade: 220          // the island's entrance / exit
+    readonly property int durationPeek: 200          // expanded-view (peek) open/close — snappier than a turn resize (D27)
+    readonly property int durationHint: 120          // hover-hint nudge (D27)
     // One WORD per tick, not one character: this is a teleprompter to be read, not a chat
     // stream to be skimmed. Matched to the scripted feed's cadence, which read well.
     readonly property int durationWord: 90

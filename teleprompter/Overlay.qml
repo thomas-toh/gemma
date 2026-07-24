@@ -37,6 +37,32 @@ Window {
     readonly property int padTop: Math.floor((baseH - lineBox) / 2)                // 11
     readonly property int padBottom: baseH - padTop - lineBox                      // 12
     readonly property int maxLines: 3                    // island stops growing here, then scrolls
+
+    // --- expanded view / "peek" (D27; amends D22 — the island now takes input over its
+    // silhouette, wired natively in __main__.py). Hover a showing answer for a hint, click to grow
+    // it into the full turn (PeekPanel). Everything here is inert until `peeking`, so the island's
+    // normal behaviour is unchanged. ---
+    readonly property int peekW: 560                      // peek slab content width (cf. openW)
+    readonly property int peekMinH: 150                   // floor: a short peek never looks cramped
+    readonly property int peekMaxH: Math.round(Screen.height * 0.62)  // ceiling; reply scrolls past it
+    readonly property int hintNudge: 5                    // hover-hint downward nudge
+    property bool peeking: false
+    property bool hovering: false
+    // there is a settled answer to expand (not merely listening/thinking, not a fault)
+    readonly property bool peekable: overlay.reply !== "" && !isError
+    property real peekFade: peeking ? 1 : 0
+    Behavior on peekFade { NumberAnimation { duration: root.reducedMotion ? 0 : Theme.durationPeek; easing.type: Easing.OutCubic } }
+    // Host (teleprompter/__main__.py) does the clipboard write and the save dialog — a QML file
+    // has no business with either (spec/50: user-initiated export, host-owned).
+    signal copyRequested(string text)
+    signal saveRequested(string text)
+    // A new capture (the hotkey, a new turn) clears the reply → not peekable → leave the peek, so
+    // the island returns to the compact view instead of a large empty box mid-turn (D27 bug fix).
+    onPeekableChanged: if (!peekable) peeking = false
+    // Reset the peek only once the island has FULLY faded out (visible → false), so a dismiss fades
+    // at the peek size instead of shrinking on screen first (the size-snap is then invisible). The
+    // mid-turn case (a new capture, peekable→false above) DOES shrink on screen — that is wanted.
+    onVisibleChanged: if (!visible) peeking = false
     // (The viewport starts at the very top of the window — y = 0 — so a scrolled-off line peeks
     // through above rather than being clipped. There was a `fadeTop` knob for a non-zero top
     // inset; it was always 0, so it is gone, U-02.)
@@ -52,7 +78,7 @@ Window {
     // `reducedMotion` is a context property (Windows' "Show animations" setting, resolved in
     // __main__.py). Layout transitions collapse to instant; the mic bars keep their smoothing,
     // because they carry information and unsmoothed they read as jitter rather than as level.
-    readonly property int moveMs: reducedMotion ? 0 : Theme.durationResize
+    readonly property int moveMs: reducedMotion ? 0 : (peeking ? Theme.durationPeek : Theme.durationResize)
     readonly property int scrollMs: reducedMotion ? 0 : Theme.durationScroll
     readonly property int fadeMs: reducedMotion ? 0 : Theme.durationFade
     // The family arrives as the `fontFamily` context property: QML's font.family takes ONE
@@ -107,7 +133,7 @@ Window {
         interval: Theme.durationAnswerDwell
         // Restarts on every newly revealed word, so the count only ever runs from the moment
         // the last of the text actually appeared.
-        running: !root.busy && !root.hidden && root.bodyText !== "" && root.revealDone
+        running: !root.busy && !root.hidden && root.bodyText !== "" && root.revealDone && !root.peeking
         onTriggered: root.hidden = true
     }
 
@@ -115,6 +141,11 @@ Window {
     // local and immediate — the daemon is told separately and never waited on.
     Connections {
         target: overlay
+        // Esc always dismisses the island outright — even from a peek (D27). Just `hidden`, NOT
+        // `peeking = false`: resetting peeking here animates a shrink back to compact WHILE the
+        // island is also fading out, so you see it shrink THEN vanish (both, visibly). Instead it
+        // fades out at the peek size, and peeking resets only once fully hidden (onVisibleChanged),
+        // where the size-snap is invisible. (Esc still aborts an in-flight turn, as ever.)
         function onDismissed() { root.hidden = true }
     }
     // Two sizes, nothing else: LISTENING is the minimised pill with the wave; every other
@@ -133,11 +164,16 @@ Window {
     // means native move/resize operations that land a frame apart from the scene graph — newly
     // exposed area paints late, and the silhouette can be clipped mid-growth. Keep it fixed.
     //
-    // DEPENDS on WS_EX_TRANSPARENT (stamped in __main__.py): the frame is mostly empty space, and
-    // without that style it would swallow clicks across all of it. Never remove one alone.
-    width: openW + 2 * flare                     // widest the island can ever be
-    height: baseH + (maxLines - 1) * lineBox     // tallest it can ever be
-    readonly property int islandW: (open ? openW : compactW) + 2 * flare
+    // The mostly-empty frame is click-through via IslandHitTest (per-region WM_NCHITTEST, D27): it
+    // returns HTTRANSPARENT everywhere but the island silhouette, so the frame never swallows a
+    // click meant for the app beneath. (This was a blanket WS_EX_TRANSPARENT before D27.)
+    // Widest / tallest the island can EVER be — now including the peek (D27), which is both wider
+    // (peekW) and much taller (up to peekMaxH) than a normal turn. The island animates INSIDE this
+    // fixed frame; if the frame is smaller than the peek, the peek is clipped — the black slab can't
+    // grow and the panel is cut off. The frame stays fixed (no per-turn window resize; that tore).
+    width: Math.max(openW, peekW) + 2 * flare
+    height: Math.max(baseH + (maxLines - 1) * lineBox, peekMaxH)
+    readonly property int islandW: (peeking ? peekW : (open ? openW : compactW)) + 2 * flare
     // A single line is ALWAYS exactly baseH, and each extra line adds exactly one whole line
     // box, so the bottom gap stays padBottom however many lines show. Growth stops at
     // maxLines; past that the text scrolls instead.
@@ -155,7 +191,9 @@ Window {
     // The pill's TARGET size. `animW`/`animH` are the live, animating values every visual is
     // drawn from — one pair of numbers, so the silhouette, the text, the bars and the readout
     // cannot disagree about where the island is on any given frame.
-    readonly property int islandH: open ? baseH + (shownLines - 1) * lineBox : baseH
+    readonly property int islandH: peeking
+        ? Math.max(peekMinH, Math.min(peekMaxH, peekPanel.naturalHeight))
+        : ((open ? baseH + (shownLines - 1) * lineBox : baseH) + (hovering && peekable ? hintNudge : 0))
     property real animW: islandW
     property real animH: islandH
     // enabled only once fully shown (`appeared`) — see that property. Appearing/disappearing
@@ -360,6 +398,7 @@ Window {
     // stop) — spec/50's truthful indicator, never inferred from state alone.
     Row {
         id: bars
+        opacity: 1 - root.peekFade
         visible: root.st === "listening"
         x: root.islandX + (root.animW - width) / 2
         y: (root.animH - height) / 2
@@ -387,6 +426,7 @@ Window {
     // never changes mid-animation and the height animates once, straight to its target.
     Item {
         id: viewport
+        opacity: 1 - root.peekFade
         x: root.islandX + root.flare + root.padSide
         y: 0
         width: Math.max(0, root.animW - 2 * (root.flare + root.padSide))
@@ -467,7 +507,7 @@ Window {
     Text {
         id: latencyText
         objectName: "latency"           // reached by name from the self-check
-        visible: overlay.showLatency && (overlay.feedbackMs > 0 || overlay.firstWordMs > 0)
+        visible: overlay.showLatency && (overlay.feedbackMs > 0 || overlay.firstWordMs > 0) && !root.peeking
         x: root.islandX + root.animW - root.flare - root.padSide - width
         y: root.padTop
         color: (overlay.feedbackMs > root.fbTarget
@@ -509,6 +549,40 @@ Window {
                 return;
             reveal.shown = root.pendingEnd;
         }
+    }
+
+    // ---- expanded view (D27) ----
+    // The island's one input surface: hover a showing answer for the hint, click to peek. Enabled
+    // only when NOT peeking; once peeked, PeekPanel (below, so on top) owns all interaction. The
+    // native filter in __main__.py is what lets these events reach the window at all — and only
+    // over the silhouette (the frame stays click-through), gated on `peekable`.
+    MouseArea {
+        id: islandMouse
+        x: root.islandX; y: 0; width: root.animW; height: root.animH
+        enabled: !root.peeking
+        hoverEnabled: root.peekable && !root.peeking
+        cursorShape: (root.peekable && !root.peeking) ? Qt.PointingHandCursor : Qt.ArrowCursor
+        onEntered: root.hovering = true
+        onExited: root.hovering = false
+        onClicked: if (root.peekable && !root.peeking) root.peeking = true
+    }
+
+    PeekPanel {
+        id: peekPanel
+        objectName: "peekPanel"
+        x: root.islandX + root.flare
+        y: 0
+        width: Math.max(0, root.animW - 2 * root.flare)
+        height: root.animH
+        textWidth: root.peekW - 2 * 24               // fixed reading width (peekW minus side padding)
+        faceFamily: fontFamily                       // context prop -> panel (non-shadowing name)
+        prompt: root.prompt
+        reply: overlay.reply
+        generating: overlay.reply !== "" && !overlay.done   // mid-stream peek: more still coming
+        visible: root.peeking || root.peekFade > 0.01
+        opacity: root.peekFade
+        onCopyRequested: root.copyRequested(overlay.reply)
+        onSaveRequested: root.saveRequested(overlay.reply)
     }
 
 }

@@ -337,6 +337,99 @@ def main() -> int:
     filt.nativeEventFilter(b"windows_generic_MSG", addressof(other))
     assert settings_hits == [1], "only WM_SETTINGCHANGE should trigger the re-query"
 
+    # --- expanded view / peek (D27) ---
+    # A settled answer is peekable; peeking grows the island to the peek size, pauses the dwell,
+    # and Esc collapses the peek BEFORE it would dismiss the island.
+    dwell.setProperty("interval", 20000)                       # don't let it fire during the checks
+    model.apply({"type": "state", "state": "listening"})       # clear the turn
+    model.apply({"type": "state", "state": "thinking"})
+    model.apply({"type": "transcript", "text": "Summarise the leasing email."})
+    model.apply({"type": "response", "delta": REPLY})
+    model.apply({"type": "response", "done": True})
+    model.apply({"type": "state", "state": "idle"})
+    # Wait for the REPLY (not just the prompt) to take over and finish revealing, so the dwell is
+    # genuinely eligible — otherwise the reply is still typing when we peek and the dwell can't run.
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and not (
+            win.property("revealDone") and body.property("text").startswith("The agent")):
+        _pump(app, 20)
+    assert win.property("revealDone") and body.property("text").startswith("The agent"), \
+        "the reply never took over and finished revealing"
+    assert win.property("peekable"), "a settled reply must be peekable"
+    assert dwell.property("running"), "precondition: the dwell should be running before the peek"
+
+    peek_panel = win.findChild(QObject, "peekPanel")
+    assert peek_panel is not None, "Overlay.qml lost the peekPanel objectName"
+    flare = float(win.property("flare"))
+    peek_w = float(win.property("peekW"))
+    peek_min, peek_max = float(win.property("peekMinH")), float(win.property("peekMaxH"))
+    win.setProperty("peeking", True)
+    _pump(app, 400)
+    aw, ah = float(win.property("animW")), float(win.property("animH"))
+    nat = float(peek_panel.property("naturalHeight"))
+    assert abs(aw - (peek_w + 2 * flare)) < 1, f"island did not widen to the peek width (animW={aw:.0f})"
+    assert abs(ah - max(peek_min, min(peek_max, nat))) < 1, \
+        f"peek height {ah:.0f} is not the clamped natural height {nat:.0f} in [{peek_min:.0f},{peek_max:.0f}]"
+    assert float(win.property("peekFade")) > 0.99, "the peek content never faded in"
+    assert win.property("showing"), "the island must stay showing while peeked"
+    assert not dwell.property("running"), "the dwell must pause while peeking"
+
+    # Bug fix (D27): a new capture clears the reply -> not peekable -> the peek must let go, so the
+    # island returns to the compact view instead of a stuck, large, empty box mid-turn.
+    model.apply({"type": "state", "state": "listening"})       # the hotkey / a new turn opens the mic
+    _pump(app, 100)
+    assert not win.property("peekable"), "listening clears the reply, so it is no longer peekable"
+    assert not win.property("peeking"), "a new capture must drop out of the peek"
+
+    # Esc from a peek dismisses the island OUTRIGHT (D27) — not back to the compact 3-line view,
+    # where the whole answer can't be read.
+    model.apply({"type": "state", "state": "thinking"})
+    model.apply({"type": "transcript", "text": "and again"})
+    model.apply({"type": "response", "delta": REPLY})
+    model.apply({"type": "response", "done": True})
+    model.apply({"type": "state", "state": "idle"})
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and not (
+            win.property("revealDone") and body.property("text").startswith("The agent")):
+        _pump(app, 20)
+    win.setProperty("peeking", True)
+    _pump(app, 200)
+    assert win.property("peeking"), "precondition: peeking before the Esc test"
+    model.dismissed.emit()                                     # Esc
+    # The dismiss fades out AT the peek size — peeking (and thus the size) reset only once fully
+    # hidden, so there is no on-screen shrink first. hidden/showing flip at once; peeking waits.
+    assert win.property("hidden") and not win.property("showing"), "Esc must hide the island at once"
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and win.property("visible"):
+        _pump(app, 20)
+    assert not win.property("visible"), "the island never finished fading out after Esc"
+    assert not win.property("peeking"), \
+        "peeking must reset only once fully hidden, so the dismiss fades at peek size (no shrink, D27)"
+
+    # --- IslandHitTest: nothing to peek -> the whole island is click-through (D27) ---
+    # The load-bearing gate: with no answer to peek, the island must NEVER eat a click — it sits
+    # over a live app's tab strip. Testable headless because the not-peekable branch returns before
+    # any GetWindowRect; a tiny stub stands in for the QML window.
+    from teleprompter.__main__ import _HTTRANSPARENT, _WM_NCHITTEST, IslandHitTest
+
+    class _StubWin:
+        def __init__(self, peekable, peeking):
+            self._props = {"peekable": peekable, "peeking": peeking}
+        def property(self, name):
+            return self._props.get(name, 0)
+        def width(self):
+            return 100
+        def height(self):
+            return 100
+
+    ht = IslandHitTest(_StubWin(False, False)); ht.set_hwnd(0x1234)
+    m = wintypes.MSG(); m.message = _WM_NCHITTEST; m.hWnd = 0x1234; m.lParam = (10 << 16) | 10
+    assert ht.nativeEventFilter(b"windows_generic_MSG", addressof(m)) == (True, _HTTRANSPARENT), \
+        "a non-peekable island must return HTTRANSPARENT — fully click-through over a live app"
+    other_win = wintypes.MSG(); other_win.message = _WM_NCHITTEST; other_win.hWnd = 0x9999
+    assert ht.nativeEventFilter(b"windows_generic_MSG", addressof(other_win)) == (False, 0), \
+        "the hit-test must ignore messages for other windows"
+
     print(f"selfcheck OK: entrance binds to state, status word wipes and rotates, and across "
           f"{revealed} revealed words at up to {peak_lines} lines (scrolled "
           f"{win.property('scrolled')}) no text ever rendered outside the island")

@@ -328,6 +328,10 @@ before, 10% after). Per-region click-through in a single window would need `WM_N
 `HTTRANSPARENT`; unnecessary while the island has no controls, and the expanded view wants its
 own window regardless. Supersedes D14's expandable-overlay mechanism; D14's other rulings
 (in-memory only, response streaming, eyes-free demoted) stand.
+*(Amended by D27, 2026-07-23: the expanded view is now built as a "peek". "No controls" holds **at
+rest**, but the island takes hover+clicks over its silhouette while a reply is peekable — so
+click-through is now **per-region** (`WM_NCHITTEST`), not the blanket `WS_EX_TRANSPARENT` this
+decision relied on. In-memory-only stands.)*
 
 **D23 (2026-07-21): identity — a UI-first desk assistant; display always, speech by choice.**
 States plainly what the build has become, and settles the drift between a spec that made
@@ -466,4 +470,35 @@ a proposal renders on the Teleprompter, a keypress applies it), so Tier 3 adopts
   interaction model changed underneath it. Updates spec/30 (tier table), CLAUDE.md hard rule 4,
   `earcons.json` (`ask`), spec/40 narration. **No code** — Tier-3 tools are M1, unbuilt; this
   records the executable gate so it is right when the executor lands. Source: review S-02.
+
+**D27 (2026-07-23): the expanded view — the island grows in place to "peek" the current turn, and
+now takes input over its own silhouette (amends D22).** D22 cut the ⌄ handle, made the island a
+controlless wholly-click-through surface, and parked the expanded view for its own pass. This is
+that pass. **Hover a shown answer** and the island hints (a few px of downward nudge + a pointer
+cursor); **click** and it grows *in place* — same black surface, same top-edge flares — into a
+larger panel that reads the **current turn** in full: the prompt pinned and **collapsible past two
+lines** (a genuinely long composed prompt is a Claude job, not this surface), the reply scrolling
+under an always-on top/bottom fade, and **Copy** (clipboard) + **Save** (a save dialog). Height is
+content-clamped between a floor and a ceiling; past the ceiling the reply scrolls with the prompt
+and actions pinned. Esc collapses the peek before it dismisses the island; the answer-dwell pauses
+while peeking.
+
+- **Amends D22's "no controls / wholly click-through".** For the island to take a hover and a
+  click it can no longer be blanket `WS_EX_TRANSPARENT` — which also stops it receiving
+  `WM_NCHITTEST` at all. Click-through becomes **per-region** (`WM_NCHITTEST → HTTRANSPARENT`, the
+  filter proven in `sandbox/qml_spike`): the painted silhouette takes input **only while there is a
+  settled answer to peek**; the surrounding frame — and the whole island whenever nothing is
+  peekable — stays click-through, so a click over empty frame still reaches the app beneath. The
+  cost D22 avoided is now bounded to *while an answer is showing*, never at rest (idle hides the
+  window entirely).
+- **In-memory, current-turn only (D22/D14 stand).** Peek reads the turn already on the feed;
+  nothing is written and no new Contract P message exists (`status.json` unchanged). Cross-session
+  scroll-back and the full session view remain a later, separate surface tied to the
+  conversation/memory model.
+- **Save is user-initiated export** (spec/50 rule 3): every transcript is already logged to
+  `logs/gemma.log`, so saving an on-screen answer to a file the user picks is strictly less
+  exposure than the existing log. The host (`__main__.py`), not QML, owns the clipboard and dialog.
+- Widens D14's expandable-session-view scope. Renderer: `teleprompter/PeekPanel.qml` +
+  `Overlay.qml`; native input + actions in `teleprompter/__main__.py`. Guarded in `overlay_check`.
+  Blueprint: `sandbox/teleprompter-expanded-mockup.html`.
 

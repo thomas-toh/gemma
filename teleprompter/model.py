@@ -64,6 +64,11 @@ class OverlayModel(QObject):
     def reply(self) -> str:
         return self._s.reply
 
+    @Property(bool, notify=changed)
+    def done(self) -> bool:
+        """The reply is complete (response done). Drives the peek's 'generating…' cue (D27)."""
+        return self._s.done
+
     @Property(float, notify=changed)
     def mic(self) -> float:
         return self._s.mic

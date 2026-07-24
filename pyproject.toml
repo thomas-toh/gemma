@@ -40,9 +40,10 @@ gpu-cuda = ["nvidia-cublas-cu12", "nvidia-cudnn-cu12", "nvidia-cuda-runtime-cu12
 [tool.setuptools]
 packages = ["bridge", "teleprompter"]
 
-# The QML, its qmldir, and the bundled font are loaded from disk relative to the package, so a
-# non-editable install has to carry them too. `qmldir` has no extension, so the *.qml glob
-# misses it — without it, `import teleprompter` (the Theme singleton) dies with "module not
-# installed" off an editable install. CI's `pip install -e .` masks it, so name it explicitly.
+# The QML, its qmldir, the bundled font, and the peek action icons are loaded from disk relative
+# to the package, so a non-editable install has to carry them too. `qmldir` has no extension, so
+# the *.qml glob misses it — without it, `import teleprompter` (the Theme singleton) dies with
+# "module not installed" off an editable install. CI's `pip install -e .` masks it, so name each
+# explicitly (D27 added icons/, PeekPanel.qml is covered by *.qml).
 [tool.setuptools.package-data]
-teleprompter = ["*.qml", "qmldir", "fonts/*.ttf"]
+teleprompter = ["*.qml", "qmldir", "fonts/*.ttf", "icons/*.svg"]

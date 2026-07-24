@@ -10,7 +10,10 @@
    is discarded. Triggered-session audio is processed in memory; never written to disk.
    Transcripts are logged locally and are user-purgeable in one action — they reach
    `logs/gemma.log` (rotating, gitignored) via the daemon's turn events, so deleting the
-   `logs/` folder is that one action.
+   `logs/` folder is that one action. **User-initiated export is allowed (D27):** a person may
+   Copy or Save an on-screen answer to a file they pick — that text is already in `logs/gemma.log`,
+   so exporting a copy is strictly less exposure than the existing log. The system never exports on
+   its own; only a keypress or click does, and no answer is written to disk unbidden.
 4. **Truthful signalling.** The overlay's listening indicator must reflect actual pipeline
    state; `listening` ⇔ audio is being captured/processed. No dark listening, ever.
 5. **Mute is software (desk product).** With commodity audio gear there is no hardware mute

@@ -198,10 +198,23 @@ a **bars** indicator driven by the *real mic level* (audio-reactive, the spec/50
 indicator, not decorative) while LISTENING, and a standard-width panel for every other visible
 state. Text is a **typewriter**: the transcribed prompt, then Gemma's reply *replaces* it — never
 stacked. While THINKING with no text yet, a **morphing status word** occupies the prompt's slot.
-**No state labels, no dot, no spinner, no status icons, and no controls** — the ⌄ handle was
-built and cut (D22); prior prompts and the full text of a long reply live in the expanded view.
+**No state labels, no dot, no spinner, no status icons, and no controls at rest** — the ⌄ handle
+was built and cut (D22); interaction arrives only in the **expanded view** (D27, below).
 Idle hides the window outright. Component row in spec/00; the top-level `teleprompter/` package
 (component P, D19). Blueprint: `sandbox/teleprompter-mockup.html` (gitignored).
+
+**Expanded view — "peek" (D27).** The island is controlless *at rest*, but **hovering a shown
+answer** hints (a small downward nudge + a pointer cursor) and a **click** grows it *in place* —
+same silhouette — into a larger panel reading the **current turn** in full: the prompt pinned and
+**collapsible past two lines**, the reply scrolling under an always-on top/bottom fade, and
+**Copy** + **Save** (Save is user-initiated export, spec/50 rule 3). Height is content-clamped
+(floor↔ceiling; past the ceiling the reply scrolls with prompt and actions pinned). **Esc**
+collapses the peek before dismissing the island; the answer-dwell pauses while it is open.
+In-memory, **current-turn only** — cross-session scroll-back is a later surface (the
+conversation/memory model). For the island to take input it is no longer blanket click-through:
+hit-testing is **per-region** (`WM_NCHITTEST`), interactive over the silhouette **only while a
+reply is peekable** and click-through everywhere else, so it never intercepts a click meant for
+the app beneath. Blueprint: `sandbox/teleprompter-expanded-mockup.html` (gitignored).
 
 Role and hard boundaries:
 - **The spine, not a supplement (D23).** The Teleprompter is *the* surface: a teleprompter of

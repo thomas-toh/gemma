@@ -106,6 +106,7 @@ def reduced_motion() -> bool:
 # process and cannot collide. RegisterHotKey with a NULL window requires id < 0xC000.
 _VK_ESCAPE, _MOD_NOREPEAT, _WM_HOTKEY, _ESC_ID = 0x1B, 0x4000, 0x0312, 0x0E5C
 _WM_SETTINGCHANGE = 0x001A
+_WM_NCHITTEST, _HTTRANSPARENT = 0x0084, -1
 
 
 class DismissKey(QAbstractNativeEventFilter):
@@ -179,15 +180,88 @@ class DismissKey(QAbstractNativeEventFilter):
         return False, 0
 
 
+class IslandHitTest(QAbstractNativeEventFilter):
+    """Per-region click-through (D27, amends D22). The island silhouette takes hover + clicks — but
+    ONLY while there is a settled answer to peek (or a peek is already open); the surrounding frame
+    is always click-through, so a click over empty frame still reaches the app beneath.
+
+    This replaces the blanket WS_EX_TRANSPARENT the island used to carry: a fully transparent window
+    is skipped by hit-testing and never receives WM_NCHITTEST at all, so per-region has to answer the
+    message itself. Mechanism proven in sandbox/qml_spike. The maths is DPR-invariant — the cursor's
+    screen point is compared against the island's rect expressed as fractions of the window's screen
+    rect (GetWindowRect), so no logical-vs-physical-pixel conversion is needed.
+    """
+
+    def __init__(self, win) -> None:
+        super().__init__()
+        self._win = win
+        self._hwnd = 0
+        if sys.platform == "win32":
+            import ctypes
+            from ctypes import wintypes
+            u = ctypes.windll.user32
+            # argtypes so the 64-bit HWND is a full pointer, never truncated (the classic trap).
+            u.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+            u.GetWindowRect.restype = wintypes.BOOL
+
+    def set_hwnd(self, hwnd: int) -> None:
+        # A re-shown window can come back with a fresh HWND (see restamp), so this is refreshed
+        # every time the island appears rather than cached once.
+        self._hwnd = hwnd
+
+    def nativeEventFilter(self, event_type, message):
+        try:
+            kind = bytes(event_type)
+        except (TypeError, ValueError):        # pragma: no cover
+            return False, 0
+        if b"windows" not in kind:
+            return False, 0
+        from ctypes import wintypes
+        try:
+            msg = wintypes.MSG.from_address(int(message))
+        except (TypeError, ValueError):        # pragma: no cover
+            return False, 0
+        if msg.message != _WM_NCHITTEST or int(msg.hWnd or 0) != self._hwnd:
+            return False, 0
+        # Interactive only when there is something to peek; otherwise fully click-through — the old
+        # blanket-transparent behaviour, so the island never eats a click over a live answer's tab.
+        if not (self._win.property("peekable") or self._win.property("peeking")):
+            return True, _HTTRANSPARENT
+        import ctypes
+        lp = int(msg.lParam) & 0xFFFFFFFF                 # screen point: two signed 16-bit words
+        x = lp & 0xFFFF
+        y = (lp >> 16) & 0xFFFF
+        x = x - 0x10000 if x >= 0x8000 else x
+        y = y - 0x10000 if y >= 0x8000 else y
+        r = wintypes.RECT()
+        if not ctypes.windll.user32.GetWindowRect(self._hwnd, ctypes.byref(r)):
+            return False, 0
+        w, h = r.right - r.left, r.bottom - r.top
+        winw, winh = float(self._win.width()), float(self._win.height())
+        if winw <= 0 or winh <= 0 or w <= 0 or h <= 0:
+            return False, 0
+        # island rect as fractions of the window (DPR-invariant), from the live QML geometry
+        ix = float(self._win.property("islandX"))
+        iw = float(self._win.property("animW"))
+        ih = float(self._win.property("animH"))
+        left = r.left + (ix / winw) * w
+        right = r.left + ((ix + iw) / winw) * w
+        bottom = r.top + (ih / winh) * h
+        inside = (left <= x <= right) and (r.top <= y <= bottom)
+        return (False, 0) if inside else (True, _HTTRANSPARENT)
+
+
 def stamp_overlay_styles(win) -> None:
-    """Two native guarantees the Qt flags alone don't reliably give on Windows:
+    """NOACTIVATE + TOPMOST on the HWND directly — the native guarantees the Qt flags alone don't
+    reliably give on Windows.
 
     NOACTIVATE — BINDING (spec/40): the overlay must never take keyboard focus, because during
     dictation focus decides where the paste lands. (Recipe proven in sandbox/qml_spike.)
 
-    TRANSPARENT — the island is display-only: it has no controls, so it should never intercept
-    a click meant for the window beneath it (it sits top-centre, over a maximised browser's tab
-    strip). Unlike setMask, this affects hit-testing ONLY and does not clip painting.
+    Click-through is NO LONGER a blanket WS_EX_TRANSPARENT here (D27). The island now takes hover
+    and clicks over its own silhouette (to peek), so the whole window cannot be transparent — and a
+    fully transparent window never receives WM_NCHITTEST anyway. IslandHitTest answers hit-testing
+    per region instead. WS_EX_TRANSPARENT is explicitly CLEARED in case an earlier build left it on.
     """
     if sys.platform != "win32":
         return
@@ -198,7 +272,7 @@ def stamp_overlay_styles(win) -> None:
     hwnd = int(win.winId())
     cur = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
     user32.SetWindowLongW(hwnd, GWL_EXSTYLE,
-                          cur | WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_TRANSPARENT)
+                          (cur | WS_EX_NOACTIVATE | WS_EX_TOPMOST) & ~WS_EX_TRANSPARENT)
 
 
 def main() -> int:
@@ -262,6 +336,8 @@ def main() -> int:
 
     dismiss_key = DismissKey(on_dismiss, on_settings_change)
     app.installNativeEventFilter(dismiss_key)
+    island_hit = IslandHitTest(win)                                      # noqa: F841
+    app.installNativeEventFilter(island_hit)                             # per-region click-through (D27)
 
     def restamp() -> None:
         # The island hides at idle; a re-shown window can come back with a fresh HWND, so
@@ -271,17 +347,37 @@ def main() -> int:
         showing = win.isVisible()
         if showing:
             stamp_overlay_styles(win)
+            island_hit.set_hwnd(int(win.winId()))   # a re-shown window can have a fresh HWND (D27)
         dismiss_key.arm(showing)
 
     win.visibleChanged.connect(restamp)
     restamp()
 
-    # NO setMask here. It looked like the way to stop the island swallowing clicks meant for
-    # the window beneath, and it does confine input correctly — but on Windows it is
-    # implemented with SetWindowRgn, which clips PAINTING as well: measured 70% of the island
-    # painted before the mask, 10% after (clipped to the ⌄ tab). Per-region click-through
-    # without clipping needs WM_NCHITTEST -> HTTRANSPARENT via a native event filter, or a
-    # separate tiny window for the tab. Recorded in STATE, Track P.
+    # Peek actions (D27): the overlay owns the current turn's text (it arrives on the feed), so
+    # Copy and Save are handled here in the host — a QML file has no business touching the clipboard
+    # or a file dialog. Save is user-initiated export of an answer already on screen (and already in
+    # logs/gemma.log per spec/50 rule 3), so it is strictly less exposure than the log itself.
+    def on_copy(text: str) -> None:
+        app.clipboard().setText(text)
+
+    def on_save(text: str) -> None:
+        from PySide6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getSaveFileName(None, "Save answer", "gemma-answer.txt",
+                                              "Text (*.txt);;Markdown (*.md);;All files (*)")
+        if not path:
+            return
+        try:
+            Path(path).write_text(text, encoding="utf-8")
+            log.info("answer saved to %s", path)
+        except OSError as e:
+            log.warning("could not save the answer: %s", e)
+
+    win.copyRequested.connect(on_copy)
+    win.saveRequested.connect(on_save)
+
+    # Per-region click-through is now IslandHitTest (WM_NCHITTEST -> HTTRANSPARENT), NOT setMask:
+    # Qt's setMask is SetWindowRgn on Windows, which clips PAINTING too (measured 70% painted
+    # before, 10% after). The filter affects hit-testing only. D27; proven in sandbox/qml_spike.
 
     tray = None
     if QSystemTrayIcon.isSystemTrayAvailable():
