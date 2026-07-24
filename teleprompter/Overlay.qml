@@ -16,11 +16,21 @@ Window {
     id: root
 
     // --- locked geometry / palette (mockup v7) ---
-    readonly property int compactW: 150
     readonly property int openW: 440
     readonly property int baseH: 46
     readonly property real flare: 18            // outward concave fillet at the top edge
     readonly property real botR: 13.5           // bottom corner radius (convex)
+    // Scrolling listening waveform — a level history flowing right->left (dots in silence, swelling
+    // into bars on sound). Params tuned in sandbox/teleprompter-waveform-mockup.html (Thomas).
+    readonly property int  waveCount: 20
+    readonly property real waveBarW: 3
+    readonly property real waveGap: 6
+    readonly property real waveMaxH: 24
+    readonly property real waveGain: 4          // real mic RMS sits low; lift it so speech reads as bars
+    readonly property int  waveTickMs: 60       // flow rate (also the per-slot height smoothing)
+    readonly property real waveFade: 22         // ends fade into the black pill
+    readonly property real waveWidth: waveCount * waveBarW + (waveCount - 1) * waveGap
+    readonly property int  compactW: Math.round(waveWidth) + 20   // the listening pill hugs the wave
     // Colour, opacity, type and motion all come from the Theme singleton (Theme.qml) — see
     // the note there on why island geometry stays local while those do not.
     // Whole pixels by construction. Qt rounds the WINDOW height to integers, so a fractional
@@ -393,28 +403,62 @@ Window {
         }
     }
 
-    // ---- listening: bars driven by the real mic level ----
-    // Present ONLY while 'mic' messages are arriving (feed.py drops the level to 0 when they
-    // stop) — spec/50's truthful indicator, never inferred from state alone.
-    Row {
+    // ---- listening: a scrolling level history ----
+    // A stream that flows right->left, so time shows even in silence (as dots); when the mic catches
+    // something the slots swell into bars, then keep scrolling out the left edge. Present ONLY while
+    // 'mic' messages arrive (feed.py drops the level to 0 when they stop) — spec/50's truthful
+    // indicator, never inferred from state alone. Dimensions live in the geometry block above.
+    property var waveLevels: []               // rolling buffer: [0] leftmost/oldest, last newest/right
+    function waveReset() { var a = []; for (var i = 0; i < root.waveCount; i++) a.push(0); waveLevels = a; }
+    Component.onCompleted: waveReset()
+    Timer {
+        id: waveTimer
+        interval: root.waveTickMs; repeat: true
+        running: root.st === "listening"
+        onRunningChanged: if (running) root.waveReset()      // start each listen from silence
+        onTriggered: { var a = root.waveLevels.slice(1); a.push(Math.min(1, overlay.mic * root.waveGain)); root.waveLevels = a; }
+    }
+    Item {
         id: bars
+        objectName: "bars"
         opacity: 1 - root.peekFade
         visible: root.st === "listening"
+        width: root.waveWidth
+        height: root.waveMaxH
         x: root.islandX + (root.animW - width) / 2
         y: (root.animH - height) / 2
-        height: 26
-        spacing: 4
-        Repeater {
-            model: 7
-            Rectangle {
-                width: 3.5
-                radius: 2
-                color: Theme.textPrimary
-                anchors.verticalCenter: parent.verticalCenter
-                // a fixed per-bar weighting so the row reads as a level meter, not 7 clones
-                readonly property real weight: 0.55 + 0.45 * Math.sin(1.1 * index + 0.6)
-                height: Math.max(3, Math.min(26, 3 + 23 * overlay.mic * weight))
-                Behavior on height { NumberAnimation { duration: Theme.durationBars; easing.type: Easing.OutQuad } }
+        Row {
+            anchors.fill: parent
+            spacing: root.waveGap
+            Repeater {
+                model: root.waveCount
+                Rectangle {
+                    width: root.waveBarW
+                    radius: root.waveBarW / 2                 // rounded ends: a dot when short, a bar when tall
+                    color: Theme.textPrimary
+                    anchors.verticalCenter: parent.verticalCenter
+                    height: root.waveBarW + (root.waveLevels[index] || 0) * (root.waveMaxH - root.waveBarW)
+                    Behavior on height { NumberAnimation { duration: root.waveTickMs; easing.type: Easing.Linear } }
+                }
+            }
+        }
+        // fade the ends into the black pill: samples flow IN on the right, OUT at the left
+        Rectangle {
+            anchors { left: parent.left; top: parent.top; bottom: parent.bottom }
+            width: root.waveFade
+            gradient: Gradient {
+                orientation: Gradient.Horizontal
+                GradientStop { position: 0.0; color: Theme.surface }
+                GradientStop { position: 1.0; color: "transparent" }
+            }
+        }
+        Rectangle {
+            anchors { right: parent.right; top: parent.top; bottom: parent.bottom }
+            width: root.waveFade
+            gradient: Gradient {
+                orientation: Gradient.Horizontal
+                GradientStop { position: 0.0; color: "transparent" }
+                GradientStop { position: 1.0; color: Theme.surface }
             }
         }
     }
@@ -426,7 +470,9 @@ Window {
     // never changes mid-animation and the height animates once, straight to its target.
     Item {
         id: viewport
-        opacity: 1 - root.peekFade
+        // Hidden the INSTANT a peek opens, not cross-faded over the 200ms grow — otherwise the
+        // compact reply lingers behind the (transparent) peek panel as a ghost during the transition.
+        opacity: root.peeking ? 0 : 1
         x: root.islandX + root.flare + root.padSide
         y: 0
         width: Math.max(0, root.animW - 2 * (root.flare + root.padSide))
@@ -574,6 +620,7 @@ Window {
         y: 0
         width: Math.max(0, root.animW - 2 * root.flare)
         height: root.animH
+        bodyHeight: root.islandH                     // final peek height; content lays out to this
         textWidth: root.peekW - 2 * 24               // fixed reading width (peekW minus side padding)
         faceFamily: fontFamily                       // context prop -> panel (non-shadowing name)
         prompt: root.prompt

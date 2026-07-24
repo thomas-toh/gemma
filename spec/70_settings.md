@@ -1,6 +1,6 @@
 # Spec 70 — Settings & configuration · **STUB (planned)**
 
-**Last reconciled: 2026-07-23** · Build progress: [STATE.md](../STATE.md) (M0-close gate) · Decisions: [spec/00](00_overview.md)
+**Last reconciled: 2026-07-24** · Build progress: [STATE.md](../STATE.md) (M0-close gate) · Decisions: [spec/00](00_overview.md)
 
 > **This file is a STUB.** The architecture in §2 is decided (2026-07-20); the settings
 > **line-item inventory** (§3) and open questions (§4) are being developed in a separate
@@ -36,6 +36,12 @@ M0-close gate in STATE — the missing piece being a **config source: file → p
 Seed list (from the STATE M0-close gate + this session) — expand, group, and specify
 types / defaults / validation:
 
+- **Output toggles (LANDED 2026-07-24, D28) — the config source's first step:** `tts` (spoken
+  replies, default **off** — a capability, D23) and `pings` (the three earcons, default **on**),
+  each a checkbox in the tray (spec/40 § Voice out). Persisted by **`bridge/settings.py`** to the
+  JSON file named in §4 and read fresh by the daemon each turn. This is the M0-close "config
+  source: file → panel", now partway: the file half exists, the settings **page** that will
+  subsume these still owed. Types/validation for the rest below still to spec.
 - **Brain (Contract B), adapter-aware:** B1 Claude → model · effort · thinking · persona;
   B2 local → model · temperature. *(Now: model via `GEMMA_BRAIN_MODEL`; thinking hardcoded
   off; effort unwired — see the 2026-07-12 adapter-shape note in STATE.)*
@@ -62,7 +68,12 @@ types / defaults / validation:
 
 ## 4. Open questions (OWED)
 
-- Config file **format + location** (a schema in `spec/schemas/`? a user config dir?).
-- **Validation** + where defaults live.
-- **Live-reload** (bridge watches the file) vs restart-to-apply.
-- Whether the config **shape** needs a `spec/schemas/*.json` file (hard rule 3) — likely yes.
+- Config file **format + location** — **decided (D28):** JSON at `%APPDATA%\gemma\settings.json`
+  (`~/.config/gemma/settings.json` off-Windows; `GEMMA_SETTINGS` overrides the path), via
+  `bridge/settings.py`. The remaining open questions below still stand.
+- **Validation** + where defaults live. *(D28: defaults live in one `DEFAULTS` dict in
+  `bridge/settings.py` for now; no validation layer yet.)*
+- **Live-reload** vs restart-to-apply — **for the two toggles, live (D28):** the bridge re-reads
+  the file each turn, so a tray change applies on the next turn with no watcher and no restart.
+- Whether the config **shape** needs a `spec/schemas/*.json` file (hard rule 3) — likely yes;
+  **deferred at D28** until the set outgrows the two booleans a `DEFAULTS` dict covers.

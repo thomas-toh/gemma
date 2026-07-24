@@ -83,6 +83,16 @@ first feedback since D23). The `feedback` instrument now credits the overlay's f
 table load it, and the `kind` reclassification is data both obey — guarded in decode, overlay
 and orchestrator selfchecks, each verified to fail when first_word is flipped back to a gate.
 **G-07 folded in** (stale derived-constant comments in `listen.py`, deleted).
+**Done 2026-07-24 (D28 — earcon redo + config-source stopgap):** the earcon vocabulary cut from
+seven to **three designed WAVs** (`listening`/`success`/`failure`) — `awake`→`listening`,
+`error`→`failure`, `answer-ready`→`success`, `ask`→`failure`, and `working` **retired** (its G-03
+deadline machinery deleted). Generated tones replaced by WAV loading via the stdlib `wave` module
+(`bridge/assets/earcons/`, pre-rendered 24 kHz). **TTS gated (default off)** and **earcons gated by
+a `Pings` toggle (default on)** — both written by the tray to `%APPDATA%\gemma\settings.json` via
+the new `bridge/settings.py` and re-read by the daemon each turn: the **first step of spec/70's
+config source** (the settings page is still owed). Resolves the open "earcons behind the speech
+switch?" question. `task-complete`/`timer`/`ask` remaps are schema/spec-only (those paths are M1).
+`earcons.json` → **v0.4.0**. Guarded: `speak.py`, `settings.py`, orchestrator selfchecks.
 **Done since (2026-07-23):** **G-03** — the 'still working' earcon deadline moved off its
 `threading.Timer` onto the brain loop as a task inside `_drive`, cancelled deterministically
 when the turn resolves (kills the after-dismiss fire AND the sibling stray-tone-in-`_speak`
@@ -253,13 +263,10 @@ Parked, not blocking, pick up by mood:
   **proactive token count vs. the model's context window before the call** (not an error
   heuristic — Anthropic gives no distinct 400 code for it), which only earns its keep once
   conversations persist. Low-tier refactor candidate; decide the conversation model first.
-- **Earcon redo (owed design; Thomas, 2026-07-23).** A dedicated session to redo the earcon
-  **vocabulary and WAVs together**, folded in with the config source + "listen for me" work.
-  Direction: **cut the set to a few** cues that read as the device's own hum/ping rather than a
-  vocabulary of distinct meanings. Settles the deferred `answer-ready` fate (S-03), the open
-  "are earcons gated by the speech switch?" question, and the `working` earcon's role (D25 made
-  it the speech-mode fallback). Pairs with the **read-all-when-TTS-on** direction (spec/40
-  narration): both land at the TTS-switch / speech-config stage.
+- **Read-all-when-TTS-on + "listen for me" (owed).** The earcon redo these were bundled with is
+  **done (D28)**; what remains is the spec/40 narration **read-all-when-TTS-on** direction and the
+  wake-word config ("listen for me"). Both land at the TTS-switch / M0.5 speech-config stage — the
+  `tts` toggle now exists (default off) but the read-all behaviour behind it does not.
 
 - **Prompt dwell** (owed fix 3 below) — the prompt still flashes for ~1 s. Pairs with the
   **7a/7b dead-air gaps**; same underlying problem, so do them together.
@@ -272,9 +279,8 @@ Parked, not blocking, pick up by mood:
   on 2026-07-22. Reserve numbers by taking them, not by naming them in advance — the D18/D19
   collision came from exactly this.)*
 
-One open question owed a decision:
-
-- **Earcons** — gated by the speech switch, or always on? (see D23 note under Track P)
+*(Resolved 2026-07-24, D28: **earcons are gated by their own `Pings` toggle, default on** — a
+separate channel from spoken TTS, which has its own toggle, default off. See spec/00 D28.)*
 
 *(Resolved 2026-07-23, X-01: `overlay_check` is now wired into CI — `checks.yml` runs it headless
 under the software RHI backend, and its stale "PySide6 is an optional `[ui]` extra" comment is
@@ -519,10 +525,10 @@ install.)*
   its bug is reintroduced. **Wired into CI 2026-07-23 (X-01):** PySide6 is a core dependency
   (D23), so `pip install -e .` already installs it; the check runs headless under the software
   RHI backend. The fade assertion was made sample-based so a slow runner cannot false-fail it.
-- **Open question raised by D23:** are **earcons** gated by the speech switch, or always on?
-  They are not TTS, and the `working` earcon is currently the only thing meeting D11's 1.5 s
-  budget on the audio side — with speech off, the overlay's `thinking` state carries it alone
-  (which it does, per D16's "perceptible"). Decide when the switch is built.
+- **Earcon gating — resolved (D28, 2026-07-24).** Earcons are their own channel behind a `Pings`
+  toggle (default on), separate from the `tts` switch (default off). The `working` earcon that
+  used to be the audio-side feedback is retired — the overlay's `thinking` state carries it (D16
+  "perceptible"), speech or no speech.
 - **Owed (design, 2026-07-21) — the two dead-air gaps.** The island shows the morphing status
   word only until the transcript lands, then sits *motionless*. Two distinct problems:
   **(7a) before the transcript appears** — STT latency, plus whether LLM cleanup gates the

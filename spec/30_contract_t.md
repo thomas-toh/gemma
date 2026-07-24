@@ -1,6 +1,6 @@
 # Spec 30 — Contract T: tools & safety tiers
 
-**Last reconciled: 2026-07-23** · Build progress: [STATE.md](../STATE.md) · Registry (executable): [schemas/tools.json](schemas/tools.json)
+**Last reconciled: 2026-07-24** · Build progress: [STATE.md](../STATE.md) · Registry (executable): [schemas/tools.json](schemas/tools.json)
 
 *(planned — executor and per-OS backends land at M1; the registry file itself is live
 already, loaded by `bridge/config.py`. See STATE, Track T.)*
@@ -14,8 +14,8 @@ the executor refuses any call not present in it. Code never hardcodes a tool def
 | Tier | Meaning | Gate | Log |
 |------|---------|------|-----|
 | 1 | Read-only | none | audit |
-| 2 | Reversible action | earcon announce (`task-complete`/`error`) | audit |
-| 3 | Destructive / consequential | **confirmation (D26)** — the action is rendered on the Teleprompter and a **keypress** confirms it (propose-then-tap, D20); with speech on, the `ask` earcon sounds and saying "confirm" within 8 s is the equivalent gate. No confirmation → cancels. | audit |
+| 2 | Reversible action | earcon announce (`success`/`failure`) | audit |
+| 3 | Destructive / consequential | **confirmation (D26)** — the action is rendered on the Teleprompter and a **keypress** confirms it (propose-then-tap, D20); the `failure` earcon sounds ("needs your view", D28) and, with speech on, saying "confirm" within 8 s is the equivalent gate. No confirmation → cancels. | audit |
 
 ## Rules (binding)
 

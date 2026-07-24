@@ -24,11 +24,12 @@ history.
   instead (wake word, VAD, TTS) — worth keeping even if the limit is ever lifted: one
   inference runtime, smaller install.
 
-## Earcon design (step-4 placeholders)
+## Earcon design
 
-- Generated tones: warm overlapping-ring tonal chimes — notes struck at step offsets
-  with a ~900 ms ring-out, D-major-leaning motifs — tuned by ear against reference
-  notification sounds. Designed WAV files remain a later sound-design task (spec/40).
+- Three designed WAVs (`listening`/`success`/`failure`) in `bridge/assets/earcons/`, pre-rendered
+  to 24 kHz mono and loaded via the stdlib `wave` module (D28). They replaced the earlier generated
+  placeholder tones. The mp3 → 24 kHz-mono-WAV conversion is a one-off (PyAV), so the runtime needs
+  no audio-codec dependency.
 
 ## TTS (Kokoro) timings
 

@@ -29,7 +29,7 @@ from bridge.audio.listen import (
     VAD_CHUNK, VAD_CHUNK_MS, VAD_THRESHOLD, SILENCE_MS, NOSPEECH_MS, PREROLL_BLOCKS,
     MAX_UTTERANCE_S, EndOfSpeech, SileroVAD, _silero_model_path, transcribe,
 )
-from bridge.audio.speak import VOICE, OutputPump, synth, tone_samples
+from bridge.audio.speak import VOICE, OutputPump, earcon_samples, synth
 from bridge.brains.base import Done, Error, Session, TextDelta, ToolCall
 from bridge.brains.claude import DEFAULT_MODEL, ClaudeBrain
 from bridge.broadcaster import (
@@ -37,6 +37,7 @@ from bridge.broadcaster import (
 )
 from bridge.hotkeys import Hotkeys
 from bridge.log import setup_logging
+from bridge import settings
 
 log = logging.getLogger("gemma.orchestrator")
 
@@ -46,7 +47,6 @@ log = logging.getLogger("gemma.orchestrator")
 # a reveal it could not see: the island types at a fixed rate, so the daemon was estimating
 # the overlay's own animation. It now publishes `idle` the moment it is free and the island
 # decides when to stop showing, which is the only place the reveal state exists.
-WORKING_AFTER_S = 1.4  # 'working' earcon if nothing audible yet — just inside D11's 1.5 s
 BARGE_CHUNKS = 4       # sustained speech chunks (~128 ms) to call it a barge-in; with the
                        # low-latency pump the cut lands ≤ 250 ms (spec/40 binding).
                        # ponytail: also the echo-tolerance knob on open speakers (headset
@@ -122,47 +122,21 @@ async def _wait_flag(flag) -> None:
         await asyncio.sleep(0.05)
 
 
-async def _working_deadline(on_working, delay: float) -> None:
-    """Fire the 'working' earcon `delay` s into a brain turn, unless the turn finishes or is
-    dismissed first — in which case `_drive` cancels this task before it fires.
-
-    A loop task, NOT a `threading.Timer` (G-03). The Timer's `cancel()` was a no-op once its
-    callback had begun, so the earcon could sound into a turn already dismissed and cut; and it
-    ran on its own thread, which the dismiss path raced. Here the deadline lives on the SAME
-    loop as the brain call, so `_drive` cancelling it is deterministic: single-threaded, the
-    earcon has either fully fired or been cancelled — never half-way, never after the turn is
-    gone. This also removes the sibling window in `_speak` (a ping landing between the reply
-    playing and the timer being cancelled), because the deadline no longer outlives `_drive`."""
-    if delay > 0:
-        await asyncio.sleep(delay)
-    on_working()
-
-
 async def _drive(brain, session: Session, utterance: str, on_delta=None,
-                 abort=None, on_working=None, working_after: float = WORKING_AFTER_S
-                 ) -> tuple[str, str | None]:
+                 abort=None) -> tuple[str, str | None]:
     """Run one brain turn, racing it against the dismiss signal. This is THE abort seam:
     without it a dismiss could not interrupt THINKING, which is exactly when you most want
     to bail (a misheard prompt, a question you have thought better of). Cancelling the task
-    closes the stream, so the HTTP request is dropped rather than drained.
-
-    `on_working`/`working_after` (G-03): the 'still working' earcon's deadline, run as a loop
-    task here rather than a free-running Timer, so it cannot fire after this turn ends."""
+    closes the stream, so the HTTP request is dropped rather than drained."""
     turn = asyncio.create_task(_collect(brain, session, utterance, on_delta))
-    ping = (asyncio.create_task(_working_deadline(on_working, working_after))
-            if on_working is not None else None)
-    try:
-        if abort is None:
-            return await turn
-        watch = asyncio.create_task(_wait_flag(abort))
-        done, pending = await asyncio.wait({turn, watch}, return_when=asyncio.FIRST_COMPLETED)
-        for p in pending:
-            p.cancel()
-        if turn in done:
-            return turn.result()
-    finally:
-        if ping is not None:
-            ping.cancel()            # deterministic: same loop, so it has fired or it hasn't
+    if abort is None:
+        return await turn
+    watch = asyncio.create_task(_wait_flag(abort))
+    done, pending = await asyncio.wait({turn, watch}, return_when=asyncio.FIRST_COMPLETED)
+    for p in pending:
+        p.cancel()
+    if turn in done:
+        return turn.result()
     # Wait for the cancelled turn to finish unwinding before returning. Its `finally` is what
     # closes the provider's stream (below), and with one long-lived loop nothing else will:
     # `asyncio.run` used to shut down abandoned async generators at turn end, and there is no
@@ -213,20 +187,20 @@ def latency_table(trace) -> str:
     # 'word' carries a [measured] tag, not a '<', because first_word is a diagnostic, not a
     # gate (D25): under generate-then-play it is a reply-length proxy, so a fixed ceiling on it
     # would be a length cap wearing a stopwatch's clothes.
-    out = [f"{'turn':<6}{'wake->awake':>12}{'eos->feedback':>15}{'eos->word':>11}"
+    out = [f"{'turn':<6}{'wake->listen':>13}{'eos->feedback':>15}{'eos->word':>11}"
            f"   (wake<{tg['wake_ack']['ms']} / feedback<{tg['feedback']['ms']} / "
            f"word {tg['first_word']['ms']}[measured] ms, targets.json)"]
-    wake_t = awake = cur = None
+    wake_t = listen = cur = None
     turns: list[dict] = []
     for t, ev, detail in trace:
         if ev == "wake":
-            wake_t, awake = t, None
-        elif ev == "earcon" and detail == "awake" and wake_t is not None:
-            awake = (t - wake_t) * 1000
+            wake_t, listen = t, None
+        elif ev == "earcon" and detail == "listening" and wake_t is not None:
+            listen = (t - wake_t) * 1000
         elif ev == "eos":
-            cur = {"eos": t, "awake": awake, "fb": None, "word": None}
+            cur = {"eos": t, "listen": listen, "fb": None, "word": None}
             turns.append(cur)
-            awake = None
+            listen = None
         # 'thinking' counts as feedback now (D25): the overlay state change is perceptible
         # feedback (D16) and on a normal turn it is the FIRST of the three, so the column
         # finally reflects the screen instead of only the audio path.
@@ -237,7 +211,7 @@ def latency_table(trace) -> str:
                 cur["word"] = (t - cur["eos"]) * 1000
     fmt = lambda v: f"{v:.0f}" if v is not None else "-"  # noqa: E731
     for i, r in enumerate(turns, 1):
-        out.append(f"{i:<6}{fmt(r['awake']):>12}{fmt(r['fb']):>15}{fmt(r['word']):>11}")
+        out.append(f"{i:<6}{fmt(r['listen']):>13}{fmt(r['fb']):>15}{fmt(r['word']):>11}")
     return "\n".join(out)
 
 
@@ -353,16 +327,12 @@ class Orchestrator:
             self.bc.publish(m_latency("feedback", ms))
             log.info("perceptible feedback (%s) %.0f ms after end of speech", what, ms)
 
-    def _working_ping(self) -> None:
-        """The 'still working' earcon. Runs on the brain loop (G-03), fired by the deadline in
-        `_drive` — which cancels it deterministically the moment the turn ends, so it can no
-        longer sound into a turn already dismissed. pump.play is thread-safe."""
-        self.pump.play(tone_samples("working"))
-        self._ev("earcon", "working")
-        self._feedback("'working' earcon")
-
     def _ping(self, name: str) -> None:
-        self.pump.play(tone_samples(name))
+        """Play one earcon by schema id — gated on the 'pings' setting (default on). Silent when
+        off: this is a visual-first app and the screen carries the turn (D28)."""
+        if not settings.get("pings"):
+            return
+        self.pump.play(earcon_samples(name))
         self._ev("earcon", name)
         self._feedback(f"'{name}' earcon")
 
@@ -458,21 +428,17 @@ class Orchestrator:
         text = transcribe(audio)
         if not text:
             self.bc.publish(m_error("I didn't catch that.", "no_transcript"))
-            self._ping("error")                 # narration rules: the pipeline broke
+            self._ping("failure")               # narration rules: the pipeline broke
             self._ev("no-transcript", show="(no transcript)")
             return None                         # ends the chain; the wake watch resumes
         self._ev("transcript", text, show=f"> {text}")
 
-        # The 'still working' earcon rides ON the brain call now (G-03): its deadline is a task
-        # inside _drive, cancelled the instant the turn resolves, so it can never sound into a
-        # dismissed turn the way the old free-running Timer could. Measured from eos so the 1.4 s
-        # budget is against end-of-speech, not against however long transcribe took.
+        # The 'working' earcon is retired (D28): since D23/D25 the overlay's THINKING state IS
+        # the feedback, so nothing pings while the brain runs — the screen carries it.
         reply, err = self._run_async(_drive(
             self.brain, self.session, text,
             on_delta=lambda d: self.bc.publish(m_response(delta=d)),
             abort=self._abort_flag(),
-            on_working=self._working_ping,
-            working_after=max(0.0, WORKING_AFTER_S - (time.perf_counter() - self.t_eos)),
         ))
         if err == "aborted":
             self._dismissed()                   # consume the signal the race saw
@@ -480,21 +446,26 @@ class Orchestrator:
         if err or not reply:
             kind = err or "unknown"
             self.bc.publish(m_error(spoken_error(kind), kind))
-            self._ping("error")
-            return self._speak(self.synth(spoken_error(kind), self.voice), state="error")
+            self._ping("failure")
+            if settings.get("tts"):
+                return self._speak(self.synth(spoken_error(kind), self.voice), state="error")
+            return None      # TTS off: the fault MESSAGE shows on the overlay (as no_transcript does)
         self.bc.publish(m_response(done=True))  # reply text complete on the overlay
 
         self.session.history += [{"role": "user", "content": text},
                                  {"role": "assistant", "content": reply}]
         # The hold survives; the "say 'read it'" escape hatch does not. Holding is what stops
-        # a long answer being read AT you (spec/40, never lecture uninvited) — it now means
-        # SHOWN, not spoken. Whether anything speaks a long answer on request folds into the
-        # TTS switch (spec/70), decided with "listen to me".
+        # a long answer being read AT you (spec/40, never lecture uninvited) — it means SHOWN,
+        # not spoken, and pings `success` (D28) so a long answer you may have glanced away from
+        # gets one soft "it's ready". (Read-all-when-TTS-on is parked for M0.5, spec/40.)
         if sentences(reply) > 2:
-            self._ping("answer-ready")
+            self._ping("success")
             self._ev("held", show="[answer shown, not spoken]")
             return None
-        return self._speak(self.synth(reply, self.voice))
+        if settings.get("tts"):
+            return self._speak(self.synth(reply, self.voice))
+        log.info("answer shown, not spoken (TTS off)")
+        return None
 
     def _speak(self, samples, state: str = "speaking"):
         """SPEAKING: play via the pump while watching the mic — user speech cuts TTS
@@ -552,18 +523,19 @@ class Orchestrator:
 
     def _enter(self, door, t0: float) -> None:
         """The entrance ritual, wherever a turn is opened from: trace the entrance so the
-        latency table can measure press/wake -> indication (spec/40), and sound the `awake`
-        earcon so the press is audibly acknowledged.
+        latency table can measure press/wake -> indication (spec/40), and sound the `listening`
+        earcon (gated on 'pings') so the press is audibly acknowledged.
 
         Every path that opens a turn goes through here. The two that did NOT are how the
         barge-in path came to draw bars over a stale answer, and how key-interrupt turns
         came to have no press-latency reading at all — 60% of the first acceptance run."""
         self._ev("wake", "key" if door else "phrase",
                  show=f"[{'ask key' if door else 'wake'}] listening...")
-        self.pump.play(tone_samples("awake"))    # < 300 ms: enqueued immediately
-        self._ev("earcon", "awake")
-        log.info("awake earcon %.0f ms after %s", (time.perf_counter() - t0) * 1000,
-                 "keypress" if door else "wake detect")
+        if settings.get("pings"):
+            self.pump.play(earcon_samples("listening"))    # < 300 ms: enqueued immediately
+            self._ev("earcon", "listening")
+            log.info("listening earcon %.0f ms after %s", (time.perf_counter() - t0) * 1000,
+                     "keypress" if door else "wake detect")
 
     def _pressed(self):
         """The ask door if its hotkey just opened a capture, else None. Also drains the
@@ -819,24 +791,24 @@ def _selfcheck() -> None:
         line = spoken_error(kind)
         assert line and sentences(line) <= 2, kind
 
-    # latency table: two turns — one with wake+working+speak, one speak-only
-    tbl = latency_table([(0.0, "wake", ""), (0.1, "earcon", "awake"), (1.0, "eos", ""),
-                         (2.2, "earcon", "working"), (3.5, "speak", ""),
+    # latency table: two turns — one full (wake->listen, thinking feedback, speak), one speak-only
+    tbl = latency_table([(0.0, "wake", ""), (0.1, "earcon", "listening"), (1.0, "eos", ""),
+                         (1.05, "thinking", ""), (3.5, "speak", ""),
                          (10.0, "eos", ""), (10.8, "speak", "")])
     lines = tbl.splitlines()
     assert len(lines) == 3, tbl
-    assert "100" in lines[1] and "1200" in lines[1] and "2500" in lines[1], lines[1]
+    assert "100" in lines[1] and "50" in lines[1] and "2500" in lines[1], lines[1]
     assert lines[2].count("800") == 2 and "-" in lines[2], lines[2]
     # The header quotes targets.json, not four hardcoded copies (D25), and first_word is a
     # measured diagnostic, not a gate — so it is tagged, never a "<".
     assert "targets.json" in lines[0] and "[measured]" in lines[0], lines[0]
 
     # D25 reframe: the overlay's flip to THINKING is perceptible feedback (D16), and on a
-    # normal turn it lands FIRST — so the feedback column must credit it, not the later earcon.
-    # Without 'thinking' in the crediting set the instrument reports our own 1.4 s working
-    # timer and gives the screen zero credit (the headset-era measurement it replaces).
+    # normal turn it lands FIRST — so the feedback column must credit it, not a later earcon.
+    # Without 'thinking' in the crediting set the instrument credited only audio (the headset-era
+    # measurement it replaces).
     tbl2 = latency_table([(0.0, "eos", ""), (0.05, "thinking", ""),
-                          (1.4, "earcon", "working"), (3.0, "speak", "")])
+                          (1.4, "earcon", "success"), (3.0, "speak", "")])
     assert "50" in tbl2.splitlines()[1], tbl2   # feedback = 50 ms (thinking), not 1400
 
     # ...and the runtime recorder agrees: _feedback publishes ONCE, at the earliest event, and
@@ -852,24 +824,34 @@ def _selfcheck() -> None:
     fb.fed_back = False
     fb.t_eos = time.perf_counter()
     fb._feedback("overlay thinking")            # screen feedback, near-instant
-    fb._feedback("'working' earcon")            # a later audio event must NOT re-publish
+    fb._feedback("'success' earcon")            # a later audio event must NOT re-publish
     assert len(fb.bc.fb) == 1, f"feedback recorded {len(fb.bc.fb)} times, must be once"
 
-    # G-03: the 'working' earcon's deadline is a task on the brain loop, cancelled the instant
-    # the turn resolves — it can no longer fire into a turn that has already ended. Driven
-    # through the PERSISTENT loop (not asyncio.run, which would reap a leaked task on close and
-    # hide the bug): a fast turn must leave no deadline behind that fires afterwards.
-    g3 = Orchestrator(brain=object(), broadcaster=_Rec())
-    rang: list[int] = []
-    reply, err = g3._run_async(_drive(FakeReply("Quick."), Session(id="t"), "hi",
-                                      on_working=lambda: rang.append(1), working_after=0.2))
-    assert (reply, err) == ("Quick.", None), (reply, err)
-    time.sleep(0.35)                            # the loop stays alive; a leaked ping would fire
-    assert rang == [], "the working earcon fired after the turn finished — deadline not cancelled"
+    # D28: earcons obey the 'pings' setting (default on) — a visual-first quiet mode is one toggle
+    # away. Point settings at a throwaway file so the real config is untouched; a stub pump counts
+    # plays without a device.
+    import os
+    import tempfile
+
+    class _Pump:
+        def __init__(self): self.n = 0
+        def play(self, s): self.n += 1
+
+    with tempfile.TemporaryDirectory() as d:
+        os.environ["GEMMA_SETTINGS"] = os.path.join(d, "s.json")
+        pg = Orchestrator(brain=object(), broadcaster=_Rec())
+        pg.pump = _Pump()
+        pg.fed_back = True                      # keep this micro-test off the feedback recorder
+        settings.set("pings", False)
+        pg._ping("failure")
+        assert pg.pump.n == 0, "pings off must silence earcons"
+        settings.set("pings", True)
+        pg._ping("failure")
+        assert pg.pump.n == 1, "pings on must play the earcon"
+    os.environ.pop("GEMMA_SETTINGS", None)
 
     print("selfcheck OK: speak/hold split, capture endpoint, barge-in counter, error lines, "
-          "latency table + targets, feedback credits the screen (D25), working deadline "
-          "cancels with the turn (G-03)")
+          "latency table + targets, feedback credits the screen (D25), pings toggle gates earcons")
 
 
 def main() -> None:

@@ -1,6 +1,6 @@
 # Spec 40 — Interaction model
 
-**Last reconciled: 2026-07-23** · Build progress: [STATE.md](../STATE.md) (Tracks G · P) · Earcon ids: [schemas/earcons.json](schemas/earcons.json)
+**Last reconciled: 2026-07-24** · Build progress: [STATE.md](../STATE.md) (Tracks G · P) · Earcon ids: [schemas/earcons.json](schemas/earcons.json)
 
 ## State machine (orchestrator: `bridge/orchestrator.py`)
 
@@ -31,9 +31,9 @@ IDLE ──wake──▶ LISTENING ──end-of-speech──▶ THINKING ──�
   design (STATE, Track P); **if it does, `clearsTurn` must change back before it lands.**
 - **Barge-in (binding):** user speech during `SPEAKING` stops TTS ≤ 250 ms and routes
   the speech as new input.
-- `THINKING` that outlives the 1.5 s feedback budget fires the `working` earcon once
-  (fired just before the deadline so the sound lands inside it) — this is the D11
-  feedback guarantee for any turn that can't answer fast.
+- `THINKING` **is itself** the D11 feedback guarantee: the overlay's near-instant flip to the
+  THINKING state is the perceptible signal for any turn that can't answer fast (D25). The
+  `working` earcon that used to cover this is retired (D28) — the screen carries it.
 - Conversation history threads through one wake-chain (`Session.history`) and dies at
   IDLE; whether it should persist across wakes is an open question (parked — STATE).
 
@@ -45,8 +45,11 @@ IDLE ──wake──▶ LISTENING ──end-of-speech──▶ THINKING ──�
   M0.5: the versioned persona). Chosen partly because the M0 TTS cannot act emphasis —
   the script must not demand what the voice can't perform.
 - Every answer renders in full on the Teleprompter as it streams — **always** (D23). The
-  spoken channel is a capability behind a switch (**default off**, spec/70); everything below
-  applies only when speech is enabled.
+  spoken channel is a capability behind the **TTS** switch (**default off**, spec/70); everything
+  below about *speaking* applies only when TTS is enabled.
+- **The three earcons (the "pings") are a separate channel, on by default** — gated by the
+  **Pings** toggle (default on, spec/70), NOT by the TTS switch: they are device pings, not
+  speech (D28, resolving the long-open "are earcons behind the speech switch?" question).
 - Speech on, answers ≤ 2 sentences: spoken automatically.
 - Longer answers (M0 heuristic): full text on the overlay; **held — SHOWN, not spoken.** The
   hold stops a long answer being read AT you (never lecture uninvited). **"read it" is retired**
@@ -55,14 +58,17 @@ IDLE ──wake──▶ LISTENING ──end-of-speech──▶ THINKING ──�
   **direction (Thomas, 2026-07-23): with TTS on, read all by default** rather than holding long
   answers silently; finalised at the TTS-switch / M0.5 stage, which also replaces this
   sentence-count heuristic with a model-tagged spoken TL;DR over displayed detail.
-- Successful Tier 2 actions: `task-complete` earcon only. Failures: `error` earcon + one-sentence explanation.
+- Successful Tier 2 actions: the `success` earcon only. Failures: the `failure` earcon + a
+  one-sentence explanation shown on the Teleprompter.
 - Tier 3 (D26): the proposed action renders on the Teleprompter and a **keypress** confirms it
-  (propose-then-tap, D20); with speech on, the `ask` earcon + a spoken one-line summary of what
-  will happen, confirmed by saying "confirm". The keypress gate is what makes Tier 3 executable
-  in the default (screen-only, mic-closed) product — a spoken-only gate could not run there.
-- Tool progress (M1, planned — D11): during `ACTING`, the `working` ping then silence
-  by default; spoken step narration ("Fetching X…") is a config flag, **default off**.
-  The overlay's tool-activity icon is the always-on visual.
+  (propose-then-tap, D20). Since D28 the proposal sounds the `failure` earcon — its meaning
+  widened to "something needs your view" — rather than a dedicated `ask` tone; with speech on, a
+  spoken one-line summary of what will happen follows, confirmed by saying "confirm". The keypress
+  gate is what makes Tier 3 executable in the default (screen-only, mic-closed) product — a
+  spoken-only gate could not run there.
+- Tool progress (M1, planned — D11): during `ACTING`, silence by default — the overlay's
+  tool-activity icon is the always-on visual, and the turn ends on `success`/`failure`. Spoken
+  step narration ("Fetching X…") is a config flag, **default off**.
 
 > The ≤2-sentence speak/hold split above is an **M0 heuristic**. **M0.5 "It speaks well"
 > (spec/00) replaces it** with a model-tagged output contract — the brain marks what to
@@ -82,12 +88,12 @@ flag it over-budget.
 
 | Turn class | Metric | Kind |
 |------------|--------|------|
-| any | Wake detect → `awake` earcon (`wake_ack`) | floor |
+| any | Wake detect → `listening` earcon (`wake_ack`) | floor |
 | any | Ask-hotkey press → listening indication (`press_ack`) | floor |
-| any | End of speech → perceptible feedback (`feedback`) — the overlay's flip to THINKING, the `working` earcon, or the first spoken word, whichever first (D16). Since D23 the screen is primary, so on a normal turn this is the near-instant THINKING state; the earcon is the speech-mode fallback. | gate |
+| any | End of speech → perceptible feedback (`feedback`) — the overlay's flip to THINKING or the first spoken word, whichever first (D16). Since D23 the screen is primary, so on a normal turn this is the near-instant THINKING state (the `working` earcon that used to be the audio fallback is retired, D28). | gate |
 | no-tool answer | End of speech → first spoken word, B1 (`first_word`) / B2 (`first_word_b2`) | **measured** |
 | tool turn | End of speech → starter-tool (Tier 2) action executed (`tool_ack`) | gate |
-| tool turn | Completion of longer work | unbounded — ends with `task-complete`/`error` earcon |
+| tool turn | Completion of longer work | unbounded — ends with `success`/`failure` earcon |
 | any | Barge-in → TTS stopped (`barge_stop`) | floor |
 
 **Why first_word is `measured`, not a gate (D25).** Under generate-then-play (D11) the first
@@ -167,17 +173,22 @@ is set in settings (spec/70, default local).
 
 Two output paths (`bridge/audio/speak.py`), played via sounddevice at the 24 kHz schema
 rate:
-- **Earcons** — short signal tones, one per `schemas/earcons.json` id (ids read from the
-  schema, never hard-coded). M0 uses *generated* placeholder tones kept within each id's
-  `maxMs`; designed WAVs (in `bridge/assets/earcons/`) are a later sound-design task.
-  Sound-design intent: distinct from each other, pleasant at low volume, ringing out to
-  ~1.1 s (`timer` longer). What's latency-bounded is the earcon **onset** (wake →
-  `awake` < 300 ms), not its length — the ring-out overlaps the next phase.
+- **Earcons** — three designed WAVs (`listening` / `success` / `failure`), one per
+  `schemas/earcons.json` id (ids read from the schema, never hard-coded). They live in
+  `bridge/assets/earcons/<id>.wav`, pre-rendered to the 24 kHz outbound rate and loaded via the
+  stdlib `wave` module (no audio-codec dependency; the mp3→wav conversion is a one-time build
+  step). **Cut from seven to three at D28:** since the screen carries listening/thinking/answer/
+  tool state (D23/D25), most earcons were redundant with something already visible, so a normal
+  no-tool turn now plays **one** sound (`listening`) or none. Gated by the **Pings** toggle
+  (default on, spec/70). What's latency-bounded is the earcon **onset** (wake → `listening`
+  < 300 ms), not its length — the ring-out overlaps the next phase.
 - **TTS** — **Kokoro** via `kokoro-onnx` (ONNX runtime, **no torch**; `espeakng-loader`
   bundles the espeak-ng phonemiser, so no manual install). Native 24 kHz. Generate-then-
   play — the accepted M0/M1 design (spec/00 D11); sentence-streamed TTS is parked
   (STATE), reopened only if measured use feels slow. CPU is faster-than-real-time,
-  so no GPU needed. Model files fetch once to `~/.cache/gemma/`.
+  so no GPU needed. Model files fetch once to `~/.cache/gemma/`. **Behind the TTS toggle
+  (default off, spec/70; D28):** with it off, replies still render on the Teleprompter — they
+  are simply not spoken.
 
 *When* each earcon fires and *whether* to speak vs. stay quiet is the orchestrator's job
 per the narration rules above — `speak.py` is only the mechanism.
@@ -263,8 +274,7 @@ Architecture (D13, spec/00):
 Custom wake phrase (replace the `hey_jarvis` stand-in) + false-accept testing (D8) ·
 end-of-speech silence threshold (1 s start, `--silence-ms` to tune live) · pre-roll
 length · answer-dwell length (`Theme.durationAnswerDwell`, and the prompt's handover hold
-`durationPromptHold` — both overlay-side since D24) · earcon sound design (synthesise vs buy —
-genuinely fun sub-project).
+`durationPromptHold` — both overlay-side since D24).
 
 **End-of-speech: semantic endpointing (planned, M1).** A fixed silence timer can't be
 both pause-tolerant and snappy — a long tolerance delays *every* reply. The proper fix,

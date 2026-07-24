@@ -364,8 +364,18 @@ def main() -> int:
     peek_w = float(win.property("peekW"))
     peek_min, peek_max = float(win.property("peekMinH")), float(win.property("peekMaxH"))
     win.setProperty("peeking", True)
-    _pump(app, 400)
+    # The peek REVEALS (clip), never REFLOWS (D27): the reply viewport is pinned to the FINAL height
+    # (bodyHeight) from the first frame, so the fade bars never flash mid-grow. Capture it while the
+    # grow is still animating; re-tie the layout to the animating height and this collapses toward 0.
+    _pump(app, 40)                                             # ~2 frames — the grow is NOT settled yet
+    peek_flick = win.findChild(QObject, "peekReply")
+    assert peek_flick is not None, "Overlay.qml lost the peekReply objectName"
+    early_flick_h = float(peek_flick.property("height"))
+    _pump(app, 400)                                            # ...now let it settle
     aw, ah = float(win.property("animW")), float(win.property("animH"))
+    assert abs(early_flick_h - float(peek_flick.property("height"))) < 1.5, (
+        f"the peek reply reflowed during the grow ({early_flick_h:.0f} -> "
+        f"{float(peek_flick.property('height')):.0f}px) — the fade bars will flash mid-transition")
     nat = float(peek_panel.property("naturalHeight"))
     assert abs(aw - (peek_w + 2 * flare)) < 1, f"island did not widen to the peek width (animW={aw:.0f})"
     assert abs(ah - max(peek_min, min(peek_max, nat))) < 1, \

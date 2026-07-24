@@ -1,10 +1,10 @@
 """Track G step 4 (docs/04 §8): voice out — earcons + text-to-speech.
 
 Two ways for the bridge to make sound:
-- earcon(id): play a short signal tone for one of the earcons defined in
+- earcon(id): play a designed earcon WAV for one of the ids in
   spec/schemas/earcons.json (ids come from the schema — never hard-coded here).
-  M0 uses simple *generated* tones as placeholders; real designed WAVs (living in
-  bridge/assets/earcons/) are a later sound-design task.
+  The WAVs live in bridge/assets/earcons/<id>.wav, pre-rendered to the schema
+  outbound rate, so they load through the stdlib wave module — no codec dependency.
 - speak(text): synthesise speech with Kokoro (via kokoro-onnx, ONNX runtime, no torch)
   and play it. Output is 24 kHz (schema outbound rate), which is Kokoro's native rate.
 
@@ -24,7 +24,9 @@ import logging
 import re
 import threading
 import time
+import wave
 from collections import deque
+from functools import lru_cache
 from pathlib import Path
 
 from bridge.config import load_schemas
@@ -46,69 +48,33 @@ VOICE = "bf_emma:45,af_heart:40,bm_george:15"   # Gemma's voice (chosen by ear, 
 
 SENTENCE_GAP_MS = 300       # ponytail: silence joined between sentences; tune by ear
 
-RING_MS = 900      # each struck note rings this long, overlapping into the next -> fuller
-
-# Earcon motifs: id -> [(freq_hz, step_ms), ...]. Notes are STRUCK at cumulative step
-# offsets and ring/overlap (see _tone), like a real notification arpeggio (modelled on the
-# reference notification's warm D-major D-F#-A). freq 0 = a rest. Distinct + pleasant;
-# durations are checked against schema maxMs in _selfcheck. Real WAVs still an option later.
-TONES: dict[str, list[tuple[int, int]]] = {
-    "awake":         [(587, 95), (880, 95)],                 # D5->A5 quick rise: heard you, listening
-    "working":       [(494, 0)],                             # single soft B4: thinking
-    "task-complete": [(587, 85), (740, 85), (880, 90)],      # D-F#-A rising major: success
-    "ask":           [(740, 95), (988, 100)],                # F#5->B5 up-question: confirm?
-    "answer-ready":  [(880, 110), (1175, 110)],              # A5->D6 up double: ready
-    "timer":         [(1175, 150), (0, 70), (880, 150), (0, 70), (1175, 160)],  # music-box
-    "error":         [(440, 110), (330, 130)],               # A4->E4 low fall: something wrong
-}
-DEFAULT_TONE = [(740, 100)]        # for any schema id without a bespoke motif
+# Earcons are designed WAVs in bridge/assets/earcons/<id>.wav, pre-rendered to SAMPLE_RATE_OUT
+# (the mp3->wav conversion is a one-time build step, not run here). Loaded via the stdlib wave
+# module and cached; the OutputPump copies on play(), so the cached array is never mutated.
+EARCON_DIR = Path(__file__).resolve().parent.parent / "assets" / "earcons"
 
 
 def _earcon_ids() -> set[str]:
     return {e["id"] for e in load_schemas()["earcons"]["earcons"]}
 
 
-def _note(freq: float, n: int, rate: int):
-    """One struck tonal note: fundamental + gentle harmonics under an exponential ring
-    (warm/mallet-like, not metallic). Attack ramp avoids a click."""
+@lru_cache(maxsize=None)
+def _load_earcon(name: str):
+    """One designed earcon as float32 mono at SAMPLE_RATE_OUT. The WAVs are pre-rendered to
+    that rate (build-time conversion), so this only reads + scales — no resampling. Cached:
+    the pump copies on play(), so a shared array is safe to hand out repeatedly. ponytail:
+    assumes 16-bit PCM (what the converter emits) — a swapped-in WAV of another width warns
+    and is caught by _selfcheck at dev time rather than mis-decoding silently."""
     import numpy as np
-    t = np.arange(n) / rate
-    wave = (np.sin(2 * np.pi * freq * t)
-            + 0.30 * np.sin(2 * np.pi * 2 * freq * t)
-            + 0.12 * np.sin(2 * np.pi * 3 * freq * t)
-            + 0.05 * np.sin(2 * np.pi * 4 * freq * t))
-    env = np.exp(-t * 3.4)                                  # rings out (slower = longer tail)
-    atk = int(rate * 0.005)
-    if atk < n:
-        env[:atk] *= np.linspace(0, 1, atk)
-    return (wave * env).astype(np.float32)
-
-
-def _tone(notes, rate: int):
-    """Render a notification-style motif: notes struck at cumulative step offsets, each
-    ringing for RING_MS and OVERLAPPING (summed), so it sounds full rather than a thin
-    sequence of beeps. Warm tonal timbre. notes = [(freq_hz, step_ms), ...]; freq 0 = rest."""
-    import numpy as np
-    ring_n = int(rate * RING_MS / 1000)
-    onset, span, events = 0, 0, []
-    for freq, step_ms in notes:
-        if freq > 0:
-            events.append((onset, freq))
-            span = max(span, onset + ring_n)
-        onset += int(rate * step_ms / 1000)
-    if not events:
-        return np.zeros(0, dtype=np.float32)
-    buf = np.zeros(span + int(rate * 0.008), dtype=np.float32)
-    for start, freq in events:
-        note = _note(freq, ring_n, rate)
-        buf[start:start + len(note)] += note
-    peak = float(np.abs(buf).max())
-    if peak > 0:
-        buf *= 0.55 / peak                                 # consistent loudness, no overlap clip
-    rel = int(rate * 0.150)                                # long, smooth fade so the tail tapers
-    if rel < len(buf):                                     # to silence (no audible truncation)
-        buf[-rel:] *= 0.5 * (1 + np.cos(np.linspace(0, np.pi, rel)))   # raised cosine: 1 -> 0
-    return buf
+    with wave.open(str(EARCON_DIR / f"{name}.wav"), "rb") as w:
+        nch, width, rate, n = w.getnchannels(), w.getsampwidth(), w.getframerate(), w.getnframes()
+        raw = w.readframes(n)
+    if rate != SAMPLE_RATE_OUT:
+        log.warning("earcon %s is %d Hz, expected %d — reconvert it", name, rate, SAMPLE_RATE_OUT)
+    if width != 2:
+        log.warning("earcon %s is %d-bit, expected 16-bit PCM — reconvert it", name, width * 8)
+    samples = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
+    return samples.reshape(-1, nch).mean(axis=1) if nch > 1 else samples
 
 
 def _play(samples, rate: int = SAMPLE_RATE_OUT) -> None:
@@ -119,17 +85,17 @@ def _play(samples, rate: int = SAMPLE_RATE_OUT) -> None:
     sd.wait()
 
 
-def tone_samples(name: str):
-    """Samples for one earcon by its schema id (no playback — the orchestrator feeds
+def earcon_samples(name: str):
+    """Float32 samples for one earcon by its schema id (no playback — the orchestrator feeds
     these into the OutputPump; the CLI plays them via earcon())."""
     if name not in _earcon_ids():
         raise ValueError(f"unknown earcon {name!r}; valid: {sorted(_earcon_ids())}")
-    return _tone(TONES.get(name, DEFAULT_TONE), SAMPLE_RATE_OUT)
+    return _load_earcon(name)
 
 
 def earcon(name: str) -> None:
     """Play one earcon by its schema id."""
-    _play(tone_samples(name))
+    _play(earcon_samples(name))
 
 
 class OutputPump:
@@ -282,14 +248,12 @@ def speak(text: str, voice: str = VOICE, speed: float = 1.0) -> float:
 
 
 def _selfcheck() -> None:
-    """No audio/model: every schema earcon generates a non-empty tone within its maxMs."""
+    """No audio/model: every schema earcon has a loadable WAV within its maxMs ceiling."""
     maxms = {e["id"]: e["maxMs"] for e in load_schemas()["earcons"]["earcons"]}
-    stray = set(TONES) - set(maxms)          # a motif whose id left the schema would
-    assert not stray, f"TONES has motifs for ids not in the schema: {sorted(stray)}"  # otherwise die silently
     for name in sorted(_earcon_ids()):
-        samples = _tone(TONES.get(name, DEFAULT_TONE), SAMPLE_RATE_OUT)
+        samples = _load_earcon(name)
         dur_ms = len(samples) / SAMPLE_RATE_OUT * 1000
-        assert len(samples) > 0, f"{name}: empty tone"
+        assert len(samples) > 0, f"{name}: empty earcon WAV"
         assert dur_ms <= maxms[name] + 1, f"{name}: {dur_ms:.0f} ms exceeds schema maxMs {maxms[name]}"
 
     # Sentence splitter for per-sentence TTS pacing.
@@ -327,7 +291,7 @@ def _selfcheck() -> None:
     pump._callback(out, 8, None, None)
     assert not out.any(), "after cut(), silence"
 
-    print(f"selfcheck OK: tones for {len(_earcon_ids())} earcons within schema maxMs; "
+    print(f"selfcheck OK: WAVs for {len(_earcon_ids())} earcons load within schema maxMs; "
           f"pump drains in order, pads silence, cut() empties")
 
 

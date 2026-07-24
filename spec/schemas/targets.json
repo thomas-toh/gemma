@@ -8,7 +8,7 @@
     "wake_ack": {
       "ms": 300,
       "kind": "floor",
-      "clock": "wake detected -> 'awake' earcon"
+      "clock": "wake detected -> 'listening' earcon"
     },
     "press_ack": {
       "ms": 300,

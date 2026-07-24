@@ -1,6 +1,6 @@
 # Spec 00 — System overview & status
 
-**Last reconciled: 2026-07-23** · Build progress: [STATE.md](../STATE.md) · Decisions record: [docs/02](../docs/02_architecture/02_system_architecture.md)
+**Last reconciled: 2026-07-24** · Build progress: [STATE.md](../STATE.md) · Decisions record: [docs/02](../docs/02_architecture/02_system_architecture.md)
 
 ## The system in one paragraph
 
@@ -66,7 +66,7 @@ Definitions only — live progress per track is in [STATE.md](../STATE.md).
 |-----------|------------------------------|
 | **M0 — Loop closed (UI-first, D23)** | Ask-hotkey → question: the response **streams to the Teleprompter**; perceptible feedback < 1.5 s (D11/D16), ×10 consecutively · B1 brain, zero tools. **With speech enabled** (not pass/fail for M0, measured when on): first spoken word < 4 s; **with "listen for me" enabled**: the wake word opens the same door. Supersedes D16(2)'s speech-gated shape — display is what M0 proves. |
 | **M0.5 — It speaks well** | A 10-prompt bank (factual · complex · list-shaped · tool-result) each renders voice-correctly *without* the sentence-count heuristic: short answers spoken whole, long → spoken TL;DR + held detail, no markdown/emoji/URL reaches TTS, numbers/units read naturally. A model-driven output contract replaces spec/40's ≤2-sentence stopgap; adapter-agnostic (B2-tolerant parse). |
-| **M1 — It acts** | "Open Spotify and play something" → `awake` earcon; audit log shows the calls; 6 starter tools |
+| **M1 — It acts** | "Open Spotify and play something" → `listening` earcon; audit log shows the calls; 6 starter tools |
 | **M2 — It's local** | M1 script passes with Wi-Fi unplugged (B2 brain) |
 | **MD — It types** *(feature milestone, parallel to the M-ladder)* | Hotkey → dictated speech lands in the focused app: ×10 consecutive dictations across ≥3 apps paste correctly after cleanup, zero answer-instead-of-transcript failures; capture in RAM; assistant loop unaffected |
 | **M4 — Experiments** | B3 adapter · per-request routing |
@@ -92,14 +92,14 @@ Portability design: docs/04 §3.
 
 **D11 (2026-07-12): feedback-first latency posture.** The system guarantees fast
 *feedback*, not fast *answers*. Every turn class produces something audible within
-**1.5 s** of end-of-speech (the first spoken word, or the `working` earcon). A no-tool
+**1.5 s** of end-of-speech (the first spoken word, or — since D25 — the overlay's THINKING state). A no-tool
 conversational answer must then start speaking within **4 s** (B1) / **5 s** (B2) —
 provisional numbers pending the owed measurements (STATE: step-3 live mic test, B1
 first-token re-run). A tool-running turn is acknowledged within the same 1.5 s but has
 **no completion bound** — it finishes when it finishes and signals with the
-`task-complete`/`error` earcon. Consequences: TTS stays **generate-then-play** for
+`success`/`failure` earcon. Consequences: TTS stays **generate-then-play** for
 M0/M1 (sentence-streamed TTS parked; reopen only if measured use feels slow); spoken
-tool-progress narration is config-gated, **default off** (`working` ping, then silence —
+tool-progress narration is config-gated, **default off** (silence by default —
 the PC overlay carries continuous state). Clock definition in spec/40. No "complex task
 mode": long-running work is a property of the turn the orchestrator observes (ToolCall
 events), never a spoken mode the user must remember to enter or exit.
@@ -501,4 +501,29 @@ while peeking.
 - Widens D14's expandable-session-view scope. Renderer: `teleprompter/PeekPanel.qml` +
   `Overlay.qml`; native input + actions in `teleprompter/__main__.py`. Guarded in `overlay_check`.
   Blueprint: `sandbox/teleprompter-expanded-mockup.html`.
+
+**D28 (2026-07-24): earcon vocabulary cut to three, and TTS/Pings gated by a config file (TTS
+default off, Pings default on).** The earcon set was seven meaning-bearing tones written for an
+eyes-free device (D18). Since D23 made the screen the spine and D25 made its THINKING state the
+feedback, most of them duplicated something already visible. Cut to **three designed WAVs** that
+read as the device's own pings rather than a vocabulary of distinct meanings:
+
+- **`listening`** (was `awake`) — a capture opened. **`success`** (was `task-complete`; also folds
+  in the held-long-answer `answer-ready` and a future `timer`) — a result landed well.
+  **`failure`** (was `error`; also absorbs the Tier-3 `ask`) — something needs your view. Retired
+  outright: **`working`** — the screen's THINKING state is the feedback (D25). A normal no-tool
+  turn now plays one sound (`listening`) or none.
+- Designed WAVs (`bridge/assets/earcons/<id>.wav`, 24 kHz mono) replace the generated tones; the
+  runtime loads them with the stdlib `wave` module — no audio-codec dependency.
+- **Resolves the long-open "are earcons gated by the speech switch?" question (STATE):** no —
+  earcons are their own channel behind a **Pings** toggle (default **on**); spoken **TTS** is a
+  separate toggle (default **off**, the D23 capability — previously always-on in code).
+- **Both toggles are the first step of spec/70's settings surface**, not a throwaway: a small JSON
+  file at `%APPDATA%\gemma\settings.json`, written by the tray and read by the daemon, via
+  `bridge/settings.py`. The full settings **page** is still owed (spec/70).
+- Updates: `earcons.json` (→ v0.4.0), `speak.py`, `orchestrator.py` (remap + the `working`/G-03
+  deadline machinery removed), `tray.py`, spec/40, spec/70, STATE. The `task-complete`/`ask`/`timer`
+  mappings are **schema/spec-only** — those code paths (Tier-2 tools, Tier-3 propose-then-tap,
+  timers) are M1, unbuilt; this records the mapping so it is right when they land. Source: Thomas,
+  the owed earcon-redo session.
 

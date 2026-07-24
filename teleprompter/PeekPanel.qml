@@ -11,6 +11,8 @@ import teleprompter                              // Theme — the design tokens
 
 Item {
     id: panel
+    clip: true                               // the island grows into the peek by REVEALING this
+                                             // (content laid out to bodyHeight), never reflowing it
 
     property string prompt: ""
     property string reply: ""
@@ -22,6 +24,9 @@ Item {
     // Reading width: the fixed peek content width minus side padding, handed in by Overlay. Fixed
     // (not derived from the animating height), so naturalHeight below has no circular dependency.
     property int textWidth: 512
+    // The FINAL peek height (the island's target). The vertical layout pins to THIS, not the panel's
+    // animating height, so nothing reflows during the grow — the clip above just reveals it.
+    property int bodyHeight: 0
 
     signal copyRequested()
     signal saveRequested()
@@ -166,8 +171,8 @@ Item {
     Row {
         id: actions
         spacing: 4
-        anchors.right: parent.right; anchors.bottom: parent.bottom
-        anchors.rightMargin: panel.cornerInset; anchors.bottomMargin: panel.cornerInset
+        anchors.right: parent.right; anchors.rightMargin: panel.cornerInset
+        y: panel.bodyHeight - panel.cornerInset - height   // pinned to the FINAL bottom, not the clip
 
         property bool copied: false
         Timer { id: copiedReset; interval: 1200; onTriggered: actions.copied = false }

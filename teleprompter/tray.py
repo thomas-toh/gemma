@@ -1,8 +1,9 @@
 """System tray (Track P C3) — the only "Gemma is running" signal there is.
 
 The island hides completely at idle (spec/40: "gone = asleep"), so without this you cannot
-tell the overlay from a dead process. It also carries the one setting that cannot wait for
-spec/70's real settings surface: the Groq cleanup key.
+tell the overlay from a dead process. It also carries the settings that cannot wait for
+spec/70's real settings surface: the Groq cleanup key (to the OS credential store), and the
+TTS / Pings output toggles (D28, to bridge.settings' config file, which the daemon reads).
 """
 from __future__ import annotations
 
@@ -11,6 +12,8 @@ import logging
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import QInputDialog, QLineEdit, QMenu, QSystemTrayIcon
+
+from bridge import settings
 
 log = logging.getLogger("gemma.teleprompter")
 
@@ -48,6 +51,19 @@ class Tray(QSystemTrayIcon):
         act_key = QAction("Set Groq API key…", menu)
         act_key.triggered.connect(self._set_key)
         menu.addAction(act_key)
+        # Output toggles (spec/70 stopgap via bridge.settings — the daemon reads the same file).
+        # TTS default off (D23 capability), Pings default on (D28). Checked-state comes FROM the
+        # file, so it reflects a prior session's choice; toggling writes it straight back.
+        act_tts = QAction("TTS", menu)
+        act_tts.setCheckable(True)
+        act_tts.setChecked(bool(settings.get("tts")))
+        act_tts.toggled.connect(lambda on: settings.set("tts", on))
+        menu.addAction(act_tts)
+        act_pings = QAction("Pings", menu)
+        act_pings.setCheckable(True)
+        act_pings.setChecked(bool(settings.get("pings")))
+        act_pings.toggled.connect(lambda on: settings.set("pings", on))
+        menu.addAction(act_pings)
         if model is not None:
             act_lat = QAction("Show latency", menu)      # D13's acceptance-run instrument
             act_lat.setCheckable(True)
