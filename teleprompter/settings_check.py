@@ -55,7 +55,16 @@ def check_icon_font() -> None:
     fams = QFontDatabase.applicationFontFamilies(fid) if fid != -1 else []
     # The literal must match Theme.qml's `fontIcon`; both name the same bundled family.
     assert "Material Symbols Outlined" in fams, f"icon font family changed or failed to load: {fams}"
-    print(f"  icon font: {ttf.name} -> {fams[0]}")
+
+    # Since D29 a Glyph's `d` is a glyph char (an `ico.*`), never an SVG path. A leftover path
+    # literal renders as literal text with no QML warning — the Add-a-model sheet shipped two like
+    # that. Fail on any `d: "M…"`/`d: "m…"` (an SVG path starts with a move + coords); `ico.*`
+    # bindings have no quote, and the Mark logo uses `PathSvg { path: … }`, so neither trips this.
+    import re
+    src = (HERE / "SettingsWindow.qml").read_text(encoding="utf-8")
+    stray = re.findall(r'\bd:\s*"[Mm][\d\s.\-]', src)
+    assert not stray, f"{len(stray)} Glyph(s) still fed an SVG path instead of an ico glyph char"
+    print(f"  icon font: {ttf.name} -> {fams[0]}; no raw glyph paths")
 
 
 def check_recorder(engine, app) -> None:

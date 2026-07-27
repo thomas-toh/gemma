@@ -157,6 +157,8 @@ Window {
         readonly property string minimize:"\ue15b"   // remove          — caption: minimise
         readonly property string maximize:"\ue3c6"   // crop_square     — caption: maximise
         readonly property string restore: "\ue3e0"   // filter_none     — caption: restore (maximised)
+        readonly property string back:    "\ue5cb"   // chevron_left    — step 2 → step 1
+        readonly property string edit:    "\uf097"   // edit            — configure a listed model
     }
 
     // ── building blocks ───────────────────────────────────────────────────────
@@ -1528,7 +1530,7 @@ Window {
                         color: bkh.hovered ? Theme.uiHoverStrong
                                            : "transparent"
                         HoverHandler { id: bkh }
-                        Glyph { anchors.centerIn: parent; d: "M14 6l-6 6 6 6"; px: 16; tint: Theme.uiTextDim }
+                        Glyph { anchors.centerIn: parent; d: ico.back; px: 16; tint: Theme.uiTextDim }
                         MouseArea {
                             anchors.fill: parent
                             cursorShape: Qt.PointingHandCursor
@@ -1690,7 +1692,7 @@ Window {
                                     Glyph {
                                         anchors.centerIn: parent; px: 19
                                         tint: eh.hovered ? Theme.uiText : Theme.uiTextFaint
-                                        d: "M4.5 19.5l4.2-.9L19.4 8.2a2.3 2.3 0 0 0-3.2-3.2L5.4 15.3zM14.8 6.4l2.8 2.8"
+                                        d: ico.edit
                                     }
                                     MouseArea {
                                         anchors.fill: parent
