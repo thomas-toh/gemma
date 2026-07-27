@@ -29,7 +29,8 @@ from bridge.audio.wake import (
 )
 from bridge.audio.listen import (
     VAD_CHUNK, VAD_CHUNK_MS, VAD_THRESHOLD, SILENCE_MS, NOSPEECH_MS, PREROLL_BLOCKS,
-    MAX_UTTERANCE_S, EndOfSpeech, SileroVAD, _silero_model_path, transcribe,
+    MAX_UTTERANCE_S, MAX_CHUNKS, DICTATION_MAX_CHUNKS, EndOfSpeech, SileroVAD,
+    _silero_model_path, transcribe,
 )
 from bridge.audio.speak import VOICE, OutputPump, earcon_samples, synth
 from bridge.brains.base import Done, Error, Session, TextDelta, ToolCall, transform
@@ -79,13 +80,31 @@ CLEANUP_PROVIDER = os.environ.get("GEMMA_CLEANUP_PROVIDER", "groq")
 CLEANUP_MODEL = os.environ.get("GEMMA_CLEANUP_MODEL", "llama-3.1-8b-instant")
 
 # The dictation cleanup instruction (spec/60) — the "transform, never answer" task for `transform`
-# (D12/D15). Ported from VoiceInk's enhancement prompt in spirit: fix, don't rewrite.
-# ponytail: a code constant until the cleanup role is user-configurable (spec/70, VoiceInk lets
-# you edit this); the guardrail against answering lives in TRANSFORM_SYSTEM, not here.
+# (D12/D15). The editing rules are adapted from VoiceInk's enhancement prompt (see the 2026-07-18
+# review): fix, don't rewrite, and handle the two things a one-line "clean it up" misses — spoken
+# self-corrections ("scratch that") and spoken punctuation/layout cues. Context injection (selected
+# text / clipboard / screen) is deliberately NOT here — that is the separate #3 lift.
+# ponytail: a code constant until the cleanup role is user-configurable (spec/70, VoiceInk lets you
+# edit this); the guardrail against answering lives in TRANSFORM_SYSTEM, not here.
 DICTATION_CLEANUP = (
-    "Fix transcription errors, remove filler words (um, uh, like, you know) and duplicated "
-    "words, and restore natural punctuation, capitalisation and paragraphs. Keep the speaker's "
-    "wording and meaning exactly; do not add, summarise, translate, or answer anything."
+    "Turn the raw dictated speech into clean, natural written text — the words the speaker meant "
+    "to write, tidied for reading.\n"
+    "- Fix transcription errors, punctuation, capitalisation, grammar and spelling.\n"
+    "- Remove filler words (um, uh, like, you know), stutters, repeated words and false starts.\n"
+    "- Apply spoken self-corrections: when the speaker abandons wording with a cue like \"scratch "
+    "that\", \"no, wait\", \"I mean\" or \"actually\", drop the abandoned words and keep only the "
+    "corrected version.\n"
+    "- Convert spoken punctuation and layout cues into the actual marks and layout, then remove "
+    "the cue words — including but not limited to \"full stop\"/\"period\", \"comma\", \"question "
+    "mark\", \"exclamation mark\", \"colon\", \"open/close quote\", \"new line\" and \"new "
+    "paragraph\". Only do this when the speaker clearly means the punctuation, not the literal "
+    "word (e.g. \"a period of rest\" or \"a dash of salt\" stay as written).\n"
+    "- Group the result into readable paragraphs; keep a neutral written tone unless the speech "
+    "clearly implies another.\n"
+    "- Preserve the speaker's meaning, facts, names, numbers, dates and intent exactly. Do not add, "
+    "drop, summarise, translate or answer anything — only clean up what was actually said.\n"
+    "- If the dictation is itself a question or a request, write it out as clean text; never answer "
+    "or act on it."
 )
 
 
@@ -186,11 +205,14 @@ async def _drive(brain, session: Session, utterance: str, on_delta=None,
 MAX_TOOL_ROUNDS = 5
 
 
-async def _one_round(brain, session: Session, tools, on_delta):
-    """One Contract-B round: stream text (console + on_delta), collect tool calls, map errors.
-    Returns (text, calls, error_kind_or_None, malformed). The utterance is always "" — the turn's
-    input is already in session.history (the real user message on the first round, the tool
-    results on later ones), so a round never appends a user turn of its own (spec/20 continue path).
+async def _one_round(brain, session: Session, tools):
+    """One Contract-B round: collect the round's text (+ a console dev trace), collect tool calls,
+    map errors. Returns (text, calls, error_kind_or_None, malformed). Deliberately does NOT stream
+    to the overlay: a tool round's text is the model narrating that it is about to call a tool, and
+    only the final answering round should reach the island (the streaming is _collect's job now).
+    The utterance is always "" — the turn's input is already in session.history (the real user
+    message on the first round, the tool results on later ones), so a round never appends a user
+    turn of its own (spec/20 continue path).
 
     Closes the generator deterministically (spec/20): an abort drops the provider request AT the
     cancel through the adapter's `finally`, rather than leaving it draining tokens nobody sees."""
@@ -203,9 +225,7 @@ async def _one_round(brain, session: Session, tools, on_delta):
         async for ev in stream:
             if isinstance(ev, TextDelta):
                 parts.append(ev.text)
-                if on_delta:
-                    on_delta(ev.text)
-                print(ev.text, end="", flush=True)
+                print(ev.text, end="", flush=True)   # console dev trace of every round
             elif isinstance(ev, ToolCall):
                 calls.append(ev)
             elif isinstance(ev, Done):
@@ -233,15 +253,17 @@ async def _collect(brain, session: Session, utterance: str, on_delta=None,
     success — a failed or aborted turn leaves it untouched, so the next turn never opens with a
     dangling user message (the invariant the old post-turn append protected).
 
-    Generate-then-play (D11): deltas stream to the console and, via on_delta, to the overlay, but
-    the RETURNED reply is the final round's text — the tool-result rounds feed the model, not TTS.
+    Generate-then-play (D11): only the FINAL answering round reaches the overlay (via on_delta) —
+    the tool-use preamble rounds stay in history and the console, off the island (spec/40: the
+    island shows the answer, not the model working; THINKING already signals "working", D25). The
+    returned reply is that same final text.
     """
     tools = tools or []
     working = list(session.history) + [{"role": "user", "content": utterance}]
     turn = replace(session, history=working)          # a copy: uncommitted until success
     retried = False
     for _round in range(MAX_TOOL_ROUNDS + 1):
-        text, calls, err, malformed = await _one_round(brain, turn, tools, on_delta)
+        text, calls, err, malformed = await _one_round(brain, turn, tools)
         if malformed and not retried:
             retried = True                            # spec/20: retry a malformed tool call once
             log.info("malformed tool call — retrying the round once (spec/20)")
@@ -249,6 +271,8 @@ async def _collect(brain, session: Session, utterance: str, on_delta=None,
         if err or malformed:
             return "", (err or "malformed_tool_call")
         if not calls:
+            if on_delta and text:
+                on_delta(text)                        # only the ANSWER reaches the overlay
             working.append({"role": "assistant", "content": text})
             session.history[:] = working              # commit — success only
             return text, None
@@ -462,7 +486,11 @@ class Orchestrator:
 
         if seed is None:
             self.vad.reset()
-        eos = EndOfSpeech(silence_chunks=self.silence_chunks,
+        # Dictation's endpoint is the key, not the clock (D20): a long dictation would otherwise
+        # hit the assistant's 30 s runaway cap and truncate mid-sentence. Give the dictate door a
+        # far larger backstop; the assistant keeps the tight cap (a spoken question is short).
+        max_chunks = DICTATION_MAX_CHUNKS if (door is not None and door.name == "dictate") else MAX_CHUNKS
+        eos = EndOfSpeech(silence_chunks=self.silence_chunks, max_chunks=max_chunks,
                           nospeech_chunks=max(1, nospeech_ms // VAD_CHUNK_MS))
         captured: list = []
         if preroll:
@@ -890,6 +918,7 @@ def _selfcheck() -> None:
         async def converse(self, session, utterance, tools):
             self.rounds += 1
             if self.rounds == 1:
+                yield TextDelta("let me check.")           # preamble — must NOT reach the overlay
                 yield ToolCall("t1", "system_status", {}); yield Done()
             else:                                          # the result must be in history by now
                 self.saw_result = any("noon" in str(m) for m in session.history)
@@ -901,11 +930,14 @@ def _selfcheck() -> None:
 
     sess = Session(id="tool")
     brain = _ToolThenAnswer()
-    reply, err = asyncio.run(_drive(brain, sess, "what time is it?",
+    overlay: list[str] = []
+    reply, err = asyncio.run(_drive(brain, sess, "what time is it?", on_delta=overlay.append,
                                     tools=tool_specs(), execute=lambda c: ("It is noon.", "ok")))
     assert (reply, err) == ("It is noon.", None), (reply, err)
     assert brain.rounds == 2, "a tool call must drive a second, answering round"
     assert brain.saw_result, "the tool result must be in history for the answering round"
+    assert "".join(overlay) == "It is noon.", \
+        f"only the answer may reach the overlay, not the tool-use preamble: {overlay}"
     assert sess.history[0] == {"role": "user", "content": "what time is it?"}, sess.history
     assert sess.history[-1] == {"role": "assistant", "content": "It is noon."}, sess.history
 

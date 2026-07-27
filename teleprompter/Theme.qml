@@ -149,6 +149,9 @@ QtObject {
     readonly property int iconLg: 24
     // Dropdown popup: show at most this many rows, then scroll (a fetched model list can be 100+).
     readonly property int dropdownRows: 8
+    // Scrollbar thumb thickness — the one width every scrollbar shares (settings + the island peek),
+    // via the ThemedScrollBar component (Thomas, 2026-07-27).
+    readonly property int scrollThickness: 5
 
     // ── vertical rhythm ─────────────────────────────────────────────────────
     // ONE ratio for every wrapped string in the window, applied as a FIXED line box (the mode

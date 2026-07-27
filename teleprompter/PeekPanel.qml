@@ -7,6 +7,7 @@
 // either, and keeping them out keeps this headless-testable. Mirrors sandbox/teleprompter-
 // expanded-mockup.html, which Thomas signed off on.
 import QtQuick
+import QtQuick.Controls.Basic                    // ScrollBar (attached) for the shared ThemedScrollBar
 import teleprompter                              // Theme — the design tokens
 
 Item {
@@ -129,6 +130,7 @@ Item {
         clip: true
         contentHeight: replyText.height
         boundsBehavior: Flickable.StopAtBounds
+        ScrollBar.vertical: ThemedScrollBar {}        // the same scrollbar the settings window uses
         Text {
             id: replyText
             objectName: "ppReply"
@@ -157,16 +159,6 @@ Item {
             GradientStop { position: 1.0; color: Theme.surface }
         }
     }
-    // thin 2px pill scroll indicator (only when there is overflow)
-    Rectangle {
-        visible: flick.contentHeight > flick.height + 1
-        width: 2; radius: 1
-        color: panel.faintInk
-        x: flick.x + flick.width - width
-        height: Math.max(20, flick.height * flick.visibleArea.heightRatio)
-        y: flick.y + flick.visibleArea.yPosition * flick.height
-    }
-
     // ---- actions (Copy live, Save opens a save dialog — both host-handled) ----
     Row {
         id: actions

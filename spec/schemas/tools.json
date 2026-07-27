@@ -5,7 +5,7 @@
     {
       "name": "system_status",
       "tier": 1,
-      "description": "Report time, battery (if laptop), volume level, active window title, and media playback state.",
+      "description": "Report the current local date and time WITH its UTC offset (use the offset to work out the time in other time zones yourself), plus battery (if a laptop), volume level, active window title, and media playback state.",
       "parameters": { "type": "object", "properties": {}, "additionalProperties": false }
     },
     {

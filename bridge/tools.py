@@ -60,7 +60,13 @@ def _read_clipboard(args: dict) -> str:
 
 
 def _system_status(args: dict) -> str:
-    parts = [f"Local time: {datetime.now().strftime('%H:%M on %A %d %B %Y')}"]
+    # Timezone-AWARE local time: astimezone() attaches the OS's current UTC offset, so the model
+    # gets an anchor and can convert to any zone from its own knowledge (Tokyo = UTC+9) — no tool
+    # and no web call (rung 1). A naive "22:18" gave it nothing to convert FROM, so it refused.
+    now = datetime.now().astimezone()
+    z = now.strftime("%z")                        # "+0100"; astimezone() always sets an offset
+    offset = f"UTC{z[:3]}:{z[3:]}" if z else "UTC"
+    parts = [f"Local time: {now.strftime('%H:%M on %A %d %B %Y')} ({offset})"]
     if sys.platform == "win32":
         parts += [p for p in (_win_active_window(), _win_battery()) if p]
     # ponytail: volume level and media playback state (promised by the registry description) need
@@ -215,9 +221,11 @@ def _selfcheck() -> None:
         content, outcome = execute(ToolCall("2", "open_app", {"app": "spotify"}))
         assert outcome == "refused:unknown_tool", (content, outcome)
 
-        # A real Tier-1 tool runs and returns something the brain can read.
+        # A real Tier-1 tool runs and returns something the brain can read — including a UTC
+        # offset, so a "what time in <city>" question is arithmetic the model does itself (rung 1).
         content, outcome = execute(ToolCall("3", "system_status", {}), session="s")
         assert outcome == "ok" and "time" in content.lower(), (content, outcome)
+        assert "utc" in content.lower(), f"time needs a UTC anchor for zone conversion: {content!r}"
 
         # read_clipboard runs; on a headless runner with no clipboard it degrades to a string
         # rather than raising (like paste.py's own selfcheck).

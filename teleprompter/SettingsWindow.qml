@@ -427,16 +427,7 @@ Window {
                     spacing: 1
                     boundsBehavior: Flickable.StopAtBounds
                     currentIndex: dd.options.indexOf(dd.value)
-                    ScrollBar.vertical: ScrollBar {
-                        id: ddbar
-                        policy: ScrollBar.AsNeeded
-                        contentItem: Rectangle {
-                            implicitWidth: 4; radius: 2
-                            color: ddbar.pressed ? Theme.uiTextDim
-                                 : (ddbar.hovered ? Theme.uiTextFaint : Theme.uiTrackOff)
-                            opacity: ddbar.active || ddbar.hovered ? 1 : 0.5
-                        }
-                    }
+                    ScrollBar.vertical: ThemedScrollBar {}
                     delegate: Rectangle {
                         required property string modelData
                         width: list.width
@@ -1272,17 +1263,7 @@ Window {
                     sourceComponent: configView
                 }
                 Connections { target: root; function onSectionChanged() { scroller.contentY = 0 } }
-                ScrollBar.vertical: ScrollBar {
-                    id: vbar
-                    policy: ScrollBar.AsNeeded
-                    contentItem: Rectangle {
-                        implicitWidth: 5; radius: 2.5
-                        color: vbar.pressed ? Theme.uiTextDim
-                             : (vbar.hovered ? Theme.uiTextFaint : Theme.uiTrackOff)
-                        opacity: vbar.active || vbar.hovered ? 1 : 0.5
-                        Behavior on color { ColorAnimation { duration: root.t } }
-                    }
-                }
+                ScrollBar.vertical: ThemedScrollBar {}
             }
             // top fade, so content dissolves under the top bar rather than cutting at it
             Rectangle {
@@ -1323,17 +1304,7 @@ Window {
                     clip: true
                     boundsBehavior: Flickable.StopAtBounds
                     Row { id: bandRow; height: mv.cardH; spacing: 14 }
-                    ScrollBar.horizontal: ScrollBar {
-                        id: hbar
-                        policy: ScrollBar.AsNeeded
-                        contentItem: Rectangle {
-                            implicitHeight: 5; radius: 2.5
-                            color: hbar.pressed ? Theme.uiTextDim
-                                 : (hbar.hovered ? Theme.uiTextFaint : Theme.uiTrackOff)
-                            opacity: hbar.active || hbar.hovered ? 1 : 0.5
-                            Behavior on color { ColorAnimation { duration: root.t } }
-                        }
-                    }
+                    ScrollBar.horizontal: ThemedScrollBar {}
                 }
                 // Margin-width fades, one per side, each shown only when there is content off that
                 // way — so a fade never sits over the first/last card once you scroll to that end.
@@ -1361,7 +1332,37 @@ Window {
                 Column {
                     width: parent.width
                     spacing: 14
-                    Display { text: "Ask"; font.pixelSize: 32 }
+                    // Title + an always-visible Add, so a full band never buries the Add card off
+                    // the right edge behind a scroll.
+                    Item {
+                        width: parent.width
+                        height: askHdr.implicitHeight
+                        Display { id: askHdr; text: "Ask"; font.pixelSize: 32
+                                  anchors.verticalCenter: parent.verticalCenter }
+                        Rectangle {
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            height: 34; radius: 8
+                            width: addLbl.width + 30
+                            color: addBtnH.hovered ? Theme.surfaceLift : Theme.surfaceCard
+                            border.width: 1
+                            border.color: addBtnH.hovered ? Theme.hairlineStrong : Theme.hairline
+                            Behavior on color { ColorAnimation { duration: root.t } }
+                            HoverHandler { id: addBtnH }
+                            Row {
+                                id: addLbl
+                                anchors.centerIn: parent
+                                spacing: 7
+                                Glyph { d: ico.plus; px: 16; anchors.verticalCenter: parent.verticalCenter
+                                        tint: addBtnH.hovered ? Theme.uiText : Theme.uiTextDim }
+                                Display { text: "Add model"; font.pixelSize: Theme.fontBase
+                                          anchors.verticalCenter: parent.verticalCenter
+                                          color: addBtnH.hovered ? Theme.uiText : Theme.uiTextDim }
+                            }
+                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                        onClicked: root.openAdd() }
+                        }
+                    }
                     Band {
                         Repeater {
                             model: mv.ids

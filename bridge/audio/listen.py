@@ -34,7 +34,10 @@ VAD_THRESHOLD = 0.5                               # speech if Silero prob >= thi
 SILENCE_MS = 1000                                 # spec/40: end-of-speech silence (--silence-ms
                                                   # to tune live; semantic endpointing is the
                                                   # proper fix for long composed prompts, M1)
-MAX_UTTERANCE_S = 30                              # safety cap ONLY; VAD ends normal turns
+MAX_UTTERANCE_S = 30                              # assistant safety cap ONLY; VAD ends normal turns
+DICTATION_MAX_UTTERANCE_S = 300                   # dictation's endpoint is the KEY (D20), so this is
+                                                  # only a runaway backstop — generous, or a long
+                                                  # dictation (an email, a paragraph) truncates mid-word
 NOSPEECH_MS = 5000                                # spec/40: give up if nothing said after wake
 PREROLL_MS = 200                                  # pre-roll from ring buffer (tune: onset vs
                                                   # bleeding the wake word into the transcript)
@@ -43,7 +46,8 @@ PREROLL_MS = 200                                  # pre-roll from ring buffer (t
 # can lie (the give-up count read "93 (~3 s)" long after NOSPEECH_MS became 5000 → 156). The
 # selfcheck prints the live numbers instead.
 SILENCE_CHUNKS = (SILENCE_MS + VAD_CHUNK_MS - 1) // VAD_CHUNK_MS   # ceil: end-of-speech silence
-MAX_CHUNKS = MAX_UTTERANCE_S * 1000 // VAD_CHUNK_MS                # runaway cap
+MAX_CHUNKS = MAX_UTTERANCE_S * 1000 // VAD_CHUNK_MS                # assistant runaway cap
+DICTATION_MAX_CHUNKS = DICTATION_MAX_UTTERANCE_S * 1000 // VAD_CHUNK_MS   # dictation backstop (spec/60)
 NOSPEECH_CHUNKS = NOSPEECH_MS // VAD_CHUNK_MS                      # give up if speech never starts
 PREROLL_BLOCKS = PREROLL_MS // BLOCK_MS                            # pre-roll from the ring
 
@@ -265,9 +269,19 @@ def _selfcheck() -> None:
         n += 1
     assert n + 1 == MAX_CHUNKS, (n + 1, MAX_CHUNKS)
 
+    # 3b) a caller can RAISE the cap — dictation does, since its endpoint is the key not the clock,
+    # and a 30 s cap truncated long dictations. Prove the param is honoured and is larger.
+    assert DICTATION_MAX_CHUNKS > MAX_CHUNKS, (DICTATION_MAX_CHUNKS, MAX_CHUNKS)
+    eos = EndOfSpeech(max_chunks=DICTATION_MAX_CHUNKS)
+    n = 0
+    while not eos.update(True):
+        n += 1
+    assert n + 1 == DICTATION_MAX_CHUNKS, (n + 1, DICTATION_MAX_CHUNKS)
+
     print(f"selfcheck OK: end-of-speech after {SILENCE_CHUNKS} silent chunks "
           f"(~{SILENCE_CHUNKS * VAD_CHUNK_MS} ms), give-up at {NOSPEECH_CHUNKS} "
-          f"(~{NOSPEECH_MS} ms), safety cap at {MAX_CHUNKS} (~{MAX_UTTERANCE_S} s)")
+          f"(~{NOSPEECH_MS} ms), safety cap {MAX_CHUNKS} (~{MAX_UTTERANCE_S} s) / dictation "
+          f"{DICTATION_MAX_CHUNKS} (~{DICTATION_MAX_UTTERANCE_S} s)")
 
 
 def main() -> None:
