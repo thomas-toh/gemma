@@ -137,6 +137,18 @@ QtObject {
     readonly property int fontCardLabel: 13   // Model / Effort / Extended thinking / Notes
     readonly property int fontCardMeta:  12   // mono model ids, the key-status footer
 
+    // Icons — Material Symbols Outlined (bundled in teleprompter/fonts, subset to the glyphs the
+    // window uses). Drawn as font text, not hand-authored paths, so weight/optical-size are real
+    // font axes, not stroke fudges (Thomas, 2026-07-27). A call site picks a size by role; the
+    // Glyph component feeds `iconWeight` to the font's `wght` axis (light, per Thomas).
+    readonly property string fontIcon: "Material Symbols Outlined"
+    readonly property int iconWeight: 300
+    readonly property int iconSm: 16
+    readonly property int iconMd: 19
+    readonly property int iconLg: 24
+    // Dropdown popup: show at most this many rows, then scroll (a fetched model list can be 100+).
+    readonly property int dropdownRows: 8
+
     // ── vertical rhythm ─────────────────────────────────────────────────────
     // ONE ratio for every wrapped string in the window, applied as a FIXED line box (the mode
     // Overlay.qml uses). Qt's proportional `lineHeight` multiplies the font's natural height

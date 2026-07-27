@@ -36,7 +36,7 @@ from teleprompter.decode import HOST, PORT, m_dismiss, targets           # noqa:
 from teleprompter.feed import Feed                                       # noqa: E402
 from teleprompter.model import OverlayModel                              # noqa: E402
 from teleprompter.settings_model import SettingsModel                    # noqa: E402
-from teleprompter.tray import Tray                                       # noqa: E402
+from teleprompter.tray import Tray, mark_icon                            # noqa: E402
 
 log = logging.getLogger("gemma.teleprompter")
 
@@ -339,6 +339,16 @@ def main() -> int:
 
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)   # the island hides at idle — that is not a quit
+    app.setWindowIcon(mark_icon())         # the Gemma mark on the taskbar (and any window)
+    if sys.platform == "win32":
+        # Running as python.exe, Windows groups the taskbar button under python and shows ITS icon,
+        # ignoring the app's window icon. An explicit AppUserModelID makes Windows treat us as our
+        # own app, so the window icon (above) is what the taskbar actually shows.
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Gemma.Teleprompter")
+        except Exception as e:                                       # noqa: BLE001 — never fatal
+            log.debug("could not set AppUserModelID: %s", e)
     # Text render mode is left at Qt Quick's DEFAULT (distance-field). Two alternatives were
     # tried on 2026-07-25 and both looked worse on this display: NativeTextRendering went jagged
     # on the translucent island / fractional DPI, and CurveTextRendering was no better. The
@@ -475,6 +485,10 @@ def main() -> int:
         # happily take this one once it is hidden — a Python reference does not stop that.
         # Claiming C++ ownership is what makes the window survive being closed.
         QQmlEngine.setObjectOwnership(win_, QQmlEngine.ObjectOwnership.CppOwnership)
+        try:
+            win_.setIcon(mark_icon())    # the taskbar button for this window, explicitly
+        except Exception as e:                                       # noqa: BLE001
+            log.debug("could not set settings-window icon: %s", e)
         settings_win["win"] = win_
         win_.show()
         round_corners(win_)          # after show(): winId only exists once there is a window

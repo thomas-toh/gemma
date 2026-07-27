@@ -143,9 +143,40 @@ def make_icon() -> QIcon:
     return QIcon(pm)
 
 
+def mark_icon(px: int = 256, colour: str | None = None) -> QIcon:
+    """The Gemma mark, for the tray and the Windows taskbar — loaded from the shipped SVG so the
+    shape lives in one place (`teleprompter/icons/gemma-mark.svg`). `colour` recolours the mark
+    (the tray passes white); the default keeps the asset's coral. Falls back to the island
+    silhouette if the asset is ever missing.
+
+    ponytail: the tray is a flat white mark. Its on-air role (spec/50 rule 4, D29) could later
+    tint it by mic state; the settings window's top-bar lamp carries that meaning for now.
+    """
+    from pathlib import Path
+    from PySide6.QtCore import QByteArray
+    from PySide6.QtSvg import QSvgRenderer
+    src = Path(__file__).resolve().parent / "icons" / "gemma-mark.svg"
+    try:
+        svg = src.read_text(encoding="utf-8")
+    except OSError:
+        return make_icon()
+    if colour:
+        svg = svg.replace("#cf6142", colour)
+    r = QSvgRenderer(QByteArray(svg.encode("utf-8")))
+    if not r.isValid():
+        return make_icon()
+    pm = QPixmap(px, px)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    r.render(p)
+    p.end()
+    return QIcon(pm)
+
+
 class Tray(QSystemTrayIcon):
     def __init__(self, app, model=None, on_settings=None) -> None:
-        super().__init__(make_icon())
+        super().__init__(mark_icon(colour="#ffffff"))
         self._app = app
         self._model = model
         self.setToolTip("Gemma — Teleprompter")

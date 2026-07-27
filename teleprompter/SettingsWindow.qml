@@ -140,50 +140,47 @@ Window {
     // ── glyphs ────────────────────────────────────────────────────────────────
     // Stroked 24×24 paths, kept here rather than shipped as files: they are one line each and
     // never need to be edited by anything but this window.
+    // Material Symbols Outlined codepoints (the font is bundled + subset to exactly these). Each
+    // value is the glyph char; the Glyph component renders it as font text. Add an icon here AND
+    // add its codepoint to the subset step in fonts/ (an unsubsetted glyph renders as tofu).
     QtObject {
         id: ico
-        readonly property string general: "M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4M12 8.6a3.4 3.4 0 1 0 0 6.8a3.4 3.4 0 1 0 0-6.8"
-        readonly property string cloud: "M6.8 18.5a3.8 3.8 0 0 1-.5-7.6 5.2 5.2 0 0 1 10-1.6 3.6 3.6 0 0 1 1 7.1M6.8 18.5h10.5"
-        readonly property string chip: "M4 6.6A2.6 2.6 0 0 1 6.6 4h10.8A2.6 2.6 0 0 1 20 6.6v10.8a2.6 2.6 0 0 1-2.6 2.6H6.6A2.6 2.6 0 0 1 4 17.4zM8.5 9.7a1.2 1.2 0 0 1 1.2-1.2h4.6a1.2 1.2 0 0 1 1.2 1.2v4.6a1.2 1.2 0 0 1-1.2 1.2H9.7a1.2 1.2 0 0 1-1.2-1.2zM9 4V2M15 4V2M9 22v-2M15 22v-2M4 9H2M4 15H2M22 9h-2M22 15h-2"
-        readonly property string keyboard: "M4.9 6h14.2a2.4 2.4 0 0 1 2.4 2.4v7.2a2.4 2.4 0 0 1-2.4 2.4H4.9a2.4 2.4 0 0 1-2.4-2.4V8.4A2.4 2.4 0 0 1 4.9 6M6.5 10h.01M10 10h.01M13.5 10h.01M17 10h.01M8 14h8"
-        readonly property string mic: "M12 3.5a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0v-5a3 3 0 0 0-3-3M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"
-        readonly property string speaker: "M4 9.5v5h3.2L12 19V5L7.2 9.5H4M16 9.2a4 4 0 0 1 0 5.6M18.6 6.6a7.6 7.6 0 0 1 0 10.8"
-        readonly property string wave: "M3 12h2.6l2-5 3 12 2.6-9 1.8 4H21"
-        readonly property string sparkle: "M12 5l1.6 5.4L19 12l-5.4 1.6L12 19l-1.6-5.4L5 12l5.4-1.6z"
-        readonly property string gear: "M9.8 4.2h4.4l.5 2.3 1.9 1.1 2.2-.8 2.2 3.8-1.7 1.5v2.2l1.7 1.5-2.2 3.8-2.2-.8-1.9 1.1-.5 2.3H9.8l-.5-2.3-1.9-1.1-2.2.8-2.2-3.8 1.7-1.5v-2.2L2.8 10.6 5 6.8l2.2.8 1.9-1.1zM12 9.4a2.6 2.6 0 1 0 0 5.2 2.6 2.6 0 0 0 0-5.2z"
-        readonly property string clock: "M12 3.6a8.4 8.4 0 1 0 0 16.8a8.4 8.4 0 1 0 0-16.8M12 7.4V12l3 1.8"
-        readonly property string check: "M4.5 12.6 9.5 17.5 19.5 6.5"
-        readonly property string ask: "M8 9.5a4 4 0 1 1 4 4v2.2M12 19.6h.01"
-        readonly property string brain: "M12 6.4a3.1 3.1 0 0 0-5.8-1 2.7 2.7 0 0 0-2.1 3.9 2.7 2.7 0 0 0 .7 4.2A2.6 2.6 0 0 0 8.4 17.6a2.6 2.6 0 0 0 3.6-1.3zM12 6.4a3.1 3.1 0 0 1 5.8-1 2.7 2.7 0 0 1 2.1 3.9 2.7 2.7 0 0 1-.7 4.2A2.6 2.6 0 0 1 15.6 17.6a2.6 2.6 0 0 1-3.6-1.3z"
-        readonly property string chevron: "m6 9 6 6 6-6"
-        readonly property string plus: "M12 5v14M5 12h14"
-        readonly property string trash: "M6 7h12M9.5 7V5.5h5V7M8 7l.7 12h6.6L16 7"
-        readonly property string close: "m6 6 12 12M18 6 6 18"
+        readonly property string cloud:   "\uf15c"   // cloud            — a provider-hosted model
+        readonly property string chip:    "\ue322"   // memory          — a local model
+        readonly property string sparkle: "\ue65f"   // auto_awesome    — the Ask brain
+        readonly property string kebab:   "\ue5d4"   // more_vert       — a card's configure/⋮ affordance
+        readonly property string check:   "\ue668"   // check           — selected row
+        readonly property string chevron: "\ue5cf"   // expand_more     — a dropdown's open indicator
+        readonly property string plus:    "\ue145"   // add             — add a model
+        readonly property string trash:   "\ue92e"   // delete          — remove a model
+        readonly property string close:   "\ue5cd"   // close           — dismiss the sheet
+        readonly property string minimize:"\ue15b"   // remove          — caption: minimise
+        readonly property string maximize:"\ue3c6"   // crop_square     — caption: maximise
+        readonly property string restore: "\ue3e0"   // filter_none     — caption: restore (maximised)
     }
 
     // ── building blocks ───────────────────────────────────────────────────────
 
+    // An icon, drawn as one Material Symbols glyph. `d` is the glyph char (an `ico.*`); `px` is
+    // the box the glyph is centred in, fed to the font's optical-size axis so it stays crisp at
+    // any size. Weight is a real font axis now, so there is no stroke to fudge.
     component Glyph: Item {
         id: g
         property string d: ""
         property color tint: Theme.uiText
         property real px: 18
-        property real stroke: 1.75         // FINAL on-screen width, independent of `px`
+        property int weight: Theme.iconWeight
         implicitWidth: px
         implicitHeight: px
-        Shape {
+        Text {
             anchors.centerIn: parent
-            width: 24; height: 24
-            scale: g.px / 24
-            preferredRendererType: Shape.CurveRenderer
-            ShapePath {
-                strokeColor: g.tint
-                fillColor: "transparent"
-                strokeWidth: g.stroke * 24 / g.px
-                capStyle: ShapePath.RoundCap
-                joinStyle: ShapePath.RoundJoin
-                PathSvg { path: g.d }
-            }
+            text: g.d
+            color: g.tint
+            font.family: Theme.fontIcon
+            font.pixelSize: g.px
+            // opsz clamps to the font's axis range (20–48); FILL 0 / GRAD 0 keep it outlined.
+            font.variableAxes: ({ "wght": g.weight, "opsz": g.px, "FILL": 0, "GRAD": 0 })
+            renderType: Text.QtRendering
         }
     }
 
@@ -415,17 +412,35 @@ Window {
                 border.width: 1
                 border.color: Theme.hairlineStrong
             }
-            contentItem: Column {
-                spacing: 1
-                Repeater {
+            contentItem: Item {
+                implicitWidth: menu.availableWidth
+                implicitHeight: dd.options.length === 0 ? 34
+                              : Math.min(list.contentHeight, Theme.dropdownRows * 37)
+                ListView {
+                    id: list
+                    anchors.fill: parent
+                    visible: dd.options.length > 0
                     model: dd.options
+                    clip: true
+                    spacing: 1
+                    boundsBehavior: Flickable.StopAtBounds
+                    currentIndex: dd.options.indexOf(dd.value)
+                    ScrollBar.vertical: ScrollBar {
+                        id: ddbar
+                        policy: ScrollBar.AsNeeded
+                        contentItem: Rectangle {
+                            implicitWidth: 4; radius: 2
+                            color: ddbar.pressed ? Theme.uiTextDim
+                                 : (ddbar.hovered ? Theme.uiTextFaint : Theme.uiTrackOff)
+                            opacity: ddbar.active || ddbar.hovered ? 1 : 0.5
+                        }
+                    }
                     delegate: Rectangle {
                         required property string modelData
-                        width: menu.availableWidth
+                        width: list.width
                         height: 36
                         radius: 6
-                        color: oh.hovered ? Theme.uiSelected
-                                          : "transparent"
+                        color: oh.hovered ? Theme.uiSelected : "transparent"
                         HoverHandler { id: oh }
                         Glyph {
                             id: tick
@@ -453,7 +468,7 @@ Window {
                 }
                 Text {
                     visible: dd.options.length === 0
-                    padding: 9
+                    anchors.centerIn: parent
                     text: "Nothing to choose yet"
                     color: Theme.uiTextFaint
                     font.family: fontFamily
@@ -884,7 +899,7 @@ Window {
                 width: parent.width; height: 18
                 Row {
                     anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter; spacing: 6
-                    Glyph { d: mc.cat.where === "cloud" ? ico.cloud : ico.chip; px: 17
+                    Glyph { d: mc.cat.where === "cloud" ? ico.cloud : ico.chip; px: Theme.iconMd
                             tint: Theme.uiTextFaint; anchors.verticalCenter: parent.verticalCenter }
                     Text { text: mc.cat.where === "cloud" ? "Cloud" : "Local"
                            color: Theme.uiTextFaint; font.family: fontFamily; font.pixelSize: Theme.fontSmall
@@ -1019,7 +1034,7 @@ Window {
                 width: 30; height: 30; radius: 7
                 color: gh.hovered ? Theme.uiHoverStrong : "transparent"
                 HoverHandler { id: gh }
-                Glyph { anchors.centerIn: parent; d: ico.gear; px: 17
+                Glyph { anchors.centerIn: parent; d: ico.kebab; px: Theme.iconLg
                         tint: gh.hovered ? Theme.uiText : Theme.uiTextFaint }
                 MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
                     onClicked: root.beginEdit(mc.pid) }
@@ -1074,7 +1089,7 @@ Window {
                 width: parent.width; height: 18
                 Row {
                     anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter; spacing: 6
-                    Glyph { d: ico.sparkle; px: 17; tint: Theme.uiTextFaint; anchors.verticalCenter: parent.verticalCenter }
+                    Glyph { d: ico.sparkle; px: Theme.iconMd; tint: Theme.uiTextFaint; anchors.verticalCenter: parent.verticalCenter }
                     Text { text: "Tidy"; color: Theme.uiTextFaint; font.family: fontFamily
                            font.pixelSize: Theme.fontSmall; anchors.verticalCenter: parent.verticalCenter }
                 }
@@ -1235,25 +1250,37 @@ Window {
                 id: scroller
                 anchors.fill: parent
                 contentWidth: width
-                contentHeight: viewLoader.implicitHeight + root.fadeHeight + 44
+                // Both views are built ONCE and toggled by visibility, so switching sections is
+                // instant — a single Loader that swapped sourceComponent rebuilt the whole view on
+                // every click (the visible lag). Content height follows whichever is showing.
+                contentHeight: (root.section === "models" ? mLoader.implicitHeight
+                                                          : cLoader.implicitHeight) + root.fadeHeight + 44
                 clip: true
                 boundsBehavior: Flickable.StopAtBounds
                 Loader {
-                    id: viewLoader
-                    x: 30; y: root.fadeHeight
-                    width: parent.width - 60
-                    height: implicitHeight
-                    sourceComponent: root.section === "models" ? modelsView : configView
+                    id: mLoader
+                    x: 30; y: root.fadeHeight; width: parent.width - 60; height: implicitHeight
+                    visible: root.section === "models"
+                    sourceComponent: modelsView
                 }
-            }
-            // the same 2 px pill the peek uses — no track, present only when there is overflow
-            Rectangle {
-                visible: scroller.contentHeight > scroller.height + 1
-                width: 2; radius: 1; color: Theme.uiTextFaint
-                x: scroller.width - width - 4
-                height: Math.max(24, scroller.height * scroller.visibleArea.heightRatio)
-                y: scroller.visibleArea.yPosition * scroller.height
-                z: 2
+                Loader {
+                    id: cLoader
+                    x: 30; y: root.fadeHeight; width: parent.width - 60; height: implicitHeight
+                    visible: root.section === "config"
+                    sourceComponent: configView
+                }
+                Connections { target: root; function onSectionChanged() { scroller.contentY = 0 } }
+                ScrollBar.vertical: ScrollBar {
+                    id: vbar
+                    policy: ScrollBar.AsNeeded
+                    contentItem: Rectangle {
+                        implicitWidth: 5; radius: 2.5
+                        color: vbar.pressed ? Theme.uiTextDim
+                             : (vbar.hovered ? Theme.uiTextFaint : Theme.uiTrackOff)
+                        opacity: vbar.active || vbar.hovered ? 1 : 0.5
+                        Behavior on color { ColorAnimation { duration: root.t } }
+                    }
+                }
             }
             // top fade, so content dissolves under the top bar rather than cutting at it
             Rectangle {
@@ -1284,7 +1311,7 @@ Window {
             component Band: Item {
                 default property alias content: bandRow.data
                 width: parent ? parent.width : 0
-                height: mv.cardH
+                height: mv.cardH + 14        // room for the horizontal scrollbar below the cards
                 Flickable {
                     id: flick
                     anchors.fill: parent
@@ -1293,17 +1320,34 @@ Window {
                     flickableDirection: Flickable.HorizontalFlick
                     clip: true
                     boundsBehavior: Flickable.StopAtBounds
-                    Row { id: bandRow; height: parent.height; spacing: 14 }
+                    Row { id: bandRow; height: mv.cardH; spacing: 14 }
+                    ScrollBar.horizontal: ScrollBar {
+                        id: hbar
+                        policy: ScrollBar.AsNeeded
+                        contentItem: Rectangle {
+                            implicitHeight: 5; radius: 2.5
+                            color: hbar.pressed ? Theme.uiTextDim
+                                 : (hbar.hovered ? Theme.uiTextFaint : Theme.uiTrackOff)
+                            opacity: hbar.active || hbar.hovered ? 1 : 0.5
+                            Behavior on color { ColorAnimation { duration: root.t } }
+                        }
+                    }
+                }
+                // Margin-width fades, one per side, each shown only when there is content off that
+                // way — so a fade never sits over the first/last card once you scroll to that end.
+                Rectangle {
+                    anchors.left: parent.left; anchors.top: parent.top; height: mv.cardH; width: 30
+                    visible: flick.contentX > 1
+                    gradient: Gradient { orientation: Gradient.Horizontal
+                        GradientStop { position: 0.0; color: Theme.surfaceShell }
+                        GradientStop { position: 1.0; color: "transparent" } }
                 }
                 Rectangle {
-                    anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom
-                    width: 34
-                    visible: flick.contentWidth > flick.width + 1
-                    gradient: Gradient {
-                        orientation: Gradient.Horizontal
+                    anchors.right: parent.right; anchors.top: parent.top; height: mv.cardH; width: 30
+                    visible: flick.contentX < flick.contentWidth - flick.width - 1
+                    gradient: Gradient { orientation: Gradient.Horizontal
                         GradientStop { position: 0.0; color: "transparent" }
-                        GradientStop { position: 1.0; color: Theme.surfaceShell }
-                    }
+                        GradientStop { position: 1.0; color: Theme.surfaceShell } }
                 }
             }
             Column {
@@ -1428,16 +1472,16 @@ Window {
             MouseArea { anchors.fill: parent; onClicked: cb.activated() }
         }
         CaptionButton {
-            d: "M6 12h12"
+            d: ico.minimize
             onActivated: root.showMinimized()
         }
         CaptionButton {
-            d: root.visibility === Window.Maximized ? "M9 7h8v8M7 9.5h8v8H7z" : "M7 7h10v10H7z"
+            d: root.visibility === Window.Maximized ? ico.restore : ico.maximize
             onActivated: root.visibility = root.visibility === Window.Maximized
                          ? Window.Windowed : Window.Maximized
         }
         CaptionButton {
-            d: "m7 7 10 10M17 7 7 17"
+            d: ico.close
             danger: true
             onActivated: root.close()
         }

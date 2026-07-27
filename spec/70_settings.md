@@ -33,6 +33,10 @@ M0-close gate in STATE — the missing piece being a **config source: file → p
   Reuses the routing config reserved in spec/20.
 - **Adapter-aware** — never a flat global form. Knobs group by adapter, and only the active
   adapter's knobs apply (effort/thinking are Claude-only; a local B2 has temperature instead).
+- **Bundled assets** — the window ships its own faces in `teleprompter/fonts/`, registered at
+  startup (no system-font or icon-pack dependency): Archivo (UI), Martian Mono (machine values),
+  Instrument Serif (reserved, gated), and **Material Symbols Outlined** for the icons — drawn as
+  font glyphs, not hand-authored paths (D29), and subset to only the glyphs the window uses.
 
 ## 3. Settings inventory (OWED — the concurrent line-item work)
 

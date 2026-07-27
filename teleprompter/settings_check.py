@@ -43,51 +43,19 @@ from teleprompter.settings_model import SettingsModel                    # noqa:
 HERE = Path(__file__).resolve().parent
 
 
-def check_glyphs() -> None:
-    """Every icon path must fit inside its own 24-unit box.
-
-    The window draws its icons as stroked paths in a `viewBox="0 0 24 24"`, and Qt clips to
-    that box — so a path that reaches the edge loses half its stroke and the icon reads as
-    cut off. Two shipped like that before this existed (the pencil ran to x=0.5; the sparkle
-    to y=23), and both are invisible in a load test because nothing warns. So: render each
-    path and fail if any ink lands in the outermost pixels.
+def check_icon_font() -> None:
+    """The window draws its icons as Material Symbols glyphs (D29). A missing or renamed font file
+    turns every icon to tofu with no QML warning — exactly the silent failure this check exists to
+    catch — so load the bundled file and confirm the family the Glyph component asks for resolves.
     """
-    import re
-    from PySide6.QtCore import QByteArray
-    from PySide6.QtGui import QImage, QPainter
-    from PySide6.QtSvg import QSvgRenderer
-
-    src = (HERE / "SettingsWindow.qml").read_text(encoding="utf-8")
-    paths = dict(re.findall(r'readonly property string (\w+): "([^"]+)"', src))
-    paths.update({f"inline:{i}": d for i, d in
-                  enumerate(re.findall(r'\bd: "([^"]+)"', src))})
-    assert paths, "no glyph paths found — has the icon markup changed shape?"
-
-    N, PAD = 240, 10                      # 10× scale; the outermost PAD px are the danger zone
-    clipped = []
-    for name, d in paths.items():
-        svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">'
-               f'<path d="{d}" fill="none" stroke="#fff" stroke-width="2" '
-               f'stroke-linecap="round" stroke-linejoin="round"/></svg>')
-        img = QImage(N, N, QImage.Format.Format_ARGB32)
-        img.fill(0)
-        p = QPainter(img)
-        QSvgRenderer(QByteArray(svg.encode("utf-8"))).render(p)
-        p.end()
-        hit = False
-        for i in range(N):
-            for x, y in ((i, 0), (i, N - 1), (0, i), (N - 1, i)):
-                if img.pixelColor(x, y).alpha() > 8:
-                    hit = True
-                    break
-            if hit:
-                break
-        if hit:
-            clipped.append(name)
-    assert not clipped, (
-        "glyph path(s) reach the edge of the 24-unit box and will render clipped: "
-        + ", ".join(sorted(clipped)))
-    print(f"  glyphs: {len(paths)} paths, none clipped")
+    from PySide6.QtGui import QFontDatabase
+    ttf = HERE / "fonts" / "MaterialSymbolsOutlined.ttf"
+    assert ttf.exists(), f"icon font missing: {ttf}"
+    fid = QFontDatabase.addApplicationFont(str(ttf))
+    fams = QFontDatabase.applicationFontFamilies(fid) if fid != -1 else []
+    # The literal must match Theme.qml's `fontIcon`; both name the same bundled family.
+    assert "Material Symbols Outlined" in fams, f"icon font family changed or failed to load: {fams}"
+    print(f"  icon font: {ttf.name} -> {fams[0]}")
 
 
 def check_recorder(engine, app) -> None:
@@ -170,7 +138,7 @@ def check() -> None:
     app = QApplication.instance() or QApplication(sys.argv)
     from teleprompter.__main__ import apply_tracking      # match the app's global letter spacing
     apply_tracking(app)
-    check_glyphs()
+    check_icon_font()
     engine = QQmlApplicationEngine()
     engine.addImportPath(str(HERE.parent))          # so `import teleprompter` finds Theme
 
