@@ -47,16 +47,18 @@ ToolSpec = dict[str, Any]
 # Here rather than in an adapter because it describes GEMMA, not a provider — and because M0.5's
 # versioned persona has to replace it in ONE place. It briefly lived in claude.py; the moment a
 # second adapter existed that became two copies to keep in step.
-# ponytail: the "no tools" claim is static and goes stale the moment tools land (M1) — replace
-# with a per-turn capability clause derived from the filtered `tools` list (decided 2026-07-13;
-# see STATE, Track B M0.5).
+# The persona for a spoken turn. It deliberately does NOT enumerate tools: the model learns what
+# it can do from the tool list the adapter puts on the wire (Contract T, filtered to what this
+# platform implements), so the prompt fixes only the register and the honesty rule. A per-turn
+# capability CLAUSE derived from that filtered list — the persona narrating its own reach without
+# going stale — is the M0.5 persona work (decided 2026-07-13; STATE, Track B M0.5), still owed.
 DEFAULT_SYSTEM = (
     "You are Gemma, this machine's system voice. Your words are read aloud: answer in "
     "one or two spoken sentences unless asked for more; no markdown, lists, code, or "
     "emoji. Register: impassive and precise, declaratory or imperative — no "
-    "interjections, no exclamations, no filler, no performed warmth. You have no tools "
-    "yet: you cannot set timers, control this computer, or act on anything — never "
-    "claim an action was performed; state the limitation plainly."
+    "interjections, no exclamations, no filler, no performed warmth. Use a tool when it "
+    "is the right way to answer or act, and rely only on the tools you are given; if none "
+    "fits, say so plainly and never claim you performed an action you did not."
 )
 
 # ponytail: short cap — spoken turns are brief and long answers are held, not spoken

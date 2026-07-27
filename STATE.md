@@ -8,7 +8,7 @@ start, update it in the same commit as the work · when a step closes, collapse 
 entry to one or two lines — durable knowledge moves out (behaviour → spec · run
 instructions → README · findings → NOTES.md · decisions → a D-number in spec/00).
 
-Last updated: 2026-07-24
+Last updated: 2026-07-27
 
 ## Handoff — start here (2026-07-23)
 
@@ -694,6 +694,23 @@ install.)*
   (filler/dup removed, contractions fixed, question NOT answered) → clipboard. Guarded:
   `bridge.paste` (CI) + dictation dispatch/fallback in the orchestrator selfcheck (CI). Live keypress
   on the box still owed (like every hotkey path, RegisterHotKey is proven live separately).
+- **D2 — OVERLAY SIDE BUILT (2026-07-27); daemon emission OWED.** Contract P gained three dictation
+  states (`spec/schemas/status.json` → **v0.4.0**: `transcribing` · `transforming` · `pasted`) and the
+  overlay renders them (`Overlay.qml`): steady status word "Transcribing…" / "Tidying…", then a
+  latched **"Pasted ✓"** beat (Material Symbols check — the island's body face has no U+2713) that
+  dwells `Theme.durationPasteDwell` (2.5 s) then hides itself. `busy`/`open`/`showing` extended; a
+  `pasted` LATCH holds the ✓ through the daemon's `idle`; `bodyText` is forced empty during dictation
+  so a stray transcript can't leak into the prompt slot. Guarded in `overlay_check` (drives
+  transcribing→transforming→pasted→hide). Specs: spec/40 §State machine (dictation branch) + spec/60
+  §Overlay states. **OWED — the daemon must EMIT these** (deferred: the plumbing session is reshaping
+  `_dictate`'s cleanup routing via the router, so do this AFTER that lands to avoid a tangle in one
+  method). The change, in `orchestrator._dictate`: add the three to `_EVENT_STATE`; give `_ev` a
+  `mirror=True` param; emit `transcribing` (replacing the STT-start `thinking`), `transforming` before
+  the `transform()` call, and `pasted` already crosses the wire once it is in `_EVENT_STATE`; broadcast
+  the transcript with `mirror=False` (trace only, so it stays out of prompt history). Then update the
+  orchestrator selfcheck: it asserts `"thinking" in di.bc.states` → change to the sequence
+  `["transcribing","transforming","pasted","idle"]` (and `["transcribing","idle"]` for the empty-STT
+  path). No new D-number — D2 is a named build slice.
 - **In flight:** —
 - **Next:** ③ measure `large-v3-turbo` vs `small.en` vs **Parakeet** (sherpa-onnx = torch-free ONNX
   path; **gated** — adopt only if a real win, discuss first) on the 5080 for the per-mode STT model
@@ -707,10 +724,27 @@ install.)*
 
 ## Track T — Tools (Contract T → M1)
 
-- **Works now:** nothing. M0 runs zero tools; the six starter tools (spec/30) land at M1.
+- **DONE 2026-07-27 (D31) — the Tier-1 executor, and the brain loops over it.** `bridge/tools.py`
+  executes Contract T; the assistant turn (`orchestrator._collect`) is now a multi-round tool loop.
+  Two read-only tools have backends: `system_status` (time · active window · battery; volume and
+  media playback need COM/WinRT, deferred) and `read_clipboard` (reuses `bridge/paste.py`). The
+  brain is handed only implemented, in-tier tools (`tool_specs()`, `MAX_TIER=1`), so it cannot name
+  a tool that isn't wired; `execute()` re-checks the allowlist as the defence (spec/50 rule 1).
+  Every call — run, refused or errored — is one JSONL line in `logs/audit.jsonl` (spec/30 rule 2 /
+  hard rule 4), purged with `logs/`. The loop: `converse` surfaces `ToolCall`s (never executes),
+  the orchestrator runs them and each adapter's `record_tool_round` serialises the round into
+  history in its wire shape (Anthropic blocks / OpenAI `tool` messages), re-entered with an empty
+  utterance until the brain answers; one retry on `malformed_tool_call` (spec/20), a 5-round cap,
+  history committed only on success. `DEFAULT_SYSTEM` no longer claims "no tools". Guarded +
+  CI-wired: `bridge.tools`, the loop/retry/cap in `bridge.orchestrator`, `record_tool_round` in
+  both adapter selfchecks.
+- **Not built:** Tier 2 (`open_app` · `focus_window` · `media_control` · `set_timer` — need
+  backends + the announce earcon) and Tier 3 (propose-then-tap confirmation, D26, on the
+  Teleprompter). No raw shell below Tier 3 (spec/30 rule 1). Growth rule: add tools only after
+  ≥ 1 week of daily use without misfires (spec/30 rule 4).
 - **In flight:** —
-- **Next:** when M0 closes — executor with per-OS backends (spec/30 rule 3), wire
-  `schemas/tools.json` into the brain's filtered tool list, Tier 1–2 first.
+- **Next:** live-verify a tool turn on the box (Claude asks `system_status` → answers), then Tier 2
+  backends when a tool is genuinely wanted.
 
 ## Specs — spec & decision docs
 

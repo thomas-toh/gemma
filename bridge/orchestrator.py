@@ -22,6 +22,7 @@ import re
 import threading
 import time
 from collections import deque
+from dataclasses import replace
 
 from bridge.audio.wake import (
     SAMPLE_RATE, BLOCK_SAMPLES, BUFFER_BLOCKS, WAKE_MODEL, THRESHOLD,
@@ -40,6 +41,7 @@ from bridge.broadcaster import (
 from bridge.hotkeys import Hotkeys
 from bridge.log import setup_logging
 from bridge.paste import paste_text
+from bridge.tools import execute as run_tool, tool_specs
 from bridge import settings
 
 log = logging.getLogger("gemma.orchestrator")
@@ -154,12 +156,12 @@ async def _wait_flag(flag) -> None:
 
 
 async def _drive(brain, session: Session, utterance: str, on_delta=None,
-                 abort=None) -> tuple[str, str | None]:
+                 abort=None, tools=None, execute=None) -> tuple[str, str | None]:
     """Run one brain turn, racing it against the dismiss signal. This is THE abort seam:
     without it a dismiss could not interrupt THINKING, which is exactly when you most want
     to bail (a misheard prompt, a question you have thought better of). Cancelling the task
     closes the stream, so the HTTP request is dropped rather than drained."""
-    turn = asyncio.create_task(_collect(brain, session, utterance, on_delta))
+    turn = asyncio.create_task(_collect(brain, session, utterance, on_delta, tools, execute))
     if abort is None:
         return await turn
     watch = asyncio.create_task(_wait_flag(abort))
@@ -177,14 +179,26 @@ async def _drive(brain, session: Session, utterance: str, on_delta=None,
     return "", "aborted"
 
 
-async def _collect(brain, session: Session, utterance: str,
-                   on_delta=None) -> tuple[str, str | None]:
-    """Drive one Contract-B turn; return (reply_text, error_kind_or_None).
-    Generate-then-play (D11): the full reply is needed before TTS, so deltas are only
-    streamed to the console and, via on_delta, to the overlay teleprompter (D14)."""
+# The tool loop's round ceiling (spec/30): a tool-happy model that never settles on an answer is
+# stopped, not looped forever. Five is generous for the Tier-1 tools — most turns take one round
+# to call a tool and one to speak the result.
+# ponytail: a flat cap; raise it if a legitimate multi-step task ever hits it.
+MAX_TOOL_ROUNDS = 5
+
+
+async def _one_round(brain, session: Session, tools, on_delta):
+    """One Contract-B round: stream text (console + on_delta), collect tool calls, map errors.
+    Returns (text, calls, error_kind_or_None, malformed). The utterance is always "" — the turn's
+    input is already in session.history (the real user message on the first round, the tool
+    results on later ones), so a round never appends a user turn of its own (spec/20 continue path).
+
+    Closes the generator deterministically (spec/20): an abort drops the provider request AT the
+    cancel through the adapter's `finally`, rather than leaving it draining tokens nobody sees."""
     parts: list[str] = []
+    calls: list[ToolCall] = []
     err: str | None = None
-    stream = brain.converse(session, utterance, [])           # M0: zero tools
+    malformed = False
+    stream = brain.converse(session, "", tools)
     try:
         async for ev in stream:
             if isinstance(ev, TextDelta):
@@ -192,21 +206,65 @@ async def _collect(brain, session: Session, utterance: str,
                 if on_delta:
                     on_delta(ev.text)
                 print(ev.text, end="", flush=True)
-            elif isinstance(ev, ToolCall):   # impossible with zero tools; loud if it happens
-                log.warning("ignoring tool call %r at M0", ev.name)
+            elif isinstance(ev, ToolCall):
+                calls.append(ev)
             elif isinstance(ev, Done):
                 log.info("brain done: %s", ev.usage)
             elif isinstance(ev, Error):
-                err = ev.kind
+                if ev.kind == "malformed_tool_call":
+                    malformed = True          # spec/20: the tool loop owns the one retry
+                else:
+                    err = ev.kind
                 log.error("brain error/%s: %s", ev.kind, ev.detail)
     finally:
-        # Contract B (spec/20): the orchestrator closes the generator deterministically, so an
-        # adapter's `finally`/`async with` releases the provider stream AT the abort. Held
-        # open, a dismissed turn keeps billing tokens we will never show anyone.
         await stream.aclose()
     if parts:
         print()
-    return "".join(parts).strip(), err
+    return "".join(parts).strip(), calls, err, malformed
+
+
+async def _collect(brain, session: Session, utterance: str, on_delta=None,
+                   tools=None, execute=None) -> tuple[str, str | None]:
+    """Drive one assistant turn to a spoken answer, running the Contract T tool loop in between
+    (spec/30): the brain may ask for tools, the orchestrator executes them and feeds the results
+    back, and this repeats until the brain answers with no further tool call.
+
+    Returns (reply_text, error_kind_or_None). History is committed to `session.history` ONLY on
+    success — a failed or aborted turn leaves it untouched, so the next turn never opens with a
+    dangling user message (the invariant the old post-turn append protected).
+
+    Generate-then-play (D11): deltas stream to the console and, via on_delta, to the overlay, but
+    the RETURNED reply is the final round's text — the tool-result rounds feed the model, not TTS.
+    """
+    tools = tools or []
+    working = list(session.history) + [{"role": "user", "content": utterance}]
+    turn = replace(session, history=working)          # a copy: uncommitted until success
+    retried = False
+    for _round in range(MAX_TOOL_ROUNDS + 1):
+        text, calls, err, malformed = await _one_round(brain, turn, tools, on_delta)
+        if malformed and not retried:
+            retried = True                            # spec/20: retry a malformed tool call once
+            log.info("malformed tool call — retrying the round once (spec/20)")
+            continue
+        if err or malformed:
+            return "", (err or "malformed_tool_call")
+        if not calls:
+            working.append({"role": "assistant", "content": text})
+            session.history[:] = working              # commit — success only
+            return text, None
+        results: dict[str, str] = {}
+        for c in calls:
+            if execute is None:                       # replay/selfcheck with no executor wired
+                log.warning("tool call %r with no executor — refusing", c.name)
+                results[c.id] = f"Tool {c.name} is unavailable."
+            else:
+                content, outcome = execute(c)
+                log.info("tool %s -> %s", c.name, outcome)
+                results[c.id] = content
+        brain.record_tool_round(turn, text, calls, results)  # appends to `working` in wire shape
+        retried = False                               # each fresh round gets its own retry budget
+    log.warning("tool loop hit the %d-round cap without an answer", MAX_TOOL_ROUNDS)
+    return "", "unknown"
 
 
 def latency_table(trace) -> str:
@@ -471,6 +529,8 @@ class Orchestrator:
             self.brain, self.session, text,
             on_delta=lambda d: self.bc.publish(m_response(delta=d)),
             abort=self._abort_flag(),
+            tools=tool_specs(),                 # Contract T: only implemented, in-tier tools (spec/30)
+            execute=lambda c: run_tool(c, session=self.session.id, transcript=text),
         ))
         if err == "aborted":
             self._dismissed()                   # consume the signal the race saw
@@ -483,9 +543,8 @@ class Orchestrator:
                 return self._speak(self.synth(spoken_error(kind), self.voice), state="error")
             return None      # TTS off: the fault MESSAGE shows on the overlay (as no_transcript does)
         self.bc.publish(m_response(done=True))  # reply text complete on the overlay
-
-        self.session.history += [{"role": "user", "content": text},
-                                 {"role": "assistant", "content": reply}]
+        # History is committed inside _collect now (it must persist tool rounds mid-turn, and only
+        # on success), so there is no post-turn append here any more.
         # The hold survives; the "say 'read it'" escape hatch does not. Holding is what stops
         # a long answer being read AT you (spec/40, never lecture uninvited) — it means SHOWN,
         # not spoken, and pings `success` (D28) so a long answer you may have glanced away from
@@ -810,6 +869,60 @@ def _selfcheck() -> None:
     reply, err = asyncio.run(_drive(FakeReply("Fine."), Session(id="t"), "hi"))
     assert (reply, err) == ("Fine.", None), (reply, err)
 
+    # The Contract T tool loop (spec/30): a round that asks for a tool must run the tool, feed the
+    # result back into history, and drive a SECOND round that answers with it — and the whole turn
+    # commits to history only on success. This is the new logic in _collect; the fakes below stand
+    # in for a real brain's ToolCall/record_tool_round surface.
+    class _ToolThenAnswer:
+        def __init__(self): self.rounds, self.saw_result = 0, False
+        async def converse(self, session, utterance, tools):
+            self.rounds += 1
+            if self.rounds == 1:
+                yield ToolCall("t1", "system_status", {}); yield Done()
+            else:                                          # the result must be in history by now
+                self.saw_result = any("noon" in str(m) for m in session.history)
+                yield TextDelta("It is noon."); yield Done()
+        @staticmethod
+        def record_tool_round(session, text, calls, results):
+            session.history.append({"role": "assistant", "tool": [c.name for c in calls]})
+            session.history.append({"role": "tool", "content": results.get("t1", "")})
+
+    sess = Session(id="tool")
+    brain = _ToolThenAnswer()
+    reply, err = asyncio.run(_drive(brain, sess, "what time is it?",
+                                    tools=tool_specs(), execute=lambda c: ("It is noon.", "ok")))
+    assert (reply, err) == ("It is noon.", None), (reply, err)
+    assert brain.rounds == 2, "a tool call must drive a second, answering round"
+    assert brain.saw_result, "the tool result must be in history for the answering round"
+    assert sess.history[0] == {"role": "user", "content": "what time is it?"}, sess.history
+    assert sess.history[-1] == {"role": "assistant", "content": "It is noon."}, sess.history
+
+    # spec/20: exactly one retry on a malformed tool call, then recover.
+    class _MalformedOnce:
+        def __init__(self): self.n = 0
+        @staticmethod
+        def record_tool_round(*a): pass                    # never reached
+        async def converse(self, session, utterance, tools):
+            self.n += 1
+            if self.n == 1:
+                yield Error("malformed_tool_call", "args not JSON")
+            else:
+                yield TextDelta("recovered."); yield Done()
+    mo = _MalformedOnce()
+    reply, err = asyncio.run(_drive(mo, Session(id="m"), "q",
+                                    tools=tool_specs(), execute=lambda c: ("", "ok")))
+    assert (reply, err) == ("recovered.", None) and mo.n == 2, (reply, err, mo.n)
+
+    # A model that never stops calling tools is capped, not looped forever (spec/30).
+    class _AlwaysTool:
+        @staticmethod
+        def record_tool_round(*a): pass
+        async def converse(self, session, utterance, tools):
+            yield ToolCall("x", "system_status", {}); yield Done()
+    reply, err = asyncio.run(_drive(_AlwaysTool(), Session(id="c"), "loop",
+                                    tools=tool_specs(), execute=lambda c: ("ok", "ok")))
+    assert (reply, err) == ("", "unknown"), (reply, err)
+
     # ONE event loop for the process, not one per turn (spec/20 adapter lifetime). A per-turn
     # loop made connection reuse impossible for EVERY provider, not just B1 — an HTTP pool
     # belongs to the loop that built it, and that loop died with the turn.
@@ -826,7 +939,7 @@ def _selfcheck() -> None:
     # ...and an aborted turn must CLOSE the brain's stream, not merely stop reading it. Driven
     # through _run_async deliberately: on the long-lived loop there is no per-turn
     # `shutdown_asyncgens` to close an abandoned generator, so only the explicit aclose() in
-    # _collect (and _drive waiting for the unwind) can do it. Left open, a dismissed turn goes
+    # _one_round (and _drive waiting for the unwind) can do it. Left open, a dismissed turn goes
     # on generating tokens nobody will ever see.
     closed: list[str] = []
 

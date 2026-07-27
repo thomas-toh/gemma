@@ -137,7 +137,10 @@ class CompatBrain:
             {"role": "system", "content": session.system or DEFAULT_SYSTEM}
         ]
         messages += list(session.history)
-        messages.append({"role": "user", "content": utterance})
+        # An empty utterance is the tool-loop CONTINUE signal (spec/20): the tool results are
+        # already in history (record_tool_round wrote them), so add no user turn.
+        if utterance:
+            messages.append({"role": "user", "content": utterance})
 
         kwargs: dict[str, Any] = dict(
             model=self.model,
@@ -229,6 +232,29 @@ class CompatBrain:
         except Exception as exc:  # noqa: BLE001 - map every provider error to Error
             yield Error(_error_kind(exc), str(getattr(exc, "message", exc)))
 
+    @staticmethod
+    def record_tool_round(session: Session, assistant_text: str, calls, results: dict) -> None:
+        """Append one completed tool round to `session.history` in OpenAI's wire shape, so the
+        next converse round (driven with an empty utterance) sees the tool_calls and their results.
+        Wire format, so it lives here like tool translation and error mapping; the orchestrator
+        owns the loop and executes the tools (spec/20).
+
+        `results` maps a tool_call id -> its result string. This wire wants ONE assistant message
+        carrying the `tool_calls` array, then ONE `tool` message per result — the mirror of B1's
+        single tool_result user message."""
+        session.history.append({
+            "role": "assistant",
+            "content": assistant_text or None,
+            "tool_calls": [
+                {"id": c.id, "type": "function",
+                 "function": {"name": c.name, "arguments": json.dumps(c.input)}}
+                for c in calls
+            ],
+        })
+        for c in calls:
+            session.history.append(
+                {"role": "tool", "tool_call_id": c.id, "content": results.get(c.id, "")})
+
 
 async def _run(provider: str, question: str, model: str | None) -> int:
     brain = CompatBrain(provider, model=model)
@@ -303,6 +329,21 @@ def _selfcheck() -> None:
     assert "reasoning_effort" not in k, "effort must not be sent unasked"
     assert groq._kwargs(Session(id="t", system="custom"), "q", [])["messages"][0]["content"] == \
         "custom", "a session system prompt must win over the default"
+
+    # Tool-loop continue signal: an empty utterance adds NO user message (the tool results are
+    # already in history), so two user turns never stack up.
+    kc = groq._kwargs(Session(id="t", history=[{"role": "user", "content": "q"}]), "", [])
+    assert [m["role"] for m in kc["messages"]] == ["system", "user"], kc["messages"]
+
+    # Tool-loop threading (spec/20): a completed round serialises in OpenAI's wire shape — one
+    # assistant message carrying the tool_calls array, then one `tool` message per result.
+    st = Session(id="t")
+    CompatBrain.record_tool_round(
+        st, "checking", [ToolCall("c1", "system_status", {"x": 1})], {"c1": "noon"})
+    assert st.history[0]["role"] == "assistant" and st.history[0]["content"] == "checking"
+    assert st.history[0]["tool_calls"][0]["id"] == "c1"
+    assert json.loads(st.history[0]["tool_calls"][0]["function"]["arguments"]) == {"x": 1}
+    assert st.history[1] == {"role": "tool", "tool_call_id": "c1", "content": "noon"}
 
     # Effort is only sent where the card declares it — Groq's capabilities are empty, so asking
     # for effort there must NOT put an unsupported parameter on the wire.

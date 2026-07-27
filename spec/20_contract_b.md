@@ -1,6 +1,6 @@
 # Spec 20 — Contract B: brain adapters
 
-**Last reconciled: 2026-07-24** · Build progress: [STATE.md](../STATE.md) · Rationale: docs/02 §3
+**Last reconciled: 2026-07-27** · Build progress: [STATE.md](../STATE.md) · Rationale: docs/02 §3
 
 *(Interface contract. Build status + the standalone B1 API smoke test
 (`scripts/b1_smoke.py`) live in STATE, Tracks G & B.)*
@@ -55,6 +55,30 @@ which is Gemma's safety business and never leaves the machine. This sits in the 
 same reason error mapping does: it *is* the provider's format. Passing the registry entry
 through untranslated is a live fault, not a style choice — B1 did exactly that until D30, and
 it went unnoticed only because M0 passes an empty list.
+
+**The tool loop (added 2026-07-27, D31).** `converse` handles ONE model round — it streams text,
+surfaces any tool calls as `ToolCall` events, and ends with `Done`; it never executes a tool (B3
+excepted). The multi-round loop is the **orchestrator's** (`_collect`): it executes each `ToolCall`
+through Contract T, has the adapter serialise the round into `session.history`, and drives the next
+round, repeating until the brain answers with no further call. Two pieces make that work across
+both wires:
+
+- **`record_tool_round(session, text, calls, results)`** — a per-adapter method that appends the
+  completed round to `session.history` in the adapter's OWN wire shape (Anthropic: one assistant
+  message interleaving text with `tool_use` blocks, then one user message of `tool_result` blocks;
+  OpenAI: one assistant message carrying `tool_calls`, then one `tool` message per result). It sits
+  in the adapter for the same reason tool translation does — it *is* the wire format — and it only
+  serialises; the orchestrator still owns execution (spec/50 rule 1).
+- **The empty-utterance continue signal.** After the first round the loop re-enters `converse` with
+  an empty `utterance`, meaning "the new input is already in history"; the adapter then adds no
+  fresh user turn (a second user message in a row would break Anthropic's strict alternation).
+
+The single retry that `malformed_tool_call` earns (B2, when a small or local model emits
+unparseable arguments) belongs to this loop — one re-run of the round, then the turn gives up. A
+round cap bounds a model that never stops calling tools, and history is committed to
+`session.history` only once a round finally answers, so an aborted or failed turn leaves no
+dangling user message. What the executor does with a call (the allowlist, tiers, the audit log) is
+Contract T, spec/30.
 
 **Where a provider's reachability is declared.** Base URL, credential-store account name, env-var
 fallback and which wire serves a provider all live in `spec/schemas/settings.json` → `providers`

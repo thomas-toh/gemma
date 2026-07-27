@@ -606,3 +606,31 @@ not only as the dictation cleanup engine.
   `bridge.brains.compat --selfcheck`, `bridge.brains.claude --selfcheck` (tool translation against
   the real registry), `teleprompter.settings_model`.
 
+**D31 (2026-07-27): the Tier-1 tool executor — Contract T runs, and the brain loops over it.**
+Track T's first build (spec/30). The registry has existed since M0 but nothing executed it; now
+`bridge/tools.py` does, and the assistant turn is a multi-round loop rather than a single reply.
+
+- **The loop lives in the orchestrator; the adapter only serialises.** `converse` still handles one
+  round and surfaces `ToolCall`s — it never executes (spec/50 rule 1), exactly as the contract
+  always said. `Orchestrator._collect` executes each call through Contract T, has the adapter record
+  the round into history in its own wire shape (`record_tool_round` — Anthropic content blocks vs
+  OpenAI `tool` messages, the one place the two wires diverge here), and re-enters `converse` with
+  an empty utterance until the brain answers. One retry on `malformed_tool_call` (spec/20), a
+  5-round cap, and history committed only on success so an aborted turn leaves no dangling user
+  message. spec/20 "The tool loop" is the interface record.
+- **The brain sees only tools it can actually call** (spec/30 rule 3). `tool_specs()` offers only
+  tools with a backend on this platform and within `MAX_TIER` (today 1), so the two Tier-1
+  read-only tools — `system_status`, `read_clipboard` — are all that is exposed; `execute()`
+  re-checks the allowlist as the real defence. Tier 2 (announce earcon) and Tier 3
+  (propose-then-tap, D26, which renders on the Teleprompter — a separate surface, the UI session's
+  lane) are deferred.
+- **Every call is audited** (spec/30 rule 2, CLAUDE.md hard rule 4): one JSONL line per invocation
+  — run, refused or errored — in `logs/audit.jsonl`, purged with the rest of `logs/` (spec/50
+  rule 3). A tool fault becomes a string the brain narrates, never a crash.
+- **The persona stopped lying.** `base.py::DEFAULT_SYSTEM` claimed "you have no tools yet"; the
+  model now learns its tools from the wire tool list, so the false clause is gone (a per-turn
+  capability clause remains the M0.5 persona work). `system_status`'s volume and media fields need
+  COM/WinRT and are deferred — time · active window · battery ship now. Guarded + CI-wired:
+  `bridge.tools`, the loop/retry/cap in `bridge.orchestrator`, and `record_tool_round` in both
+  adapter selfchecks. Source: Thomas, the adapter → dictation → tools sequence.
+

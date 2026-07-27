@@ -136,7 +136,12 @@ class ClaudeBrain:
             return
 
         client = self._client_once()
-        messages = list(session.history) + [{"role": "user", "content": utterance}]
+        # An empty utterance is the tool-loop CONTINUE signal (spec/20): the new input — the
+        # tool_result message that record_tool_round wrote — is already in history, so add no user
+        # turn. Two user messages in a row would break Anthropic's strict user/assistant alternation.
+        messages = list(session.history)
+        if utterance:
+            messages.append({"role": "user", "content": utterance})
         kwargs = dict(
             model=self.model,
             max_tokens=session.max_tokens or MAX_TOKENS,   # transform lifts this for long text
@@ -166,6 +171,31 @@ class ClaudeBrain:
             )
         except Exception as exc:  # noqa: BLE001 - map every provider error to Error
             yield Error(_error_kind(exc), str(getattr(exc, "message", exc)))
+
+    @staticmethod
+    def record_tool_round(session: Session, assistant_text: str, calls, results: dict) -> None:
+        """Append one completed tool round to `session.history` in Anthropic's wire shape, so the
+        next converse round (driven with an empty utterance) sees the model's tool_use blocks and
+        their results. The orchestrator owns the loop and executes the tools through Contract T
+        (spec/20); this only SERIALISES, because the message shape IS this provider's wire format —
+        the same reason tool translation and error mapping live in the adapter, not the caller.
+
+        `results` maps a tool_use id -> its result string. Anthropic wants ONE assistant message
+        whose content interleaves any spoken text with the tool_use blocks, then ONE user message
+        carrying every tool_result block."""
+        content: list[dict] = []
+        if assistant_text:
+            content.append({"type": "text", "text": assistant_text})
+        for c in calls:
+            content.append({"type": "tool_use", "id": c.id, "name": c.name, "input": c.input})
+        session.history.append({"role": "assistant", "content": content})
+        session.history.append({
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": c.id, "content": results.get(c.id, "")}
+                for c in calls
+            ],
+        })
 
 
 async def _run(question: str, model: str) -> int:
@@ -224,6 +254,25 @@ def _selfcheck() -> None:
         assert "tier" not in w, "tier is Gemma's safety business and must not leave the machine"
     assert _tools_for_api([{"name": "bare"}])[0]["input_schema"] == \
         {"type": "object", "properties": {}}, "a tool with no parameters still needs a schema"
+
+    # Tool-loop threading (spec/20): a completed round serialises into history in Anthropic's wire
+    # shape — one assistant message interleaving text with tool_use, then one user message of
+    # tool_result blocks — so the next round (empty utterance) reads the results without stacking
+    # a second user turn.
+    s = Session(id="t")
+    ClaudeBrain.record_tool_round(
+        s, "one moment", [ToolCall("tu_1", "system_status", {})], {"tu_1": "Local time: noon"})
+    assert s.history[0]["role"] == "assistant"
+    assert s.history[0]["content"][0] == {"type": "text", "text": "one moment"}
+    assert {"type": "tool_use", "id": "tu_1", "name": "system_status", "input": {}} \
+        in s.history[0]["content"]
+    assert s.history[1] == {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "tu_1", "content": "Local time: noon"}]}
+    # A tool-only round (no spoken text) carries just the tool_use block.
+    s2 = Session(id="t")
+    ClaudeBrain.record_tool_round(s2, "", [ToolCall("tu_2", "x", {})], {})
+    assert s2.history[0]["content"] == [{"type": "tool_use", "id": "tu_2", "name": "x", "input": {}}]
+    assert s2.history[1]["content"][0]["content"] == "", "a missing result serialises as empty"
 
     # Client lifetime (spec/20 adapter lifetime). No network: every cost here is local CPU.
     import time
