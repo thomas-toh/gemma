@@ -1,6 +1,6 @@
 # Spec 40 — Interaction model
 
-**Last reconciled: 2026-07-24** · Build progress: [STATE.md](../STATE.md) (Tracks G · P) · Earcon ids: [schemas/earcons.json](schemas/earcons.json)
+**Last reconciled: 2026-07-27** · Build progress: [STATE.md](../STATE.md) (Tracks G · P) · Earcon ids: [schemas/earcons.json](schemas/earcons.json)
 
 ## State machine (orchestrator: `bridge/orchestrator.py`)
 
@@ -9,6 +9,17 @@ IDLE ──wake──▶ LISTENING ──end-of-speech──▶ THINKING ──�
                    │                                    └─▶ ACTING(tools) ─▶ earcon ─┘
                    └── timeout 5 s / mute ──▶ IDLE
 ```
+
+Dictation (spec/60, D2) is a **second branch off the same capture** — entered by the DICTATE
+hotkey, not WAKE:
+
+```
+DICTATE-key ─▶ LISTENING ──end──▶ TRANSCRIBING ─▶ TRANSFORMING ─▶ PASTED ─▶ IDLE
+```
+
+It pastes at the caret and shows no reply, so `transcribing` / `transforming` / `pasted` drive a
+**status-only** island (a status word, then a brief "Pasted ✓") rather than `THINKING` / `SPEAKING`
+— see spec/60 §Overlay states.
 
 - `LISTENING` opens on WAKE; end-of-speech = VAD silence (initial: 1 s, tune in M0);
   give-up if speech never starts: 5 s (decided 2026-07-13; was 10 s).

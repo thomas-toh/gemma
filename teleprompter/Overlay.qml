@@ -111,6 +111,7 @@ Window {
     onPromptChanged: promptShown = false            // a new turn earns a fresh hold
     readonly property bool replyReady: overlay.reply !== "" && (promptShown || prompt === "")
     readonly property string bodyText: isError ? overlay.error
+                                     : dictWord !== "" ? ""       // dictation shows a status word, not text (D2)
                                      : (replyReady ? overlay.reply : prompt)
     // Has the typewriter caught up with everything it has been given?
     readonly property bool revealDone: reveal.shown >= bodyText.length
@@ -129,13 +130,19 @@ Window {
     // daemon owned this decision for two revisions and blanked answers mid-sentence both times.
     readonly property bool busy: st === "listening" || st === "thinking"
                                  || st === "speaking" || st === "error"
+                                 || st === "transcribing" || st === "transforming"
     property bool hidden: false                     // dwell expired, or the user dismissed
-    onBusyChanged: if (busy) hidden = false         // a new turn always brings the island back
+    // Dictation's terminal confirmation (D2). `st` flips to `idle` the instant after `pasted`,
+    // so this LATCH — not `st` — is what keeps the ✓ on screen for its short dwell; a new turn
+    // (the next `busy`) clears it.
+    property bool pasted: false
+    onStChanged: if (st === "pasted") pasted = true
+    onBusyChanged: if (busy) { hidden = false; pasted = false }  // a new turn brings the island back
     // `hidden` outranks `busy` deliberately: pressing Esc while Gemma is still thinking must
     // take the island away THAT INSTANT. If this read `busy || …` the island would linger
     // until the daemon got round to publishing its abort — which is the round trip D24 exists
     // to remove, and it would be longest exactly when the daemon is wedged.
-    readonly property bool showing: !hidden && (busy || bodyText !== "")
+    readonly property bool showing: !hidden && (busy || bodyText !== "" || pasted)
 
     Timer {                                   // the answer's dwell — the walked-away backstop
         id: answerDwell
@@ -145,6 +152,14 @@ Window {
         // the last of the text actually appeared.
         running: !root.busy && !root.hidden && root.bodyText !== "" && root.revealDone && !root.peeking
         onTriggered: root.hidden = true
+    }
+
+    Timer {                                   // dictation's "Pasted ✓" beat, then the island hides (D2)
+        id: pasteDwell
+        objectName: "pasteDwell"              // reached by name from the self-check
+        interval: Theme.durationPasteDwell
+        running: root.pasted && !root.hidden
+        onTriggered: { root.pasted = false; root.hidden = true }
     }
 
     // Esc, handled in __main__.py, which owns the key because it owns the window. Hiding is
@@ -168,6 +183,7 @@ Window {
     // It also keeps `idle` closed, which "not listening" would not.
     readonly property bool open: bodyText !== "" || st === "thinking"
                                  || st === "speaking" || st === "error"
+                                 || dictWord !== ""
 
     // The WINDOW never moves or resizes: a fixed, fully transparent, click-through frame at the
     // island's largest possible size, with the island animating INSIDE it. Animating the window
@@ -338,6 +354,15 @@ Window {
     // it shows from end-of-speech until the transcript lands, then the prompt takes the slot.
     readonly property bool loaderOn: st === "thinking" && bodyText === ""
 
+    // Dictation's own status words (D2): steady, not the assistant's morphing loader. `pasted`
+    // shows a check — the ONLY on-screen signal the text reached the caret, since dictation
+    // pastes into another app and never shows a reply. "Tidying" matches the settings "Tidy" label.
+    readonly property string dictWord:
+          st === "transcribing" ? "Transcribing…"
+        : st === "transforming" ? "Tidying…"
+        : root.pasted           ? "Pasted"
+        : ""
+
     // The wipe's state lives ON the timer that drives it, like the typewriter's `reveal.shown`
     // below, rather than as loose mutable properties on the Window. Only `shown` is read outside.
     Timer {                                   // the wipe: one column per tick
@@ -505,14 +530,33 @@ Window {
         // edge, same baseline — so when the transcript arrives it simply replaces the word.
         Text {
             id: statusWord
-            visible: root.loaderOn
+            objectName: "statusWord"            // reached by name from the self-check
+            visible: root.loaderOn || root.dictWord !== ""
             x: 0
             y: root.padTop
-            text: sweep.shown ? sweep.shown + "…" : ""
+            text: root.dictWord !== "" ? root.dictWord
+                                       : (sweep.shown ? sweep.shown + "…" : "")
             color: Theme.textMuted                  // a status word, not content
             font.family: fontFamily
             font.pixelSize: Theme.fontSize
             font.weight: Theme.fontWeight
+            lineHeight: root.lineBox
+            lineHeightMode: Text.FixedHeight
+        }
+
+        // Dictation's paste confirmation earns a real ✓ from Material Symbols — the island's body
+        // face has no U+2713 (it renders as tofu). Set just after the "Pasted" word, shown only
+        // for the `pasted` beat (D2).
+        Text {
+            id: pasteMark
+            objectName: "pasteMark"
+            visible: root.pasted
+            text: "\ue668"                          // Material Symbols: check
+            x: statusWord.x + statusWord.contentWidth + 7
+            y: root.padTop
+            color: Theme.textMuted
+            font.family: Theme.fontIcon
+            font.pixelSize: Theme.fontSize
             lineHeight: root.lineBox
             lineHeightMode: Text.FixedHeight
         }

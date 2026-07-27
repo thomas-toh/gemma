@@ -446,7 +446,56 @@ def main() -> int:
     assert ht.nativeEventFilter(b"windows_generic_MSG", addressof(other_win)) == (False, 0), \
         "the hit-test must ignore messages for other windows"
 
-    print(f"selfcheck OK: entrance binds to state, status word wipes and rotates, and across "
+    # --- dictation states (D2): the island is a pure status indicator, no reply body ---
+    # Recording reuses `listening` (covered above); these are the three states after it. The
+    # daemon publishes transcribing -> transforming -> pasted -> idle; the overlay shows a steady
+    # status word for the first two, then a latched "Pasted ✓" beat, then hides itself. `idle`
+    # lands while the confirmation is still up, so it must not blank it (the latch, not `st`, holds).
+    status = win.findChild(QObject, "statusWord")
+    paste_dwell = win.findChild(QObject, "pasteDwell")
+    assert status is not None and paste_dwell is not None, "Overlay.qml lost a dictation objectName"
+
+    model.apply({"type": "state", "state": "listening"})       # recording — clears any prior turn
+    model.apply({"type": "state", "state": "transcribing"})
+    _pump(app, 60)
+    assert win.property("showing") and win.property("open"), "transcribing must open the island"
+    assert status.property("visible") and status.property("text") == "Transcribing…", \
+        f"transcribing should show a steady status word, got {status.property('text')!r}"
+    assert win.property("bodyText") == "", "dictation must not render a text body"
+
+    # A stray transcript during dictation must NOT surface as a prompt: the daemon does not
+    # broadcast it, but if it ever did the status word must still win (and it must not pollute
+    # the prompt history the assistant reads).
+    model.apply({"type": "transcript", "text": "um so like hello there"})
+    _pump(app, 30)
+    assert win.property("bodyText") == "", "a dictation transcript leaked into the body"
+
+    model.apply({"type": "state", "state": "transforming"})
+    _pump(app, 40)
+    assert status.property("text") == "Tidying…", \
+        f"transforming should show 'Tidying…', got {status.property('text')!r}"
+
+    model.apply({"type": "state", "state": "pasted"})
+    _pump(app, 40)
+    assert win.property("pasted"), "the pasted state must latch the confirmation"
+    assert status.property("text") == "Pasted", \
+        f"pasted should show 'Pasted', got {status.property('text')!r}"
+    mark = win.findChild(QObject, "pasteMark")
+    assert mark is not None and mark.property("visible"), \
+        "the pasted state must show its Material Symbols check"
+    assert paste_dwell.property("running"), "the paste dwell must be counting down"
+    model.apply({"type": "state", "state": "idle"})            # daemon done — island stays for the beat
+    _pump(app, 40)
+    assert win.property("showing") and win.property("pasted"), \
+        "idle blanked the paste confirmation — the latch (not st) must hold it through the dwell"
+
+    paste_dwell.setProperty("interval", 40)                    # don't sit here for the full beat
+    _pump(app, 200)
+    assert not win.property("pasted") and win.property("hidden") and not win.property("showing"), \
+        "the island never hid itself after the paste confirmation"
+
+    print(f"selfcheck OK: entrance binds to state, status word wipes and rotates, dictation runs "
+          f"transcribing->transforming->pasted->hide, and across "
           f"{revealed} revealed words at up to {peak_lines} lines (scrolled "
           f"{win.property('scrolled')}) no text ever rendered outside the island")
     return 0

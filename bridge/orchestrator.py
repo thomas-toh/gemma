@@ -340,13 +340,22 @@ class Orchestrator:
     # The island is already gone on a dismiss (it hid itself the instant Esc was pressed, which
     # is why it, not the daemon, sends the verb), and after a normal turn it stays up until it
     # has finished revealing the answer plus its own dwell.
-    _EVENT_STATE = {"thinking": "thinking", "idle": "idle", "dismissed": "idle"}
+    # Dictation adds three of its own (D2, spec/60): the STT and cleanup phases the assistant
+    # collapses into one 'thinking', plus a paste confirmation. `pasted` only reaches the wire
+    # because it is here — otherwise `_ev("pasted")` would be trace-only.
+    _EVENT_STATE = {"thinking": "thinking", "idle": "idle", "dismissed": "idle",
+                    "transcribing": "transcribing", "transforming": "transforming",
+                    "pasted": "pasted"}
 
-    def _ev(self, event: str, detail: str = "", show: str | None = None) -> None:
+    def _ev(self, event: str, detail: str = "", show: str | None = None,
+            mirror: bool = True) -> None:
         """Trace an event (the harness asserts on these), mirror it to the overlay feed
-        (Contract P), and print its console line."""
+        (Contract P), and print its console line. `mirror=False` keeps an event in the trace
+        but off the wire — dictation traces its transcript for the harness but must NOT show it
+        on the island (it pastes elsewhere) or let it join the assistant's prompt history."""
         self.trace.append((time.perf_counter(), event, detail))
-        self._broadcast(event, detail)
+        if mirror:
+            self._broadcast(event, detail)
         if show is not None:
             print(show)
 
@@ -669,7 +678,7 @@ class Orchestrator:
         transcript is delivered, so dictation still works with no cleanup key and, in that case,
         nothing leaves the machine."""
         self.fed_back = False                       # a fresh turn: let it record feedback once
-        self._ev("thinking", show="[dictation: transcribing]")
+        self._ev("transcribing", show="[dictation: transcribing]")   # own state, not 'thinking' (D2)
         self._feedback("overlay thinking")          # D25: the screen is the feedback
 
         text = transcribe(audio)
@@ -679,8 +688,11 @@ class Orchestrator:
             self._ev("no-transcript", show="(no transcript)")
             self._publish_state("idle")
             return
-        self._ev("transcript", text, show=f"> {text}")   # raw first: feedback during cleanup
+        # mirror=False: the transcript is traced for the harness but pastes at the caret — it is
+        # never shown on the island and must not join the assistant's prompt history (D2).
+        self._ev("transcript", text, show=f"> {text}", mirror=False)
 
+        self._ev("transforming", show="[dictation: cleaning up]")    # own state (D2)
         cleaned, err = self._run_async(
             transform(self._cleanup_brain(), text, DICTATION_CLEANUP))
         if err or not cleaned:
@@ -688,7 +700,7 @@ class Orchestrator:
                         err.kind if err else "empty result")
             cleaned = text
         else:
-            self._ev("transcript", cleaned, show=f"> {cleaned}")
+            self._ev("transcript", cleaned, show=f"> {cleaned}", mirror=False)
 
         if paste_text(cleaned):
             self._ping("success")
@@ -1101,7 +1113,9 @@ def _selfcheck() -> None:
         di.pump, di._cleanup = _Pump(), object()      # object() skips build_brain (keyring/net)
         di._dictate(object())
         assert pasted == ["Hello there."], pasted
-        assert "thinking" in di.bc.states and di.bc.states[-1] == "idle", di.bc.states
+        # D2: dictation drives its own states, not the assistant's 'thinking'. The transcript is
+        # mirror=False, so it never appears in the broadcast — only these four states do.
+        assert di.bc.states == ["transcribing", "transforming", "pasted", "idle"], di.bc.states
 
         pasted.clear()
 
@@ -1114,13 +1128,18 @@ def _selfcheck() -> None:
         dr._dictate(object())
         assert pasted == ["um so like hello there"], \
             f"cleanup failure must deliver the raw transcript, got {pasted}"
+        # Cleanup failed but the paste still succeeded, so the state run is unchanged: the
+        # confirmation is about the paste, not the tidy-up.
+        assert dr.bc.states == ["transcribing", "transforming", "pasted", "idle"], dr.bc.states
 
         pasted.clear()
         g["transcribe"] = lambda audio: ""
         dn = Orchestrator(brain=object(), broadcaster=_Rec())
         dn.pump, dn._cleanup = _Pump(), object()
         dn._dictate(object())
-        assert pasted == [] and dn.bc.states[-1] == "idle", "no transcript -> fault, no paste"
+        # Empty STT stops at transcribing -> fault -> idle: no transforming, no pasted, no paste.
+        assert pasted == [] and dn.bc.states == ["transcribing", "idle"], \
+            f"no transcript -> transcribing then fault: {dn.bc.states}"
     finally:
         g.update(_orig)
 

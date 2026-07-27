@@ -62,6 +62,7 @@ QtObject {
     // is enough, and "N seconds after it finishes appearing" is a knob you can reason about.
     readonly property int durationPromptHold: 700     // prompt sits before the reply takes over
     readonly property int durationAnswerDwell: 20000  // answer sits before the island hides
+    readonly property int durationPasteDwell: 2500    // dictation's "Pasted ✓" beat before hiding (D2)
 
     // ── settings window (D29) ───────────────────────────────────────────────
     // A second surface, not a second design system: the face and motion above are shared. A cool

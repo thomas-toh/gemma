@@ -1,6 +1,6 @@
 # Spec 60 — Dictation
 
-**Last reconciled: 2026-07-25** · Build progress: [STATE.md](../STATE.md), Track D · Rationale:
+**Last reconciled: 2026-07-27** · Build progress: [STATE.md](../STATE.md), Track D · Rationale:
 docs/01_scoping/Reviews/2026-07-18_1643 (VoiceInk study), spec/00 D12 · D15 · D20.
 
 Dictation is the second door (D20): a global hotkey (`ctrl+alt+2` by default) that turns speech
@@ -60,10 +60,15 @@ pasted and nothing leaves the machine.
 
 ## Overlay states
 
-D1 reuses the existing `state` feed (`spec/schemas/status.json`): `listening` (capture + bars) and
-`thinking` (STT + cleanup), and shows the transcript on the island as confirmation. **Dictation's
-own states** — `transcribing` / `transforming` / `pasted`, distinct from the assistant's — are the
-**D2** slice and are owed; they add to the overlay, not to this pipeline.
+Recording reuses the assistant's feed (`spec/schemas/status.json`): `listening` (capture + bars)
+covers it. After the capture closes, dictation runs **its own three states** (D2), distinct from the
+assistant's: `transcribing` (STT), `transforming` (cleanup), `pasted` (the cleaned text has reached
+the caret). Because dictation pastes into another app and shows no reply, the island is a **pure
+status indicator** here — `transcribing`/`transforming` show a steady status word ("Transcribing…" /
+"Tidying…"), and `pasted` is a brief "Pasted ✓" confirmation the overlay dwells on
+(`Theme.durationPasteDwell`) then hides itself. No text body is shown; the transcript goes to the
+caret, not the island, and is not broadcast, so it never joins the assistant's prompt history. These
+states add to the overlay, not to this pipeline. Build progress: [STATE.md](../STATE.md).
 
 ## Deferred
 

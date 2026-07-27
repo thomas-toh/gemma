@@ -663,7 +663,7 @@ install.)*
 
 - **Works now (D1, 2026-07-25):** the dictate door end to end — capture → STT → Groq cleanup →
   paste at the caret (`spec/60_dictation.md`; `orchestrator._dictate` + `bridge/paste.py`). See the
-  build note below. Owed: live keypress on the box · D2 overlay states · D3 rewrite · per-mode STT.
+  build note below. Owed: live keypress on the box · D3 rewrite · per-mode STT.
 - **Design settled 2026-07-18 (D12; study:
   `docs/01_scoping/Reviews/2026-07-18_1643_Review-gemma-voiceink-codebases.md`):
   **trigger-is-the-mode** — wake word =
@@ -694,30 +694,26 @@ install.)*
   (filler/dup removed, contractions fixed, question NOT answered) → clipboard. Guarded:
   `bridge.paste` (CI) + dictation dispatch/fallback in the orchestrator selfcheck (CI). Live keypress
   on the box still owed (like every hotkey path, RegisterHotKey is proven live separately).
-- **D2 — OVERLAY SIDE BUILT (2026-07-27); daemon emission OWED.** Contract P gained three dictation
+- **D2 — BUILT (2026-07-27): dictation overlay states, both sides.** Contract P gained three dictation
   states (`spec/schemas/status.json` → **v0.4.0**: `transcribing` · `transforming` · `pasted`) and the
-  overlay renders them (`Overlay.qml`): steady status word "Transcribing…" / "Tidying…", then a
+  overlay renders them (`Overlay.qml`): a steady status word "Transcribing…" / "Tidying…", then a
   latched **"Pasted ✓"** beat (Material Symbols check — the island's body face has no U+2713) that
   dwells `Theme.durationPasteDwell` (2.5 s) then hides itself. `busy`/`open`/`showing` extended; a
   `pasted` LATCH holds the ✓ through the daemon's `idle`; `bodyText` is forced empty during dictation
-  so a stray transcript can't leak into the prompt slot. Guarded in `overlay_check` (drives
-  transcribing→transforming→pasted→hide). Specs: spec/40 §State machine (dictation branch) + spec/60
-  §Overlay states. **OWED — the daemon must EMIT these** (deferred: the plumbing session is reshaping
-  `_dictate`'s cleanup routing via the router, so do this AFTER that lands to avoid a tangle in one
-  method). The change, in `orchestrator._dictate`: add the three to `_EVENT_STATE`; give `_ev` a
-  `mirror=True` param; emit `transcribing` (replacing the STT-start `thinking`), `transforming` before
-  the `transform()` call, and `pasted` already crosses the wire once it is in `_EVENT_STATE`; broadcast
-  the transcript with `mirror=False` (trace only, so it stays out of prompt history). Then update the
-  orchestrator selfcheck: it asserts `"thinking" in di.bc.states` → change to the sequence
-  `["transcribing","transforming","pasted","idle"]` (and `["transcribing","idle"]` for the empty-STT
-  path). No new D-number — D2 is a named build slice.
+  so a stray transcript can't leak into the prompt slot. The daemon emits the three from
+  `orchestrator._dictate` (`transcribing` replaces the STT-start `thinking`; `transforming` before the
+  `transform()` call; `pasted` on paste success, added to `_EVENT_STATE` so it crosses the wire); the
+  transcript is broadcast `mirror=False` (a new `_ev` param — trace only, so dictation text never shows
+  on the island nor joins the assistant's prompt history). Guarded: `overlay_check` drives
+  transcribing→transforming→pasted→hide; the orchestrator selfcheck asserts the state sequence
+  (`["transcribing","transforming","pasted","idle"]`, and `["transcribing","idle"]` on empty STT).
+  Specs: spec/40 §State machine (dictation branch) + spec/60 §Overlay states. No new D-number — D2 is a
+  named build slice. **Owed:** the live keypress test — Thomas to speak into it.
 - **In flight:** —
 - **Next:** ③ measure `large-v3-turbo` vs `small.en` vs **Parakeet** (sherpa-onnx = torch-free ONNX
   path; **gated** — adopt only if a real win, discuss first) on the 5080 for the per-mode STT model
-  default (a parallel session is on Parakeet) · ④ **D2**: overlay dictation states (recording + mic
-  level · transcribing · transforming · pasted) on the status feed — this is the UI/UX session's
-  surface · ⑤ **D3**: ask-door rewrite (D20, propose-then-tap) · plus the **D15 word-replacement**
-  schema (the pipeline has the seam; the table doesn't exist yet).
+  default (a parallel session is on Parakeet) · ④ **D3**: ask-door rewrite (D20, propose-then-tap) ·
+  plus the **D15 word-replacement** schema (the pipeline has the seam; the table doesn't exist yet).
 - **Deferred at design time:** voice-switch into dictation ("take dictation") ·
   per-app modes (foreground-window detection) · streaming partials ·
   browser-URL / screen-OCR context blocks.
