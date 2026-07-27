@@ -664,6 +664,10 @@ install.)*
 - **Works now (D1, 2026-07-25):** the dictate door end to end — capture → STT → Groq cleanup →
   paste at the caret (`spec/60_dictation.md`; `orchestrator._dictate` + `bridge/paste.py`). See the
   build note below. Owed: live keypress on the box · D3 rewrite · per-mode STT.
+- **Coordination (2026-07-27, tools session):** the Tier-1 tools work (D31) is committed and clear
+  of `orchestrator.py`. The **router reshape of `_dictate`'s cleanup routing is deferred** — the
+  named-model-instances + per-role router is parked after tools — so cleanup stays on the
+  `CLEANUP_PROVIDER`/`CLEANUP_MODEL` constants; build against those, don't wait on the router.
 - **Design settled 2026-07-18 (D12; study:
   `docs/01_scoping/Reviews/2026-07-18_1643_Review-gemma-voiceink-codebases.md`):
   **trigger-is-the-mode** — wake word =

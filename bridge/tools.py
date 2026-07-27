@@ -81,11 +81,14 @@ def _win_active_window() -> str:
 
 
 class _PowerStatus(ctypes.Structure):
+    # Win32 SYSTEM_POWER_STATUS: the four status fields are BYTE (unsigned) — c_ubyte, not c_byte.
+    # A desktop with no battery reports BatteryLifePercent == 255 ("unknown"); read as a SIGNED
+    # byte that is -1, which slipped through the 255 check and printed "Battery: -1%".
     _fields_ = [
-        ("ACLineStatus", ctypes.c_byte),
-        ("BatteryFlag", ctypes.c_byte),
-        ("BatteryLifePercent", ctypes.c_byte),
-        ("SystemStatusFlag", ctypes.c_byte),
+        ("ACLineStatus", ctypes.c_ubyte),
+        ("BatteryFlag", ctypes.c_ubyte),
+        ("BatteryLifePercent", ctypes.c_ubyte),
+        ("SystemStatusFlag", ctypes.c_ubyte),
         ("BatteryLifeTime", ctypes.c_ulong),
         ("BatteryFullLifeTime", ctypes.c_ulong),
     ]
