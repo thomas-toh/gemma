@@ -11,6 +11,12 @@ requires-python = ">=3.12"
 # §8) needs them, not speculatively.
 dependencies = [
     "anthropic",
+    # B2 (spec/20, D30): ONE OpenAI-compatible adapter serves the other ten providers — Groq,
+    # OpenAI, xAI, DeepSeek, Mistral, OpenRouter, Google's compat layer, and Ollama / LM Studio /
+    # llama.cpp locally. The SDK is pointed at each provider's base_url. Taken rather than
+    # hand-rolled because it carries SSE streaming and the reassembly of fragmented tool-call
+    # arguments — the two places a hand-written client would quietly get it wrong.
+    "openai",
     "keyring",
     # step 2 (docs/04 §8): mic capture + wake word. onnxruntime is explicit because
     # we run openWakeWord on ONNX (Windows + macOS both, spec/00 D10), not tflite.

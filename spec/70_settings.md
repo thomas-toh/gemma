@@ -1,10 +1,12 @@
-# Spec 70 — Settings & configuration · **STUB (planned)**
+# Spec 70 — Settings & configuration
 
-**Last reconciled: 2026-07-24** · Build progress: [STATE.md](../STATE.md) (M0-close gate) · Decisions: [spec/00](00_overview.md)
+**Last reconciled: 2026-07-27** · Build progress: [STATE.md](../STATE.md) · Decisions: [spec/00](00_overview.md)
 
-> **This file is a STUB.** The architecture in §2 is decided (2026-07-20); the settings
-> **line-item inventory** (§3) and open questions (§4) are being developed in a separate
-> effort. Flesh out §3–§4; keep §2 unless a new decision supersedes it.
+> The **window is built** (D29, 2026-07-27) and renders from `spec/schemas/settings.json` — the
+> executable truth for panes, defaults and the provider catalogue (hard rule 3). §2's architecture
+> holds. §3 still tracks what exists vs. what is owed: the page covers profile, preferences, the
+> model roster and triggers; STT / wake phrase / TTS-voice and the word-replacement table are not
+> surfaced yet.
 
 ## 1. What it is
 
@@ -18,7 +20,8 @@ M0-close gate in STATE — the missing piece being a **config source: file → p
   notification area · macOS menu bar (D10). Doubles as the always-visible **mic-live
   indicator** (spec/50 truthful-indicator role) for when the overlay is hidden. Menu:
   Open settings · Quit · (Mute).
-- **Settings window** — **QML + Qt Quick Controls 2**, hosted in the overlay's UI process
+- **Settings window** — **QML** (Controls.Basic borrowed only for text entry, scrolling and popup
+  dismissal; every visible control hand-drawn to match the island — D29), hosted in the UI process
   (D13 — the separate process), **spawned only when opened** (zero idle cost), no Chromium.
   QWebView was considered and rejected: it is Chromium-heavy, the exact weight the overlay
   deliberately avoids.
@@ -40,8 +43,10 @@ types / defaults / validation:
   replies, default **off** — a capability, D23) and `pings` (the three earcons, default **on**),
   each a checkbox in the tray (spec/40 § Voice out). Persisted by **`bridge/settings.py`** to the
   JSON file named in §4 and read fresh by the daemon each turn. This is the M0-close "config
-  source: file → panel", now partway: the file half exists, the settings **page** that will
-  subsume these still owed. Types/validation for the rest below still to spec.
+  source: file → panel", now partway: the file half exists, and the settings **page** now
+  renders (D29, 2026-07-27) — profile, preferences, the model roster and triggers, from
+  `settings.json`. STT / wake / TTS-voice and the word-replacement table below are not surfaced
+  yet; types/validation for those still to spec.
 - **Brain (Contract B), adapter-aware:** B1 Claude → model · effort · thinking · persona;
   B2 local → model · temperature. *(Now: model via `GEMMA_BRAIN_MODEL`; thinking hardcoded
   off; effort unwired — see the 2026-07-12 adapter-shape note in STATE.)*
@@ -75,5 +80,7 @@ types / defaults / validation:
   `bridge/settings.py` for now; no validation layer yet.)*
 - **Live-reload** vs restart-to-apply — **for the two toggles, live (D28):** the bridge re-reads
   the file each turn, so a tray change applies on the next turn with no watcher and no restart.
-- Whether the config **shape** needs a `spec/schemas/*.json` file (hard rule 3) — likely yes;
-  **deferred at D28** until the set outgrows the two booleans a `DEFAULTS` dict covers.
+- Whether the config **shape** needs a `spec/schemas/*.json` file (hard rule 3) — **yes; resolved
+  (D29/D30):** `spec/schemas/settings.json` is that file — the executable truth for panes, groups,
+  labels, defaults, `built` flags and the provider catalogue. `bridge/settings.py` derives its
+  `DEFAULTS` from it; the window renders from it; neither restates a value.

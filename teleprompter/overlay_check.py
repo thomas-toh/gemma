@@ -61,15 +61,21 @@ def _pump(app, ms: int) -> None:
 def main() -> int:
     app = QGuiApplication([])
     # The offscreen platform ships no fonts, so the bundled family is what makes the metrics
-    # real. Without it every line count below would be measured against a fallback.
-    assert QFontDatabase.addApplicationFont(str(HERE / "fonts" / "Inter-Variable.ttf")) != -1, \
-        "bundled Inter did not load — line metrics would be meaningless"
+    # real. Without it every line count below would be measured against a fallback. Load
+    # whatever .ttf ships rather than a hard-coded name — the app face is swappable (Inter →
+    # Hanken Grotesk, 2026-07-24), and these checks are about line-wrapping, not the face.
+    fonts = sorted((HERE / "fonts").glob("*.ttf"))
+    assert fonts, "no bundled font found — line metrics would be meaningless"
+    for f in fonts:
+        assert QFontDatabase.addApplicationFont(str(f)) != -1, f"bundled font {f.name} did not load"
+    from teleprompter.__main__ import apply_tracking      # match the app's global letter spacing
+    apply_tracking(app)
 
     model = OverlayModel()
     engine = QQmlApplicationEngine()
     engine.addImportPath(str(HERE.parent))
     engine.rootContext().setContextProperty("overlay", model)
-    engine.rootContext().setContextProperty("fontFamily", "Inter")
+    engine.rootContext().setContextProperty("fontFamily", "Archivo")
     engine.rootContext().setContextProperty("reducedMotion", False)
     engine.rootContext().setContextProperty("targets", targets())
     engine.load(QUrl.fromLocalFile(str(HERE / "Overlay.qml")))

@@ -14,47 +14,51 @@ import os
 import sys
 from typing import AsyncIterator
 
-from .base import Done, Error, Session, TextDelta, ToolCall, ToolSpec, ssl_context
-
-# Default model per the standing rule; override for the voice loop (latency/cost) via env.
-# Sensible alternatives for an always-listening assistant: claude-sonnet-5, claude-haiku-4-5.
-DEFAULT_MODEL = os.environ.get("GEMMA_BRAIN_MODEL", "claude-opus-4-8")
-
-# Spoken replies stay short. The ≤2-sentence narration rule is the orchestrator's job
-# (step 6); this default just makes the standalone console test sound like the voice loop.
-# Register per spec/40 (decided 2026-07-13): impassive system voice. Placeholder until
-# M0.5's versioned persona.
-# ponytail: the "no tools" claim is static and goes stale the moment tools land (M1) —
-# replace with a per-turn capability clause derived from the filtered `tools` list
-# (decided 2026-07-13; see STATE, Track B M0.5).
-DEFAULT_SYSTEM = (
-    "You are Gemma, this machine's system voice. Your words are read aloud: answer in "
-    "one or two spoken sentences unless asked for more; no markdown, lists, code, or "
-    "emoji. Register: impassive and precise, declaratory or imperative — no "
-    "interjections, no exclamations, no filler, no performed warmth. You have no tools "
-    "yet: you cannot set timers, control this computer, or act on anything — never "
-    "claim an action was performed; state the limitation plainly."
+from .base import (
+    DEFAULT_SYSTEM,
+    MAX_TOKENS,
+    Done,
+    Error,
+    Session,
+    TextDelta,
+    ToolCall,
+    ToolSpec,
+    ssl_context,
 )
+from .providers import credential_for
 
-# ponytail: short cap — spoken turns are brief and long answers are held, not spoken
-# (spec/40). Bump if a legitimate turn ever truncates.
-MAX_TOKENS = 1024
+# DEFAULT_SYSTEM and MAX_TOKENS moved to base.py when B2 arrived — they describe Gemma, not
+# Anthropic, and M0.5's versioned persona must have one place to replace. Imported above so this
+# module's own name for them still resolves.
+#
+# There is deliberately NO default model here. An adapter that silently defaulted to one Claude
+# model over another would carry a preference, and asymmetrically — B2 already demands the caller
+# name a model. Both adapters now do: a turn with no model yields a clean Error, never a guess.
+# The daemon's operational default (it is Claude-only until the router lands) lives in the
+# orchestrator, where it belongs — a caller's choice, not the adapter's.
 
 # No `thinking` param: on Opus 4.8 that means thinking is OFF, which is what a <4 s
 # first-word voice reply wants (adaptive thinking delays the first token). D11 / spec/40.
 
 
-def _get_key() -> str | None:
-    """Credential store first (spec/50 rule 10, service 'gemma'); env var fallback."""
-    try:
-        import keyring
+def _tools_for_api(tools: list[ToolSpec]) -> list[dict]:
+    """Contract T registry entries -> Anthropic tool objects.
 
-        key = keyring.get_password("gemma", "anthropic")
-        if key:
-            return key
-    except ImportError:
-        pass
-    return os.environ.get("ANTHROPIC_API_KEY")
+    The registry spells the JSON-schema key `parameters` (spec/schemas/tools.json) and carries a
+    `tier`; Anthropic requires `input_schema` and rejects unknown fields. The list used to be
+    passed through VERBATIM, which was invisible only because M0 passes an empty one — the first
+    real tool would have 400'd, and `_error_kind` maps a 400 to the generic apology, so it would
+    have surfaced as an unexplained "sorry". Translation lives here for the same reason error
+    mapping does: it is this provider's wire format (spec/20).
+    """
+    return [
+        {
+            "name": t["name"],
+            "description": t.get("description", ""),
+            "input_schema": t.get("parameters") or {"type": "object", "properties": {}},
+        }
+        for t in tools
+    ]
 
 
 def _error_kind(exc: Exception) -> str:
@@ -85,9 +89,12 @@ def _error_kind(exc: Exception) -> str:
 class ClaudeBrain:
     """B1. `converse` is an async generator, matching the BrainAdapter Protocol."""
 
-    def __init__(self, model: str = DEFAULT_MODEL, api_key: str | None = None):
+    def __init__(self, model: str | None = None, api_key: str | None = None):
         self.model = model
-        self._api_key = api_key or _get_key()
+        # Both the credential-store account name and the env-var fallback come from the
+        # catalogue now (spec/schemas/settings.json -> providers.anthropic), so B1 no longer
+        # hardcodes what the settings window writes. Same entry, read through the schema.
+        self._api_key = api_key or credential_for("anthropic")
         self._client = None          # built on first use, then kept — see _client_once()
 
     def _client_once(self):
@@ -122,19 +129,24 @@ class ClaudeBrain:
             yield Error("unavailable", "B1 (Claude API) blocked: session is local_only")
             return
         if not self._api_key:
-            yield Error("auth", "no API key (keyring service 'gemma' or ANTHROPIC_API_KEY)")
+            yield Error("auth", "no API key (keyring service 'gemma', account 'anthropic')")
+            return
+        if not self.model:
+            yield Error("unknown", "no model chosen for 'anthropic'")
             return
 
         client = self._client_once()
         messages = list(session.history) + [{"role": "user", "content": utterance}]
         kwargs = dict(
             model=self.model,
-            max_tokens=MAX_TOKENS,
+            max_tokens=session.max_tokens or MAX_TOKENS,   # transform lifts this for long text
             system=session.system or DEFAULT_SYSTEM,
             messages=messages,
         )
+        if session.temperature is not None:                # transform runs deterministic
+            kwargs["temperature"] = session.temperature
         if tools:
-            kwargs["tools"] = tools
+            kwargs["tools"] = _tools_for_api(tools)
 
         try:
             async with client.messages.stream(**kwargs) as stream:
@@ -195,6 +207,24 @@ def _selfcheck() -> None:
     assert _error_kind(RuntimeError("boom")) == "unknown"
     assert DEFAULT_SYSTEM and "voice" in DEFAULT_SYSTEM.lower()
 
+    # Tool translation. The registry spells `parameters`; Anthropic demands `input_schema` and
+    # rejects unknown fields, so passing an entry through verbatim 400s on the first real tool.
+    # Exercised against the REAL registry, because that is the shape the brain will be handed.
+    from bridge.config import load_schemas
+
+    registry = load_schemas()["tools"]["tools"]
+    assert registry, "spec/schemas/tools.json must carry the starter tools"
+    wired = _tools_for_api(registry)
+    assert len(wired) == len(registry)
+    for w, t in zip(wired, registry):
+        assert set(w) == {"name", "description", "input_schema"}, \
+            f"Anthropic rejects unknown tool fields, got {sorted(w)}"
+        assert w["name"] == t["name"]
+        assert w["input_schema"] == t["parameters"], "`parameters` must become `input_schema`"
+        assert "tier" not in w, "tier is Gemma's safety business and must not leave the machine"
+    assert _tools_for_api([{"name": "bare"}])[0]["input_schema"] == \
+        {"type": "object", "properties": {}}, "a tool with no parameters still needs a schema"
+
     # Client lifetime (spec/20 adapter lifetime). No network: every cost here is local CPU.
     import time
 
@@ -215,14 +245,28 @@ def _selfcheck() -> None:
     # slow first tokens — the exact turns this whole change exists to speed up.
     assert first.timeout.read >= 60, f"custom client dropped the SDK read timeout: {first.timeout}"
 
-    print("selfcheck OK: error mapping by type/status (no prose), defaults, client built once "
-          "with the trust store memoised and the SDK's long read timeout intact")
+    # No baked model preference. A turn with no model must yield a clean Error, never a guess —
+    # symmetric with B2, and the whole point of the agnosticism pass.
+    async def _first(brain, session):
+        async for ev in brain.converse(session, "q", []):
+            return ev
+
+    ev = asyncio.run(_first(ClaudeBrain(api_key="x"), Session(id="t")))
+    assert isinstance(ev, Error) and ev.kind == "unknown", \
+        f"no model must be reported, not defaulted: {ev}"
+
+    print("selfcheck OK: error mapping by type/status (no prose), no baked model default, client "
+          "built once with the trust store memoised and the SDK's long read timeout intact")
 
 
 def main() -> None:
+    # A console convenience default, NOT an adapter default: this is the Claude tester, so a Claude
+    # model is intrinsic here. The env var is the daemon's knob (orchestrator.DAEMON_MODEL) and is
+    # honoured so `python -m bridge.brains.claude "q"` matches what the daemon would run.
+    cli_default = os.environ.get("GEMMA_BRAIN_MODEL", "claude-opus-4-8")
     ap = argparse.ArgumentParser(description="Gemma B1 Claude adapter (Track G step 5)")
     ap.add_argument("question", nargs="?", help="prompt to send to Claude")
-    ap.add_argument("--model", default=DEFAULT_MODEL, help=f"model id (default {DEFAULT_MODEL})")
+    ap.add_argument("--model", default=cli_default, help=f"model id (default {cli_default})")
     ap.add_argument("--selfcheck", action="store_true", help="offline logic check, no network")
     args = ap.parse_args()
 

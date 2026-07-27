@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import re
 import threading
 import time
@@ -30,13 +31,15 @@ from bridge.audio.listen import (
     MAX_UTTERANCE_S, EndOfSpeech, SileroVAD, _silero_model_path, transcribe,
 )
 from bridge.audio.speak import VOICE, OutputPump, earcon_samples, synth
-from bridge.brains.base import Done, Error, Session, TextDelta, ToolCall
-from bridge.brains.claude import DEFAULT_MODEL, ClaudeBrain
+from bridge.brains.base import Done, Error, Session, TextDelta, ToolCall, transform
+from bridge.brains.claude import ClaudeBrain
+from bridge.brains.providers import build_brain
 from bridge.broadcaster import (
     Broadcaster, m_error, m_latency, m_mic, m_response, m_state, m_transcript,
 )
 from bridge.hotkeys import Hotkeys
 from bridge.log import setup_logging
+from bridge.paste import paste_text
 from bridge import settings
 
 log = logging.getLogger("gemma.orchestrator")
@@ -54,6 +57,34 @@ BARGE_CHUNKS = 4       # sustained speech chunks (~128 ms) to call it a barge-in
 MIC_LEVEL_REF = 6000.0  # int16 RMS mapped to a full overlay bar (Contract P 'mic' level).
                         # ponytail: calibration knob — mic-dependent; raise if the bars peg,
                         # lower if they barely move (the physical world needs tuning).
+
+# The daemon's pre-router default brain model. It lives HERE, not in an adapter: the adapters
+# carry no model preference (D30 agnosticism pass), so the choice of what to run when nothing
+# else says belongs to the caller. Until spec/20's router lands, the orchestrator constructs B1
+# directly (see __init__), so this is necessarily a Claude model — a Groq id would fail on B1.
+# When the router arrives it reads the primary provider + model from settings and this goes away.
+# ponytail: env override until settings-driven selection exists (STATE, M0-close gate).
+DAEMON_MODEL = os.environ.get("GEMMA_BRAIN_MODEL", "claude-opus-4-8")
+
+# Dictation cleanup (spec/60, D15/S-06): Groq by default — cloud, fast, cheap, and the key is
+# already in the credential store. The cleanup ROLE is meant to be settings-configurable
+# (spec/70), but that plumbing is unbuilt (settings.json `cleanup_dictation` is built:false), so
+# these are the stopgap, env-overridable like DAEMON_MODEL. Must be an OpenAI-wire provider for
+# now — build_brain picks the adapter by wire, so pointing this at Anthropic would work too, but
+# a small fast model is the point of cleanup.
+# ponytail: replace with the settings-driven cleanup-role selection when spec/70 lands.
+CLEANUP_PROVIDER = os.environ.get("GEMMA_CLEANUP_PROVIDER", "groq")
+CLEANUP_MODEL = os.environ.get("GEMMA_CLEANUP_MODEL", "llama-3.1-8b-instant")
+
+# The dictation cleanup instruction (spec/60) — the "transform, never answer" task for `transform`
+# (D12/D15). Ported from VoiceInk's enhancement prompt in spirit: fix, don't rewrite.
+# ponytail: a code constant until the cleanup role is user-configurable (spec/70, VoiceInk lets
+# you edit this); the guardrail against answering lives in TRANSFORM_SYSTEM, not here.
+DICTATION_CLEANUP = (
+    "Fix transcription errors, remove filler words (um, uh, like, you know) and duplicated "
+    "words, and restore natural punctuation, capitalisation and paragraphs. Keep the speaker's "
+    "wording and meaning exactly; do not add, summarise, translate, or answer anything."
+)
 
 
 def capture_over(fired: bool, eos: EndOfSpeech, keyed: bool, auto_end: bool) -> bool:
@@ -217,13 +248,14 @@ def latency_table(trace) -> str:
 
 class Orchestrator:
     def __init__(self, silence_ms: int = SILENCE_MS, voice: str = VOICE,
-                 model: str = DEFAULT_MODEL, brain=None, broadcaster=None,
+                 model: str = DAEMON_MODEL, brain=None, broadcaster=None,
                  auto_end: bool = False, hotkeys=None):
         self.silence_chunks = (silence_ms + VAD_CHUNK_MS - 1) // VAD_CHUNK_MS
         self.voice = voice
         self.auto_end = auto_end                 # spec/70: end a keyed turn on VAD silence too
         self.hk = hotkeys                        # None under replay/selfcheck: wake word only
         self.brain = brain or ClaudeBrain(model=model)   # injectable: replay's fake brain
+        self._cleanup = None                             # dictation cleanup brain, built on first use
         self.synth = synth                               # injectable: replay fakes TTS
         # D24: dismissal arrives from the Teleprompter, which owns bare Esc because it alone
         # knows when it is on screen. Set from the broadcaster's receive thread; every waiting
@@ -500,7 +532,16 @@ class Orchestrator:
                 t0 = time.perf_counter()
                 self.pump.cut()
                 self._enter(keyed, t0)          # same entrance as serve(): traced + earcon
-                return self._capture(door=keyed)
+                captured = self._capture(door=keyed)
+                # A dictate press mid-reply must NOT be fed to the brain: it cuts TTS, delivers
+                # the dictation, and ends the chain (returning None). Only an ask key-interrupt
+                # feeds the assistant chain. (This is the seam the review flagged — _pressed has
+                # two callers, and routing on only the serve() one would misroute this path.)
+                if keyed.name == "dictate":
+                    if captured is not None:
+                        self._dictate(captured)
+                    return None
+                return captured
             if barge.update(self.vad.prob(samples_in) >= VAD_THRESHOLD):
                 self.pump.cut()
                 self._ev("barge-in", show="[barge-in]")
@@ -530,7 +571,7 @@ class Orchestrator:
         barge-in path came to draw bars over a stale answer, and how key-interrupt turns
         came to have no press-latency reading at all — 60% of the first acceptance run."""
         self._ev("wake", "key" if door else "phrase",
-                 show=f"[{'ask key' if door else 'wake'}] listening...")
+                 show=f"[{door.name if door else 'wake'}] listening...")
         if settings.get("pings"):
             self.pump.play(earcon_samples("listening"))    # < 300 ms: enqueued immediately
             self._ev("earcon", "listening")
@@ -538,21 +579,66 @@ class Orchestrator:
                      "keypress" if door else "wake detect")
 
     def _pressed(self):
-        """The ask door if its hotkey just opened a capture, else None. Also drains the
-        dictate door: it is registered so the binding is proven end to end, but its
-        pipeline is Track D's and does not exist yet."""
+        """The door whose hotkey just opened a capture — the **ask** door or the **dictate**
+        door — else None (a wake-word turn). The caller routes on `door.name`: 'ask' runs the
+        assistant turn, 'dictate' runs the dictation pipeline (spec/60).
+
+        `start` is cleared here (we are taking the turn); `end` is the module's to clear on the
+        next press, and `_capture()`'s finally calls `door.close()` when the capture really ends.
+        Ask is checked first so that if both somehow fired at once, the assistant wins."""
         if self.hk is None:
             return None
-        d = self.hk.doors.get("dictate")
-        if d is not None and d.start.is_set():
-            d.start.clear()
-            d.end.clear()
-            log.info("dictate hotkey pressed — that door is not built yet (Track D)")
-        ask = self.hk.doors.get("ask")
-        if ask is not None and ask.start.is_set():
-            ask.start.clear()           # `end` is the module's to clear, on the next press
-            return ask
+        for name in ("ask", "dictate"):
+            d = self.hk.doors.get(name)
+            if d is not None and d.start.is_set():
+                d.start.clear()
+                return d
         return None
+
+    def _cleanup_brain(self):
+        """The dictation cleanup brain (Groq by default, D15/S-06), built once and kept — it
+        rests on Contract B's one-loop guarantee exactly as the assistant brain does. Lazy:
+        dictation may never be used in a session, and constructing it reads the credential store."""
+        if self._cleanup is None:
+            self._cleanup = build_brain(CLEANUP_PROVIDER, CLEANUP_MODEL)
+        return self._cleanup
+
+    def _dictate(self, audio) -> None:
+        """A dictation turn (spec/60): transcribe → clean up → paste at the caret. No brain
+        answer and no follow-up chain — the key was the endpoint and the text goes to whatever
+        app has focus. Cleanup is an ENHANCEMENT, not a gate: if it is unavailable the raw
+        transcript is delivered, so dictation still works with no cleanup key and, in that case,
+        nothing leaves the machine."""
+        self.fed_back = False                       # a fresh turn: let it record feedback once
+        self._ev("thinking", show="[dictation: transcribing]")
+        self._feedback("overlay thinking")          # D25: the screen is the feedback
+
+        text = transcribe(audio)
+        if not text:
+            self.bc.publish(m_error("I didn't catch that.", "no_transcript"))
+            self._ping("failure")
+            self._ev("no-transcript", show="(no transcript)")
+            self._publish_state("idle")
+            return
+        self._ev("transcript", text, show=f"> {text}")   # raw first: feedback during cleanup
+
+        cleaned, err = self._run_async(
+            transform(self._cleanup_brain(), text, DICTATION_CLEANUP))
+        if err or not cleaned:
+            log.warning("dictation cleanup unavailable (%s) — pasting the raw transcript",
+                        err.kind if err else "empty result")
+            cleaned = text
+        else:
+            self._ev("transcript", cleaned, show=f"> {cleaned}")
+
+        if paste_text(cleaned):
+            self._ping("success")
+            self._ev("pasted", show="[pasted]")
+        else:
+            self.bc.publish(m_error("Couldn't paste the text.", "paste_failed"))
+            self._ping("failure")
+            self._ev("paste-failed", show="(paste failed)")
+        self._publish_state("idle")
 
     def serve(self, mic, pump, wake_model) -> None:
         """The IDLE→wake→turn-chain loop against a mic, pump and wake model — real
@@ -580,8 +666,11 @@ class Orchestrator:
                 ring.clear()
                 if utt is None:
                     self._ev("nothing-heard", show="[nothing heard]")
-                while utt is not None:          # the turn chain: barge-ins
-                    utt = self._turn(utt)
+                elif door is not None and door.name == "dictate":
+                    self._dictate(utt)          # spec/60: standalone, no assistant chain
+                else:
+                    while utt is not None:      # the turn chain: barge-ins
+                        utt = self._turn(utt)
             except Dismissed:
                 # One handler for every state (spec/40): whatever was in flight — an open
                 # mic, a streaming brain call, TTS mid-sentence — stops here. The island is
@@ -850,8 +939,81 @@ def _selfcheck() -> None:
         assert pg.pump.n == 1, "pings on must play the earcon"
     os.environ.pop("GEMMA_SETTINGS", None)
 
+    # --- dictation (Track D, spec/60): dispatch by door, and the cleanup-fallback pipeline ---
+    # _pressed distinguishes the two doors by name; the caller routes on it. A dictate press must
+    # never be fed to the brain — the seam the adversarial review flagged (_pressed has two
+    # callers). Ask wins a simultaneous press.
+    class _FakeDoor:
+        def __init__(self, name):
+            self.name = name
+            self.start = threading.Event()
+            self.end = threading.Event()
+
+        def close(self):
+            self.start.clear()
+            self.end.clear()
+
+    class _FakeHK:
+        def __init__(self):
+            self.doors = {"ask": _FakeDoor("ask"), "dictate": _FakeDoor("dictate")}
+
+    disp = Orchestrator(brain=object(), broadcaster=_Rec(), hotkeys=_FakeHK())
+    assert disp._pressed() is None, "no press is a wake turn"
+    disp.hk.doors["dictate"].start.set()
+    got = disp._pressed()
+    assert got is not None and got.name == "dictate" and not got.start.is_set()
+    disp.hk.doors["ask"].start.set()
+    disp.hk.doors["dictate"].start.set()
+    assert disp._pressed().name == "ask", "the assistant wins a simultaneous press"
+
+    # _dictate: transcribe -> clean -> paste, with the whole pipeline faked (no whisper, no
+    # network, no Win32). The load-bearing behaviours: the cleaned text is delivered; a cleanup
+    # failure falls back to the RAW transcript (dictation must work with no cleanup key); and an
+    # empty transcript is a fault with no paste.
+    # Patch via globals(), NOT `import bridge.orchestrator`: under `-m` the running module is
+    # `__main__` and the import gives a SECOND copy, so patching the import would miss the names
+    # `_dictate` actually reads. globals() is this module's own namespace either way.
+    g = globals()
+    _orig = {n: g[n] for n in ("transcribe", "transform", "paste_text")}
+    try:
+        pasted: list = []
+        g["paste_text"] = lambda text, restore=True: (pasted.append(text) or True)
+        g["transcribe"] = lambda audio: "um so like hello there"
+
+        async def _clean_ok(brain, text, instr):
+            return "Hello there.", None
+
+        g["transform"] = _clean_ok
+        di = Orchestrator(brain=object(), broadcaster=_Rec())
+        di.pump, di._cleanup = _Pump(), object()      # object() skips build_brain (keyring/net)
+        di._dictate(object())
+        assert pasted == ["Hello there."], pasted
+        assert "thinking" in di.bc.states and di.bc.states[-1] == "idle", di.bc.states
+
+        pasted.clear()
+
+        async def _clean_fail(brain, text, instr):
+            return "", Error("auth", "no key")
+
+        g["transform"] = _clean_fail
+        dr = Orchestrator(brain=object(), broadcaster=_Rec())
+        dr.pump, dr._cleanup = _Pump(), object()
+        dr._dictate(object())
+        assert pasted == ["um so like hello there"], \
+            f"cleanup failure must deliver the raw transcript, got {pasted}"
+
+        pasted.clear()
+        g["transcribe"] = lambda audio: ""
+        dn = Orchestrator(brain=object(), broadcaster=_Rec())
+        dn.pump, dn._cleanup = _Pump(), object()
+        dn._dictate(object())
+        assert pasted == [] and dn.bc.states[-1] == "idle", "no transcript -> fault, no paste"
+    finally:
+        g.update(_orig)
+
     print("selfcheck OK: speak/hold split, capture endpoint, barge-in counter, error lines, "
-          "latency table + targets, feedback credits the screen (D25), pings toggle gates earcons")
+          "latency table + targets, feedback credits the screen (D25), pings toggle gates earcons, "
+          "dictation dispatch + cleanup-fallback-to-raw (spec/60)")
 
 
 def main() -> None:
@@ -862,8 +1024,8 @@ def main() -> None:
     ap.add_argument("--silence-ms", type=int, default=SILENCE_MS,
                     help=f"end-of-speech silence in ms (default {SILENCE_MS}); tune by ear")
     ap.add_argument("--voice", default=VOICE, help=f"Kokoro voice (default {VOICE})")
-    ap.add_argument("--model", default=DEFAULT_MODEL,
-                    help=f"brain model id (default {DEFAULT_MODEL}; env GEMMA_BRAIN_MODEL)")
+    ap.add_argument("--model", default=DAEMON_MODEL,
+                    help=f"brain model id (default {DAEMON_MODEL}; env GEMMA_BRAIN_MODEL)")
     ap.add_argument("--auto-end", action="store_true",
                     help="end a hotkey turn on VAD silence too, instead of a second tap (spec/70)")
     args = ap.parse_args()

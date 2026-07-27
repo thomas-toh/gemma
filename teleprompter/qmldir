@@ -1,3 +1,4 @@
 module teleprompter
 singleton Theme 1.0 Theme.qml
 PeekPanel 1.0 PeekPanel.qml
+KeyRecorder 1.0 KeyRecorder.qml

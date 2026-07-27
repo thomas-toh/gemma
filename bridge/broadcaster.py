@@ -252,6 +252,13 @@ class Broadcaster:
                         msg.get("type") if isinstance(msg, dict) else type(msg).__name__)
             return
         log.info("dismiss from the overlay")
+        # A dismissed turn must not be replayed. The retained turn (P-02) exists so a client
+        # joining mid-turn is caught up on what is ON SCREEN — and after a dismiss, nothing is.
+        # Clearing only at `clearsTurn` was not enough: a dismiss arriving after a turn has
+        # finished leaves the whole prompt-and-reply retained indefinitely, so the next client
+        # to connect is shown, in full, the answer the user just took away. Observed 2026-07-24.
+        with self._lock:
+            self._log.clear()
         if self._on_dismiss is not None:
             self._on_dismiss()
 
@@ -434,6 +441,18 @@ def _selfcheck() -> None:
                 b'{"type":"response","delta":"x"}', b'not json', b'[1,2]', b'{"no":"type"}'):
         up._upstream(bad)
     assert fired == [1], "only 'dismiss' may cross the upstream channel"
+    # A dismissed turn must not survive to be replayed at the next client (observed 2026-07-24:
+    # a second overlay connected after a dismiss and was handed the whole prompt-and-reply,
+    # which looks exactly like the daemon re-answering the question).
+    up._remember(m_transcript("what is the capital of Peru", final=True))
+    up._remember(m_response(delta="Lima."))
+    assert up._snapshot_msgs(), "the turn should be retained before the dismiss"
+    up._upstream(b'{"type":"dismiss"}')
+    assert up._snapshot_msgs() == [], "a dismiss must clear the retained turn"
+    # ...and a rejected line must NOT clear it — only a real dismiss counts.
+    up._remember(m_response(delta="Lima."))
+    up._upstream(b'{"type":"state","state":"idle"}')
+    assert up._snapshot_msgs(), "an ignored upstream line must not clear the turn"
 
     # --- transport loaded from status.json (P-01), env override honoured ---
     tp = load_schemas()["status"]["transport"]

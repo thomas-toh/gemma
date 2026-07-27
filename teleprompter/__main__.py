@@ -28,24 +28,41 @@ except (AttributeError, OSError):
     pass
 
 from PySide6.QtCore import QAbstractNativeEventFilter, QUrl              # noqa: E402
-from PySide6.QtQml import QQmlApplicationEngine                          # noqa: E402
+from PySide6.QtQml import (QQmlApplicationEngine, QQmlComponent,          # noqa: E402
+                           QQmlEngine)
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon              # noqa: E402
 
 from teleprompter.decode import HOST, PORT, m_dismiss, targets           # noqa: E402
 from teleprompter.feed import Feed                                       # noqa: E402
 from teleprompter.model import OverlayModel                              # noqa: E402
+from teleprompter.settings_model import SettingsModel                    # noqa: E402
 from teleprompter.tray import Tray                                       # noqa: E402
 
 log = logging.getLogger("gemma.teleprompter")
 
 FONTS_DIR = Path(__file__).resolve().parent / "fonts"
 
-# The design's face is **Inter**, bundled beside this package and registered at startup — so
-# it needs no system install and travels to the Mac unchanged (D10). Supersedes the mockup's
-# Instrument Sans. The rest of the chain only matters if the bundled file goes missing: QML's
-# font.family takes a single name and Qt substitutes silently (on a stock Windows box an
-# absent family lands on Tahoma), so we walk the chain here and say out loud which one won.
-FONT_STACK = ["Inter", "Segoe UI Variable Text", "Segoe UI", "Helvetica Neue", "Arial"]
+# The design's face is **Archivo**, bundled beside this package and registered at startup —
+# so it needs no system install and travels to the Mac unchanged (D10). (Inter → Hanken Grotesk
+# → Archivo over 2026-07-24/25, Thomas's call.) The rest of the chain only matters if the
+# bundled file goes missing: QML's font.family takes a single name and Qt substitutes silently (on a
+# stock Windows box an absent family lands on Tahoma), so we walk the chain here and say out
+# loud which one won.
+FONT_STACK = ["Archivo", "Segoe UI Variable Text", "Segoe UI", "Helvetica Neue", "Arial"]
+
+
+# 0.015 em at the 16px body size. Kept here (Python) rather than Theme.qml because it rides the
+# application font, which is a QFont set before any QML loads — not a per-element token.
+TRACKING_PX = 16 * 0.015
+
+
+def apply_tracking(app) -> None:
+    """Add TRACKING_PX of absolute letter spacing to the application font, which every QML Text
+    inherits unless it sets its own. The checks call this too, so their metrics match the app's."""
+    from PySide6.QtGui import QFont
+    f = app.font()
+    f.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, TRACKING_PX)
+    app.setFont(f)
 
 
 def load_bundled_fonts() -> None:
@@ -275,6 +292,35 @@ def stamp_overlay_styles(win) -> None:
                           (cur | WS_EX_NOACTIVATE | WS_EX_TOPMOST) & ~WS_EX_TRANSPARENT)
 
 
+def round_corners(win) -> None:
+    """Ask DWM to round the settings window's corners (D29).
+
+    The window draws its own caption (Edge/Chrome style), so it is frameless — and a frameless
+    window keeps square corners unless it asks. DWMWA_WINDOW_CORNER_PREFERENCE (attribute 33,
+    Windows 11) with DWMWCP_ROUND is the whole ask; on Windows 10 the call is simply ignored
+    and the corners stay square, which is what Windows 10 does everywhere anyway.
+
+    Also sets the dark caption attribute. There is no caption to darken while frameless, but it
+    costs one call and stops a light strip flashing on any build where Qt gives the window a
+    frame after all.
+    """
+    if sys.platform != "win32":
+        return
+    import ctypes
+    from ctypes import wintypes
+    DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE = 20, 33
+    DWMWCP_ROUND = 2
+    try:
+        hwnd = wintypes.HWND(int(win.winId()))
+        for attr, val in ((DWMWA_USE_IMMERSIVE_DARK_MODE, 1),
+                          (DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND)):
+            v = ctypes.c_int(val)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, ctypes.c_int(attr), ctypes.byref(v), ctypes.sizeof(v))
+    except Exception as e:                            # pragma: no cover — cosmetic only
+        log.debug("could not set the window's DWM attributes: %s", e)
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO, datefmt="%H:%M:%S",
                         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
@@ -293,6 +339,19 @@ def main() -> int:
 
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)   # the island hides at idle — that is not a quit
+    # Text render mode is left at Qt Quick's DEFAULT (distance-field). Two alternatives were
+    # tried on 2026-07-25 and both looked worse on this display: NativeTextRendering went jagged
+    # on the translucent island / fractional DPI, and CurveTextRendering was no better. The
+    # default at least antialiases everywhere; the softness it trades for that is the lesser
+    # evil. Revisit per-surface only if a single crisp surface is worth the split.
+
+    # A hair of positive tracking on ALL text (Thomas, 2026-07-25). QML Text inherits the
+    # application font's letterSpacing, so one place does it everywhere — the settings window
+    # and the island alike — rather than 24 per-element lines. Absolute pixels, not a percentage:
+    # TRACKING_PX = 0.015 em at the 16px body size; across 14–18px that is 0.013–0.017 em, an
+    # imperceptible spread, so a flat value honours "0.015em generally" without scaling machinery.
+    # An element that sets its own letterSpacing (the WIDE display names, the brand) still overrides.
+    apply_tracking(app)
     load_bundled_fonts()                   # must follow QApplication, precede pick_font()
 
     model = OverlayModel(show_latency=args.latency)
@@ -301,6 +360,11 @@ def main() -> int:
     # singleton (the design tokens).
     engine.addImportPath(str(Path(__file__).resolve().parent.parent))
     engine.rootContext().setContextProperty("overlay", model)   # not "model": Repeater shadows it
+    # The settings window's model. Built now (it is a bare QObject over a JSON file) but the
+    # WINDOW is not — spec/70 §2: spawned only when opened, so an unopened settings screen
+    # costs nothing but this object.
+    cfg = SettingsModel()
+    engine.rootContext().setContextProperty("cfg", cfg)
     engine.rootContext().setContextProperty("fontFamily", pick_font())
     engine.rootContext().setContextProperty("targets", targets())   # latency targets (D25)
     reduce_state = reduced_motion()
@@ -379,9 +443,47 @@ def main() -> int:
     # Qt's setMask is SetWindowRgn on Windows, which clips PAINTING too (measured 70% painted
     # before, 10% after). The filter affects hit-testing only. D27; proven in sandbox/qml_spike.
 
+    # The settings window (D29), built on first open and kept afterwards — reopening is common
+    # enough that rebuilding it each time would be wasteful, and it holds no feed state to go
+    # stale. Closing it hides it; app.setQuitOnLastWindowClosed(False) above means that is not
+    # a quit, exactly as the island hiding is not.
+    settings_win: dict = {}
+
+    def open_settings() -> None:
+        win_ = settings_win.get("win")
+        if win_ is not None:
+            # Reopening. A closed window is only hidden, so showing it again is all that is
+            # needed — unless its C++ half has gone, in which case the Python wrapper is a
+            # husk and every call on it raises. That is what made the second open do nothing.
+            try:
+                win_.show()
+                win_.raise_()
+                win_.requestActivate()
+                return
+            except RuntimeError:
+                log.info("settings window was collected — rebuilding it")
+                settings_win.pop("win", None)
+
+        comp = QQmlComponent(
+            engine, QUrl.fromLocalFile(str(Path(__file__).resolve().parent / "SettingsWindow.qml")))
+        win_ = comp.create(engine.rootContext())
+        if win_ is None:
+            for err in comp.errors():
+                log.error("settings window: %s", err.toString())
+            return
+        # The engine hands QML-created objects to its JavaScript garbage collector, which will
+        # happily take this one once it is hidden — a Python reference does not stop that.
+        # Claiming C++ ownership is what makes the window survive being closed.
+        QQmlEngine.setObjectOwnership(win_, QQmlEngine.ObjectOwnership.CppOwnership)
+        settings_win["win"] = win_
+        win_.show()
+        round_corners(win_)          # after show(): winId only exists once there is a window
+        win_.raise_()
+        win_.requestActivate()
+
     tray = None
     if QSystemTrayIcon.isSystemTrayAvailable():
-        tray = Tray(app, model)                                          # noqa: F841
+        tray = Tray(app, model, on_settings=open_settings)                # noqa: F841
     else:
         log.warning("no system tray available — no way to quit but Ctrl-C")
 

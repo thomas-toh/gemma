@@ -1,0 +1,199 @@
+{
+  "$comment": "Gemma user settings — EXECUTABLE TRUTH (CLAUDE.md hard rule 3). bridge/settings.py derives its DEFAULTS from `settings` here, and teleprompter/SettingsWindow.qml renders its panes from the same file, so a knob is added by editing THIS and nothing else. Never restate a default or a label in code.",
+  "version": "0.2.0",
+
+  "panes": [
+    {
+      "id": "general",
+      "label": "General",
+      "groups": [
+        { "id": "profile",     "label": "Profile" },
+        { "id": "preferences", "label": "Preferences" }
+      ]
+    },
+    { "id": "models",   "label": "Model selection" },
+    { "id": "triggers", "label": "Triggers" }
+  ],
+
+  "$comment_settings": "One entry per knob. `built: false` renders the row dimmed and its control disabled — the setting is decided but its consumer does not exist yet. `pane: null` means no UI row at all (the value is still read by the daemon). `help` is shown only where the consequence cannot be inferred from the label.",
+  "settings": {
+    "profile_name": {
+      "type": "text", "default": "", "pane": "general", "group": "profile",
+      "label": "Full name", "built": true,
+      "$comment": "Profile fields persist today; the PERSONA that reads them is M0.5 (spec/00, Track B). Recorded in STATE as owed."
+    },
+    "profile_called": {
+      "type": "text", "default": "", "pane": "general", "group": "profile",
+      "label": "How should Gemma call you?", "built": true
+    },
+    "profile_work": {
+      "type": "text", "default": "", "pane": "general", "group": "profile",
+      "label": "What describes your work?", "built": true
+    },
+    "profile_instructions": {
+      "type": "textarea", "default": "", "pane": "general", "group": "profile",
+      "label": "Specific instructions for Gemma", "built": true
+    },
+
+    "theme": {
+      "type": "enum", "default": "system", "pane": "general", "group": "preferences",
+      "label": "Theme", "control": "segmented",
+      "choices": ["light", "dark", "system"], "built": false,
+      "$comment": "Dimmed: the app draws one (dark) theme, so choosing light would change nothing. Un-dim when a light palette exists."
+    },
+    "language": {
+      "type": "enum", "default": "English", "pane": "general", "group": "preferences",
+      "label": "Language", "control": "dropdown", "built": false,
+      "choices": ["English", "Fran\u00e7ais", "Deutsch", "Espa\u00f1ol", "Italiano",
+                  "Nederlands", "Portugu\u00eas", "\u4e2d\u6587", "\u65e5\u672c\u8a9e"],
+      "$comment": "Dimmed: nothing is localised, and STT/TTS are English models (spec/00 fixed platform decisions)."
+    },
+    "pings": {
+      "type": "bool", "default": true, "pane": "general", "group": "preferences",
+      "label": "Pings",
+      "help": "Audible tones when Gemma starts listening, completes a task or encounters an error.",
+      "built": true,
+      "$comment": "D28. The three designed earcons; a separate channel from spoken TTS."
+    },
+    "listen_for_me": {
+      "type": "bool", "default": false, "pane": "general", "group": "preferences",
+      "label": "Listen for me",
+      "help": "Always-on microphone. Listens for its wake word, and lets you talk over a spoken reply to cut it short.",
+      "built": true,
+      "$comment": "D23. On = wake word + barge-in; off = the mic opens only on a keypress. Drives the tray's on-air lamp (D29)."
+    },
+    "tts": {
+      "type": "bool", "default": false, "pane": "general", "group": "preferences",
+      "label": "Read for me",
+      "help": "Answers are read aloud as well as shown.",
+      "built": true,
+      "$comment": "D23/D28. Key name stays `tts` \u2014 the file already written to %APPDATA% uses it."
+    },
+
+    "models": {
+      "type": "object", "default": {}, "pane": "models",
+      "label": "Model selection", "built": true,
+      "$comment": "Providers the user has added, keyed by provider id -> {on, model, effort, thinking, ...}. Rendered as cards, not a row. KEY ORDER IS THE DISPLAY ORDER \u2014 moveProvider rewrites the dict to reorder."
+    },
+    "primary": {
+      "type": "string", "default": "", "pane": null,
+      "label": "Primary model", "built": true,
+      "$comment": "Which enabled provider answers, while more than one is enabled. Stands in for the per-role router (spec/20 reserved, STATE parked)."
+    },
+    "cleanup_dictation_on": {
+      "type": "bool", "default": true, "pane": null,
+      "label": "Tidy dictation", "built": false,
+      "$comment": "Paired with `cleanup_dictation` via its `toggledBy` \u2014 one row, two values."
+    },
+    "cleanup_dictation": {
+      "type": "provider", "default": "", "pane": "models",
+      "label": "Tidy dictation", "toggledBy": "cleanup_dictation_on", "built": false,
+      "$comment": "S-06/D15. Consumer is Track D's dictation pipeline, unbuilt."
+    },
+    "cleanup_prompts_on": {
+      "type": "bool", "default": true, "pane": null,
+      "label": "Tidy spoken prompts", "built": false
+    },
+    "cleanup_prompts": {
+      "type": "provider", "default": "", "pane": "models",
+      "label": "Tidy spoken prompts", "toggledBy": "cleanup_prompts_on", "built": false,
+      "$comment": "S-06/D15 --clean-prompts. Serves the ASK door, but filed under Dictate with its sibling (Thomas, 2026-07-24) \u2014 both are transcript cleanup. Unbuilt."
+    },
+
+    "hotkey_ask": {
+      "type": "binding", "default": "ctrl+alt+1", "pane": "triggers",
+      "label": "Ask", "built": true,
+      "$comment": "D20. Parsed by bridge/hotkeys.py, which rejects a modifier-less binding."
+    },
+    "hotkey_dictate": {
+      "type": "binding", "default": "ctrl+alt+2", "pane": "triggers",
+      "label": "Dictate", "built": true,
+      "$comment": "D20. Registered today; its pipeline is Track D."
+    },
+    "auto_end": {
+      "type": "bool", "default": false, "pane": "triggers",
+      "label": "Listen for when I stop talking",
+      "help": "Gemma automatically recognises the end of your sentence.",
+      "built": true,
+      "$comment": "Live today on the VAD silence cut (silence_ms). Semantic endpointing (M1, STATE parked) replaces the MECHANISM later with no UI change \u2014 the help text describes the destination, decided 2026-07-24."
+    },
+    "silence_ms": {
+      "type": "int", "default": 1000, "pane": null,
+      "label": "Silence before a turn ends", "built": true,
+      "$comment": "No UI row (decided 2026-07-24): it tunes the interim mechanism behind auto_end and retires when semantic endpointing lands. --silence-ms still overrides."
+    },
+    "skip_permissions": {
+      "type": "bool", "default": false, "pane": "triggers",
+      "label": "Dangerously skip permissions",
+      "help": "Certain tasks require permission. These can be skipped, but you bear all consequences for any action taken while permissions are skipped.",
+      "built": false,
+      "$comment": "Supersedes D20's narrower `auto_apply`: skips EVERY gate including the Tier-3 confirmation. That converts a spec/50 + CLAUDE.md rule-4 design constant into a preference and needs its own decision record before the executor lands (M1). Placeholder disclaimer."
+    }
+  },
+
+  "$comment_not_chat": "Substrings that mark a live-fetched model id as something other than a chat model, dropped from the picker by bridge/brains/providers.py. A real problem rather than a speculative one: measured 2026-07-24, `GET /models` returns 15 ids for Groq and 129 for OpenAI, including speech-to-text, text-to-speech, embeddings, image generation and safety classifiers — none of which can serve a turn, so offering them as a brain is a trap. Deliberately conservative: matched anywhere in the id, so anything ambiguous is left IN and merely looks odd, rather than hiding a model the user wanted. Add a substring here, never in code.",
+  "not_chat": ["whisper", "embedding", "tts-", "dall-e", "moderation", "prompt-guard", "safeguard", "orpheus", "rerank", "image", "babbage", "davinci"],
+
+  "$comment_providers": "The catalogue the Add-a-model flow offers, and the only place a provider's reachability is described (hard rule 3 — bridge/brains/providers.py reads this, never restates it). Per card: `wire` names the protocol that serves it, and there are only two — `anthropic` (B1, bridge/brains/claude.py) and `openai` (B2, bridge/brains/compat.py, one adapter for the other ten). `api` is the base URL for a cloud provider, whose hosts genuinely differ; a local runner declares a user-editable `endpoint` (host:port) instead and B2 composes `http://<endpoint>/v1`, the compat convention Ollama, LM Studio and llama.cpp all share. `env` is the environment variable that stands in when the credential store holds nothing (CI, headless). `models` and `capabilities` are the OFFLINE FALLBACK: the live list comes from the provider's own `GET {api}/models` (Anthropic via its SDK), fetched off a background thread by the settings window, so a card shows what the account can really reach. `adapter` says whether bridge/brains/ can CALL this provider — true everywhere as of D30, because one OpenAI-compatible adapter serves every non-Anthropic entry. Live-verified so far: Anthropic and Groq; the rest share their exact code path but nobody has held a key to them here yet.",
+  "providers": {
+    "anthropic": {
+      "name": "Anthropic", "where": "cloud", "auth": "key", "credential": "anthropic",
+      "wire": "anthropic", "api": "https://api.anthropic.com/v1", "env": "ANTHROPIC_API_KEY",
+      "adapter": true,
+      "models": ["claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"],
+      "capabilities": { "effort": ["low", "medium", "high", "xhigh", "max"], "thinking": true }
+    },
+    "openai": {
+      "name": "OpenAI", "where": "cloud", "auth": "key", "credential": "openai",
+      "wire": "openai", "api": "https://api.openai.com/v1", "env": "OPENAI_API_KEY",
+      "adapter": true, "models": [], "capabilities": { "effort": ["low", "medium", "high"] }
+    },
+    "google": {
+      "name": "Google", "where": "cloud", "auth": "key", "credential": "google",
+      "$comment": "Reached through Gemini's OpenAI-compatibility layer rather than its own genai SDK, so it costs no second wire. Its `thinking` control is not an OpenAI-wire parameter, which is why the capability is declared but B2 does not send it yet.",
+      "wire": "openai", "api": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "env": "GEMINI_API_KEY",
+      "adapter": true, "models": [], "capabilities": { "thinking": true }
+    },
+    "groq": {
+      "name": "Groq", "where": "cloud", "auth": "key", "credential": "groq",
+      "wire": "openai", "api": "https://api.groq.com/openai/v1", "env": "GROQ_API_KEY",
+      "adapter": true, "models": [], "capabilities": {}
+    },
+    "mistral": {
+      "name": "Mistral", "where": "cloud", "auth": "key", "credential": "mistral",
+      "wire": "openai", "api": "https://api.mistral.ai/v1", "env": "MISTRAL_API_KEY",
+      "adapter": true, "models": [], "capabilities": {}
+    },
+    "xai": {
+      "name": "xAI", "where": "cloud", "auth": "key", "credential": "xai",
+      "wire": "openai", "api": "https://api.x.ai/v1", "env": "XAI_API_KEY",
+      "adapter": true, "models": [], "capabilities": { "thinking": true }
+    },
+    "deepseek": {
+      "name": "DeepSeek", "where": "cloud", "auth": "key", "credential": "deepseek",
+      "wire": "openai", "api": "https://api.deepseek.com/v1", "env": "DEEPSEEK_API_KEY",
+      "adapter": true, "models": [], "capabilities": { "thinking": true }
+    },
+    "openrouter": {
+      "name": "OpenRouter", "where": "cloud", "auth": "key", "credential": "openrouter",
+      "wire": "openai", "api": "https://openrouter.ai/api/v1", "env": "OPENROUTER_API_KEY",
+      "adapter": true, "models": [], "capabilities": {}
+    },
+    "ollama": {
+      "name": "Ollama", "where": "local", "auth": "endpoint", "endpoint": "localhost:11434",
+      "wire": "openai",
+      "adapter": true, "models": [], "capabilities": { "temperature": true, "context": true }
+    },
+    "lmstudio": {
+      "name": "LM Studio", "where": "local", "auth": "endpoint", "endpoint": "localhost:1234",
+      "wire": "openai",
+      "adapter": true, "models": [], "capabilities": { "temperature": true, "context": true }
+    },
+    "llamacpp": {
+      "name": "llama.cpp", "where": "local", "auth": "endpoint", "endpoint": "localhost:8080",
+      "wire": "openai",
+      "adapter": true, "models": [], "capabilities": { "temperature": true, "context": true }
+    }
+  }
+}

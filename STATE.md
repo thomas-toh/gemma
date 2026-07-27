@@ -8,7 +8,7 @@ start, update it in the same commit as the work · when a step closes, collapse 
 entry to one or two lines — durable knowledge moves out (behaviour → spec · run
 instructions → README · findings → NOTES.md · decisions → a D-number in spec/00).
 
-Last updated: 2026-07-23
+Last updated: 2026-07-24
 
 ## Handoff — start here (2026-07-23)
 
@@ -25,8 +25,14 @@ teleprompter width fix. Every code fix is guarded; replay 4/4; all selfchecks gr
    D22**). **Still owed, NOT folded in this pass:** 7a/7b dead-air gaps, latency-readout styling.
 2. **Conversation / memory model** — the parked "chats vs dump-everything, want in between"
    design (below). Unblocks the B-02 proactive-overflow guard.
-3. **Settings / config page + API tie-ins** — **this is the M0-close gate**; also the home for
-   multi-provider routing (per-role cleanup engine, S-06) and the "listen for me" switch.
+3. ~~**Settings / config page + API tie-ins**~~ **BUILT — D29 (2026-07-27); was the M0-close gate.**
+   A schema-driven QML window (`spec/schemas/settings.json`): **Models** (editor-card roster —
+   model well/picker, per-provider dials, on/off, primary, key-status, gear→Add/Edit sheet) +
+   **Config** (profile · preferences · triggers, coded list). Front-end guarded by
+   `settings_check` (CI-wired, fails on any QML warning). Adapters landed alongside (D30); fonts
+   Archivo + Martian Mono bundled, Instrument Serif bundled-but-gated. **Still owed:** the routing
+   wire-up (`primary` written-but-unread), the AddCard dashed border (Qt), roster reorder, and the
+   settings not yet surfaced (STT model · wake phrase · TTS voice · word-replacement — spec/70 §3).
 4. **Sentence-streamed TTS + earcon redo, together** — this is effectively **M0.5 "It speaks
    well"**: streaming FORCES the speak/hold decision (model-tagged split replaces the ≤2-sentence
    heuristic), and carries the persona prompt + speech normalization + the "read all when TTS on"
@@ -587,6 +593,57 @@ install.)*
 - **Works now:** B1 smoke test (`scripts/b1_smoke.py`) green on Windows — auth, streaming,
   tool-call/tool-loop all PASS. Dedicated "gemma" key (spend-capped) lives in Windows
   Credential Manager under service `gemma`.
+- **DONE 2026-07-24 (D30) — every provider the settings window offers now has an adapter.** Was
+  OWED the same day: the Add-a-model flow listed eleven providers and only Anthropic could be
+  called. **One adapter covers ten of them** — `bridge/brains/compat.py` (B2), because everything
+  except Anthropic speaks OpenAI's `/v1/chat/completions` and the only differences are a base URL
+  and a credential. So spec/20's **B2 row was widened** ("any OpenAI-compatible endpoint, cloud or
+  local") rather than a fourth row added, and B2 lands before M2 — M2 "it's local" is now a
+  question of which endpoint it points at. Groq works as a **brain**, not just as the D15/S-06
+  cleanup engine (Thomas's ask).
+  **Reachability became schema truth** (`settings.json` → v0.2.0): each card gained `wire`,
+  `api`, `env` and `adapter: true`; `bridge/brains/providers.py` reads it and no adapter hardcodes
+  a host, key name or model id — B1 stopped hardcoding its own keyring account in the same pass.
+  **Fixed a live B1 fault on the way:** `tools.json` spells `parameters` and carries `tier`,
+  Anthropic requires `input_schema` and rejects unknown fields, and the registry was passed
+  through **verbatim** — the first real tool call would have 400'd and surfaced as an unexplained
+  apology (B-02 maps 400 → generic). Tool translation is now the adapter's job (spec/20) and
+  `tier` never leaves the machine. Invisible until now only because M0 passes `[]`.
+  **Live model lists + a Test button** (Thomas, same day) replace the offline `models` arrays,
+  which are **empty for every provider but Anthropic**: `GET {api}/models` off a worker thread
+  (Anthropic via its SDK), with a schema `not_chat` list dropping ids that cannot serve a turn —
+  Groq returns 15 of which 7 are speech/TTS/safety, OpenAI 129 including embeddings and images.
+  Fetching the list IS the key test, so `probe()` returns `(ids, status)` over a closed set
+  (`ok · nokey · auth · unreachable · empty · error`) — otherwise a wrong key and a dead network
+  are the same empty picker. It tests the **typed** key: the Add flow stores a key only on commit,
+  so probing the store would test the previous one — which was why Thomas's pasted OpenAI key
+  showed "Nothing to choose yet". Two QML bindings also had to move from `modelsFor(id)` to the
+  `modelOptions` **property**, because QML does not track a plain function call and so never
+  re-evaluated when a fetch landed (the same trap the `keys` property already documented).
+  **Verified live: Anthropic (11) · OpenAI (108) · Groq (8)** — fetch, a streamed Groq turn with
+  usage normalised, plus a wrong key reading `auth` and an absent key `nokey`. The remaining
+  providers share the exact code path, untested for want of keys.
+  **The router is deliberately NOT built** (Thomas, explicitly): `primary` stays written-but-unread
+  and the orchestrator still constructs B1 directly — recorded in spec/20 §Routing as a known gap,
+  not hidden in the UI. Guarded: `bridge.brains.providers`, `compat --selfcheck`,
+  `claude --selfcheck` (translation against the real registry), `teleprompter.settings_model`; all
+  four CI-wired.
+- **Agnosticism pass (2026-07-25, Thomas's ask — "the adapters ... don't have a preference for any
+  model").** B1 baked `claude-opus-4-8` as its class default; B2 required an explicit model — an
+  asymmetric preference. Both adapters now carry **no** default model and yield a clean
+  `Error("unknown", "no model chosen…")` for a modelless turn (verified live on both). The daemon's
+  pre-router default moved out of `claude.py` into `orchestrator.DAEMON_MODEL` (env-overridable,
+  necessarily a Claude model while the orchestrator still constructs B1 directly). spec/20 records
+  the rule. Router still out of scope.
+- **DONE 2026-07-25 — the `transform` verb** (dictation cleanup, D12 — "transform, never answer").
+  A **free function over any adapter's `converse`** (`bridge/brains/base.py`), not a per-adapter
+  method: a transform is a constrained conversation (guardrail system prompt `TRANSFORM_SYSTEM`, no
+  tools, no history, buffered), so it reuses every adapter's streaming/error/lifetime and works on
+  Groq, Claude or local identically. Returns `(text, Error|None)` — one taxonomy. Two per-call
+  overrides ride on `Session` (`max_tokens`, so a long dictation isn't truncated at the 1024 spoken
+  cap; `temperature`, so cleanup runs deterministic), honoured by both adapters. spec/20 records it.
+  Verified live on Groq (filler + duplicates removed, question NOT answered). Guarded:
+  `bridge.brains.base` (CI-wired via `-c`).
 - **Owed:** first-token re-measure — the recorded **1817 ms** ran with `chunks=1`
   (whole short reply in one chunk, first≈total), so it's really "time to full short
   response," cold; well above the ~300–900 ms ballpark noted in `b1_smoke.py`.
@@ -604,7 +661,10 @@ install.)*
 
 ## Track D — Dictation (spec/00 D12 → MD)
 
-- **Works now:** nothing. Design settled 2026-07-18 (D12; study:
+- **Works now (D1, 2026-07-25):** the dictate door end to end — capture → STT → Groq cleanup →
+  paste at the caret (`spec/60_dictation.md`; `orchestrator._dictate` + `bridge/paste.py`). See the
+  build note below. Owed: live keypress on the box · D2 overlay states · D3 rewrite · per-mode STT.
+- **Design settled 2026-07-18 (D12; study:
   `docs/01_scoping/Reviews/2026-07-18_1643_Review-gemma-voiceink-codebases.md`):
   **trigger-is-the-mode** — wake word =
   assistant, global hotkey = dictation (hybrid: tap = toggle, hold ≥0.5 s =
@@ -621,21 +681,26 @@ install.)*
   the assistant path · **rewrite (D20):** an *ask-door
   outcome*, not a mode — propose-then-tap on the Teleprompter; `auto_apply` (spec/70,
   default off); slice D3.
-- **UNBLOCKED 2026-07-22:** the M0 acceptance run passed, discharging the 2026-07-18 condition
-  (validate the shared capture path live before building on it). The dictate key is already
-  registered (`ctrl+alt+2`) and logs on press; only its pipeline is missing.
-  (The D17 review gate cleared 2026-07-21 → **D20**, the two-door model.)
+- **DONE 2026-07-25 — D1 build slice: the dictate door works end to end.** ① `spec/60_dictation.md`
+  drafted + `transform` added to spec/20 (above). ② Pipeline built: dictate key (`ctrl+alt+2`) →
+  `_capture` (shared with the assistant, key endpoint) → `transcribe` → `transform` cleanup (Groq)
+  → **paste at the caret** (`bridge/paste.py`: clipboard + synthetic Ctrl+V via stdlib ctypes,
+  daemon-issued because the overlay never holds focus; restores the prior clipboard text). Dispatch
+  is by **`door.name`** in `_pressed()` — the fix for the review's flagged seam: `_pressed` has two
+  callers (`serve` and `_speak`), and a dictate press mid-reply now cuts TTS and dictates rather
+  than being fed to the brain. Cleanup is an **enhancement, not a gate**: on failure the RAW
+  transcript is pasted, so dictation works with no Groq key and nothing leaves the machine.
+  **Verified end to end on the recorded WAVs** (`key_short`, `key_long_pause`): STT → Groq cleanup
+  (filler/dup removed, contractions fixed, question NOT answered) → clipboard. Guarded:
+  `bridge.paste` (CI) + dictation dispatch/fallback in the orchestrator selfcheck (CI). Live keypress
+  on the box still owed (like every hotkey path, RegisterHotKey is proven live separately).
 - **In flight:** —
-- **Next (when unblocked):** ① draft
-  `spec/60_dictation.md` + add `transform` to spec/20 (Contract B), encoding D20's
-  two-door scheme · ② D1 build slice: trigger → capture → whisper → transform →
-  paste, cleanup included from day one (decided 2026-07-18; reuses Track G's
-  `bridge/hotkeys/` module — D16) · ③ measure `large-v3-turbo` vs `small.en` vs
-  **Parakeet** (sherpa-onnx = torch-free ONNX path; **gated** — adopt only if a real win,
-  discuss first) on the 5080 (latency + error rate on dictated text) for the per-mode
-  model default · ④ D2: overlay dictation states (recording + mic
-  level · transcribing · transforming · pasted) on the D13 status feed · ⑤ D3: ask-door
-  rewrite (D20, propose-then-tap).
+- **Next:** ③ measure `large-v3-turbo` vs `small.en` vs **Parakeet** (sherpa-onnx = torch-free ONNX
+  path; **gated** — adopt only if a real win, discuss first) on the 5080 for the per-mode STT model
+  default (a parallel session is on Parakeet) · ④ **D2**: overlay dictation states (recording + mic
+  level · transcribing · transforming · pasted) on the status feed — this is the UI/UX session's
+  surface · ⑤ **D3**: ask-door rewrite (D20, propose-then-tap) · plus the **D15 word-replacement**
+  schema (the pipeline has the seam; the table doesn't exist yet).
 - **Deferred at design time:** voice-switch into dictation ("take dictation") ·
   per-app modes (foreground-window detection) · streaming partials ·
   browser-URL / screen-OCR context blocks.

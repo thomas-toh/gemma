@@ -1,12 +1,15 @@
-r"""User settings — the config file the tray writes and the bridge reads.
+r"""User settings — the config file the settings window writes and the bridge reads.
 
-The first step of spec/70's settings surface (the full settings page is still owed). One
-small JSON file in the per-user config dir: the tray (teleprompter process) writes it, the
-bridge reads it FRESH at each decision point, so a toggle takes effect on the next turn with
-no restart and no file-watcher. Stdlib only — the bridge must read this headless, without Qt.
+One small JSON file in the per-user config dir: the settings window (teleprompter process)
+writes it, the bridge reads it FRESH at each decision point, so a change takes effect on the
+next turn with no restart and no file-watcher. Stdlib only — the bridge must read this
+headless, without Qt.
 
-spec/70 §2: settings travel by FILE, not over the status socket — this is that file. When the
-real settings page lands it grows from here: same location, same DEFAULTS, same load/set.
+spec/70 §2: settings travel by FILE, not over the status socket — this is that file.
+
+The knobs themselves live in `spec/schemas/settings.json` (hard rule 3), not here: defaults,
+labels, help text and which pane a row belongs to are all read from it, by this module and by
+the settings window alike. Adding a setting means editing that JSON and nothing else.
 """
 from __future__ import annotations
 
@@ -15,20 +18,30 @@ import logging
 import os
 from pathlib import Path
 
+from bridge.config import load_schemas
+
 log = logging.getLogger("gemma.settings")
 
-# Defaults in ONE place — the source of truth until a real settings schema lands (spec/70 §4).
-# A missing file or missing key falls back to these.
-DEFAULTS: dict[str, object] = {
-    "tts": False,     # spoken replies — a capability behind a switch, default OFF (spec/40, D23)
-    "pings": True,    # earcons (the three device pings) — default ON
-}
+
+def schema() -> dict:
+    """The whole settings schema: `panes`, `settings`, `providers`."""
+    return load_schemas()["settings"]
+
+
+def spec(key: str) -> dict:
+    """One setting's declaration (type, default, label, help, pane, built)."""
+    return schema()["settings"].get(key, {})
+
+
+def defaults() -> dict[str, object]:
+    """Every default, derived from the schema — never restated in Python (hard rule 3)."""
+    return {k: v["default"] for k, v in schema()["settings"].items()}
 
 
 def settings_path() -> Path:
     r"""%APPDATA%\gemma\settings.json on Windows; ~/.config/gemma/settings.json elsewhere.
     GEMMA_SETTINGS overrides the whole path (tests + power users), matching spec/70's env-override
-    pattern. Location chosen here (spec/70 §4 open question) so the tray and bridge agree."""
+    pattern. Location chosen here (spec/70 §4) so every writer and reader agrees."""
     override = os.environ.get("GEMMA_SETTINGS")
     if override:
         return Path(override)
@@ -39,8 +52,8 @@ def settings_path() -> Path:
 
 def _read_raw() -> dict:
     """Only the keys actually written to the file (no defaults merged in), so the file stays a
-    minimal record of user overrides and DEFAULTS can evolve. Missing/broken file -> {}: settings
-    must never be the reason the daemon won't start."""
+    minimal record of user overrides and the schema's defaults can evolve. Missing/broken file
+    -> {}: settings must never be the reason the daemon won't start."""
     try:
         return json.loads(settings_path().read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -51,39 +64,58 @@ def _read_raw() -> dict:
 
 
 def load() -> dict:
-    """Every setting: defaults under whatever the file overrides."""
-    return {**DEFAULTS, **_read_raw()}
+    """Every setting: schema defaults under whatever the file overrides."""
+    return {**defaults(), **_read_raw()}
 
 
 def get(key: str):
-    """One setting by name, falling back to its default (or None if unknown)."""
-    return load().get(key, DEFAULTS.get(key))
+    """One setting by name, falling back to its schema default (or None if unknown)."""
+    return load().get(key, defaults().get(key))
 
 
 def set(key: str, value) -> None:
     """Write one setting, preserving the others already in the file. Creates the dir/file on
-    first write. The tray calls this; the bridge only reads."""
+    first write. The settings window calls this; the bridge only reads."""
     path = settings_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     data = _read_raw()
     data[key] = value
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    # ponytail: values are logged, so never put a secret in this file — keys live in the OS
+    # credential store (spec/50 rule 10). `models` is the only structured value and holds none.
     log.info("setting %s = %r", key, value)
 
 
 if __name__ == "__main__":
-    # ponytail: runnable self-check for the read/write/merge — points at a throwaway file so it
-    # never touches the real settings.
+    # ponytail: runnable self-check for the read/write/merge and the schema derivation — points
+    # at a throwaway file so it never touches the real settings.
     import tempfile
 
-    with tempfile.TemporaryDirectory() as d:
-        os.environ["GEMMA_SETTINGS"] = str(Path(d) / "settings.json")
-        assert load() == DEFAULTS, "missing file must yield defaults"
+    d = defaults()
+    assert d["tts"] is False and d["pings"] is True, d
+    assert d["listen_for_me"] is False, "the mic must be shut by default (D23)"
+    assert d["skip_permissions"] is False, "a permission bypass must never default on"
+    # Every declared setting is renderable: it names a real pane, or opts out with null.
+    panes = {p["id"] for p in schema()["panes"]}
+    for key, s in schema()["settings"].items():
+        assert s["pane"] is None or s["pane"] in panes, f"{key}: unknown pane {s['pane']!r}"
+        assert "default" in s and "type" in s, f"{key}: incomplete declaration"
+    # A provider offered in Manage must say where it runs and how it authenticates.
+    for pid, p in schema()["providers"].items():
+        assert p["where"] in ("cloud", "local"), pid
+        assert p["auth"] in ("key", "endpoint"), pid
+
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ["GEMMA_SETTINGS"] = str(Path(tmp) / "settings.json")
+        assert load() == d, "missing file must yield the schema defaults"
         assert get("tts") is False and get("pings") is True
         assert get("nope") is None, "unknown key -> None"
         set("tts", True)
         assert get("tts") is True, "set() must persist"
         assert get("pings") is True, "set() must leave other keys at their default"
-        set("pings", False)
-        assert load() == {"tts": True, "pings": False}, "both overrides survive"
-    print(f"settings selfcheck OK: defaults {DEFAULTS}, get/set/preserve, path -> {settings_path()}")
+        set("models", {"anthropic": {"on": True, "model": "claude-opus-4-8"}})
+        assert get("models")["anthropic"]["model"] == "claude-opus-4-8", "structured values survive"
+        assert get("tts") is True, "a structured write must not disturb earlier keys"
+    os.environ.pop("GEMMA_SETTINGS", None)
+    print(f"settings selfcheck OK: {len(d)} settings from the schema, "
+          f"{len(schema()['providers'])} providers, path -> {settings_path()}")

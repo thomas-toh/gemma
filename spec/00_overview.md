@@ -53,10 +53,10 @@ per-track *sub-steps* live in `STATE.md`; the frozen M0 build order is in docs/0
 | Audio pipeline (wake, VAD, STT, TTS, earcons) | [40_interaction](40_interaction.md) | `bridge/audio/` | M0 |
 | **Teleprompter** (P) — overlay, separate process on the status feed | [40_interaction](40_interaction.md) § Visual output | `teleprompter/` | v0 pre-M0-run (D13/D19) · dictation states at D2 |
 | Orchestrator (state machine) | [40_interaction](40_interaction.md) | `bridge/orchestrator.py` | M0 (build step 6) |
-| Brain adapters | [20_contract_b](20_contract_b.md) | `bridge/brains/` | B1 at M0 · B2 at M2 · B3 at M4 |
+| Brain adapters | [20_contract_b](20_contract_b.md) | `bridge/brains/` | B1 + B2 built (D30) · B3 at M4 |
 | Tool registry + executor | [30_contract_t](30_contract_t.md) + [schemas/tools.json](schemas/tools.json) | `bridge/tools/` | M1 |
 | Security posture | [50_security](50_security.md) | cross-cutting | always (BINDING) |
-| Dictation (hotkey → transform → paste) | 60_dictation (owed — drafted after the M0 run) | `bridge/dictation/` | MD |
+| Dictation (hotkey → transform → paste) | [60_dictation](60_dictation.md) | `orchestrator._dictate` + `bridge/paste.py` | D1 built (2026-07-25); D2/D3 owed |
 
 ## Milestones
 
@@ -526,4 +526,83 @@ read as the device's own pings rather than a vocabulary of distinct meanings:
   mappings are **schema/spec-only** — those code paths (Tier-2 tools, Tier-3 propose-then-tap,
   timers) are M1, unbuilt; this records the mapping so it is right when they land. Source: Thomas,
   the owed earcon-redo session.
+
+**D29 (allocated 2026-07-24; built 2026-07-27): the settings window — a schema-driven QML surface,
+two sections.** spec/70's config surface, realised (the number was in use by the code and D30
+before this record existed). A frameless PySide6/QML window — `Controls.Basic` borrowed only for
+text entry, scrolling and popup dismissal; every visible control is hand-drawn to match the
+island's austerity — spawned on demand from the tray (D13, zero idle cost) and reading
+`spec/schemas/settings.json`, the **executable truth** (hard rule 3): panes, groups, labels,
+defaults, `built` flags and the provider catalogue all live there, so a knob is a JSON edit and
+nothing else. This answers spec/70 §4's open "does the config shape need a schema file" — yes, and
+that is the file.
+
+- **Two sections behind a top-bar toggle.** **Models** is the provider roster — an editor card per
+  model in a horizontal band (Ask = the answer brains, Dictate = the cleanup roles); each card is a
+  small editor: the model **well** (opens the live picker, D30), the dials the provider actually
+  offers, on/off, primary, a key-status footer, and a gear that opens the Add/Edit sheet for the
+  deep bits (key, temperature). **Config** folds Profile · Preferences · Triggers into one list.
+- **Adapter-aware, as spec/70 §2 requires:** a card shows only the knobs its provider has — Claude
+  effort + extended thinking, a local model temperature, Groq neither (a Notes line fills the card).
+- **The tray's truthful mic indicator (spec/50 rule 4) is carried in the window too**, in the top
+  bar — mic-closed · mic-open (wake ring) · listening (live), the three states the privacy argument
+  turns on.
+- **Look (Thomas, 2026-07-26/27):** cool near-black, a single **white** UI accent, coral for the
+  on-air indicator, pink for faults; bold normal-case **Archivo** for headings (an earlier
+  wide-caps "Marathon" pass was rejected as looking like a sports app), **Martian Mono** strictly
+  for machine values (model ids). **Instrument Serif is bundled and registered but deployed
+  nowhere** — reserved for a serif accent on an explicit later say-so. Tokens live in `Theme.qml`;
+  the island's pure black stays reserved for the island.
+- Files: `teleprompter/SettingsWindow.qml` + `KeyRecorder.qml` (+ `qmldir`), `settings_model.py`
+  (the Qt↔config/keyring bridge), `settings_check.py` (offline guard: fails on any QML warning,
+  clips-checks every glyph; CI-wired), `Theme.qml`, bundled fonts. Keys never touch the settings
+  file — OS credential store only (spec/50 rule 10). Source: Thomas, the M0-close settings sessions.
+
+**D30 (2026-07-24): B2 widened to "any OpenAI-compatible endpoint" — ten providers, one adapter.
+The router is explicitly NOT part of this.** The settings window offers eleven providers
+(D29) but only Anthropic could be called, so the window could offer a brain the daemon had no way
+to reach. Thomas's direction: build the adapters out fully, and Groq should serve as a brain and
+not only as the dictation cleanup engine.
+
+- **One adapter, not nine.** Every provider except Anthropic speaks OpenAI's
+  `/v1/chat/completions` — Groq, OpenAI, xAI, DeepSeek, Mistral, OpenRouter and Google's compat
+  layer in the cloud; Ollama, LM Studio and llama.cpp locally. What differs between them is a base
+  URL and a credential, so `bridge/brains/compat.py` is parameterised by both and spec/20's **B2
+  row was widened rather than a fourth row added**: "local OpenAI-compatible server" and "cloud
+  OpenAI-compatible API" were never two pieces of code. B2 therefore arrives before M2, and M2
+  "it's local" becomes a question of which endpoint it is pointed at.
+- **Reachability is schema truth** (hard rule 3). Each provider card gains `wire`
+  (`anthropic`|`openai`), `api` (cloud base URL), `env` (env-var fallback), and `adapter: true`;
+  local runners keep their user-editable `endpoint` and B2 composes `http://<endpoint>/v1`, the
+  compat convention all three share. `bridge/brains/providers.py` reads it; no adapter hardcodes a
+  host, a key name or a model id. B1 stopped hardcoding its own keyring account name in the same
+  pass. `settings.json` → v0.2.0.
+- **Fixes a live fault in B1.** `spec/schemas/tools.json` spells `parameters` and carries `tier`;
+  Anthropic requires `input_schema` and rejects unknown fields, and the registry was being passed
+  through verbatim — so the first real tool call would have 400'd and surfaced as an unexplained
+  apology (a 400 maps to the generic case by B-02). **Tool translation is now the adapter's job**,
+  stated in spec/20, and `tier` never leaves the machine.
+- **Live model lists, and a Test button** (the latter Thomas's call, same day). The picker's
+  `models` array is the offline fallback — **empty for every provider but Anthropic** — so the real
+  list comes from `GET {api}/models` (Anthropic via its SDK), fetched off a worker thread so the
+  window never blocks. A `not_chat` substring list in the schema drops what cannot serve a turn:
+  measured, not speculative — Groq returns 15 ids of which 7 are speech, TTS or safety
+  classifiers; OpenAI returns 129 including embeddings and image models.
+- **Fetching the model list IS the key test, so one button does both.** It follows that the fetch
+  must report WHY it failed rather than returning an empty list: `probe()` returns
+  `(ids, status)` over a closed set — `ok · nokey · auth · unreachable · empty · error` — because
+  a rejected key and a dropped connection are the same empty picker otherwise, and the user can
+  act on one but not the other. Classified by exception type and status code, never message prose
+  (the B-02 rule). The button passes the **typed** key, not the stored one: the Add flow saves a
+  key only on commit, so probing the credential store would test the previous key or none —
+  which is precisely why a pasted key appeared to do nothing. Candidate keys are used for the
+  call and never written.
+- **Deliberately out of scope: the router** (Thomas, explicitly). spec/20 §Routing stays unbuilt,
+  so `primary` remains written-but-unread and the orchestrator still constructs B1 directly.
+  Recorded as a known gap rather than hidden. The `transform` verb (dictation cleanup, D12) is the
+  next Contract B change and is not in this decision.
+- Verified live: Anthropic and Groq (model fetch + a streamed turn). The other nine share the exact
+  code path but no key has been held to them here. Guarded: `bridge.brains.providers`,
+  `bridge.brains.compat --selfcheck`, `bridge.brains.claude --selfcheck` (tool translation against
+  the real registry), `teleprompter.settings_model`.
 

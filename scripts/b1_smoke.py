@@ -39,8 +39,12 @@ import time
 
 MODEL = os.environ.get("GEMMA_SMOKE_MODEL", "claude-sonnet-4-5")
 
-# A registry-style tool, shaped exactly like an entry in spec/schemas/tools.json —
-# the point is to rehearse the same JSON-schema tool contract the bridge will use.
+# A tool in ANTHROPIC'S wire shape (`input_schema`, no `tier`), which is NOT the shape of an entry
+# in spec/schemas/tools.json (`parameters`, plus `tier`). This comment used to claim they were the
+# same and that was how B1's missing translation went unnoticed for a fortnight: this script
+# passed, because it hand-wrote the shape the API wants, while the adapter forwarded the registry
+# verbatim and would have 400'd on the first real tool. Fixed 2026-07-24 (D30) — adapters now
+# translate. Kept in the wire shape deliberately: this script tests the API, not the registry.
 ECHO_TOOL = {
     "name": "echo_test",
     "description": "Echo the given payload back to the assistant. A test tool.",
