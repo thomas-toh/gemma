@@ -200,22 +200,27 @@ def list_models(pid: str, endpoint: str | None = None, timeout: float = FETCH_TI
     return probe(pid, endpoint, timeout)[0]
 
 
-def build_brain(provider: str, model: str | None = None, endpoint: str | None = None):
+def build_brain(provider: str, model: str | None = None, endpoint: str | None = None,
+                effort: str | None = None):
     """Construct the adapter that serves `provider`, chosen by its `wire`: B1 (ClaudeBrain) for
-    the anthropic wire, B2 (CompatBrain) for the OpenAI wire that the other ten share.
+    the anthropic wire, B2 (CompatBrain) for the OpenAI wire that the other ten share. `effort` is
+    the card's reasoning-effort dial, passed to the OpenAI wire (which sends it only where the
+    provider declares the capability).
 
     This is adapter CONSTRUCTION, not routing: it builds the brain you name. Deciding *which*
-    provider to use — the primary, per-role selection — is spec/20's router, still out of scope.
+    provider to use — the primary, per-role selection — is spec/20's router (`router.py`).
     Imports are local to dodge the providers <-> adapters import cycle (both adapters import from
     this module at load time).
     """
     if wire(provider) == "anthropic":
         from .claude import ClaudeBrain
 
+        # ponytail: Claude's effort/extended-thinking are not wired into B1 yet (M0.5 persona/output
+        # work); `effort` is ignored here rather than faked. B2 below honours it.
         return ClaudeBrain(model=model)
     from .compat import CompatBrain
 
-    return CompatBrain(provider, model=model, endpoint=endpoint)
+    return CompatBrain(provider, model=model, endpoint=endpoint, effort=effort)
 
 
 if __name__ == "__main__":

@@ -36,6 +36,10 @@ jobs:
       # B2 (D30): the one OpenAI-compatible adapter behind ten providers. Offline — request
       # shaping, tool translation, error mapping, client lifetime. No key, no network.
       - run: python -m bridge.brains.compat --selfcheck
+      # The router (spec/20 §Routing, D33): resolve a role -> the configured provider/model from
+      # settings, or None to let the caller default. No network — this is what makes the model
+      # picker actually drive the daemon.
+      - run: python -m bridge.brains.router
       - run: python -m bridge.orchestrator --selfcheck
       - run: python -m bridge.broadcaster --selfcheck
       # Parsing + the tap/hold machine only; RegisterHotKey itself is proven live on the box.

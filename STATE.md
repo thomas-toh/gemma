@@ -605,6 +605,18 @@ install.)*
 
 ## Track B — Brain (M0 needs B1; M2 needs B2)
 
+- **DONE 2026-07-28 (D33) — the per-role router v1; the model picker finally drives the daemon.**
+  `bridge/brains/router.py`: a role resolves to the configured provider+model from settings, read
+  fresh each turn — `assistant` ← `primary`; `cleanup_dictation`/`cleanup_prompts` ← their keys; each
+  via `models[<provider>]`. The orchestrator (`_assistant_brain`, `_cleanup_brain`) rebuilds the
+  adapter only when `router.signature(role)` changes, so the client is kept (spec/20 adapter lifetime)
+  yet a picker change lands next turn with no restart; an unconfigured role falls back to the daemon
+  default (`DAEMON_MODEL` / Groq cleanup), and an injected brain (replay) bypasses the router. This
+  retires the "written-but-unread `primary`" gap noted below — all the D30 adapter work is now
+  reachable by the assistant, not just dictation cleanup. NOT in v1 (Layer 2): several instances per
+  provider + the roles/routes redesign (spec/70), per-task-type routing + its classifier, `local_only`
+  policy; B1 effort/thinking stay unwired (M0.5), so `effort` reaches only B2. Guarded:
+  `bridge.brains.router` (CI-wired); spec/20 §Routing rewritten to v1-built.
 - **Works now:** B1 smoke test (`scripts/b1_smoke.py`) green on Windows — auth, streaming,
   tool-call/tool-loop all PASS. Dedicated "gemma" key (spend-capped) lives in Windows
   Credential Manager under service `gemma`.
@@ -638,9 +650,9 @@ install.)*
   **Verified live: Anthropic (11) · OpenAI (108) · Groq (8)** — fetch, a streamed Groq turn with
   usage normalised, plus a wrong key reading `auth` and an absent key `nokey`. The remaining
   providers share the exact code path, untested for want of keys.
-  **The router is deliberately NOT built** (Thomas, explicitly): `primary` stays written-but-unread
-  and the orchestrator still constructs B1 directly — recorded in spec/20 §Routing as a known gap,
-  not hidden in the UI. Guarded: `bridge.brains.providers`, `compat --selfcheck`,
+  **The router was deliberately deferred at D30** (Thomas); it is **now BUILT — router v1, D33**
+  (top bullet), so that written-but-unread gap is closed and the picker drives the daemon. Guarded:
+  `bridge.brains.providers`, `compat --selfcheck`,
   `claude --selfcheck` (translation against the real registry), `teleprompter.settings_model`; all
   four CI-wired.
 - **Agnosticism pass (2026-07-25, Thomas's ask — "the adapters ... don't have a preference for any

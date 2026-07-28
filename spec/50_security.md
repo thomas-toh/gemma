@@ -1,19 +1,28 @@
 # Spec 50 — Security & privacy posture
 
-**Status: BINDING (design constants, not preferences)** · Last reconciled: 2026-07-23 · Rationale: docs/01 §7, docs/02 §7
+**Status: BINDING (design constants, not preferences)** · Last reconciled: 2026-07-28 · Rationale: docs/01 §7, docs/02 §7
 
 1. **Tool containment is the defence, not model cleverness.** Assume everything a brain
    reads (web, files, screen contents) is hostile (prompt injection is unsolved).
    Registry allowlist + tiers + Tier 3 spoken confirmation per spec/30.
 2. **Audit everything.** Every tool invocation logged per spec/30 rule 2.
 3. **No raw audio at rest.** Untriggered audio lives only in a ≤ 3 s RAM ring buffer and
-   is discarded. Triggered-session audio is processed in memory; never written to disk.
+   is discarded. Triggered-session audio is processed in memory; the daemon never writes it to
+   disk. That is enforceable by inspection: `bridge/`'s only audio file handle is the *read* of
+   a pre-rendered earcon (`audio/speak.py`), and nothing in the package may acquire a write path
+   for audio.
    Transcripts are logged locally and are user-purgeable in one action — they reach
    `logs/gemma.log` (rotating, gitignored) via the daemon's turn events, so deleting the
    `logs/` folder is that one action. **User-initiated export is allowed (D27):** a person may
    Copy or Save an on-screen answer to a file they pick — that text is already in `logs/gemma.log`,
    so exporting a copy is strictly less exposure than the existing log. The system never exports on
    its own; only a keypress or click does, and no answer is written to disk unbidden.
+   **The replay harness is the only writer of audio, and only when asked** (Track G step 7):
+   `python -m tests.replay --record <case>` captures a fixture WAV to `tests/replay/wav/` so a
+   real utterance can be replayed through the real pipeline. It sits outside `bridge/` — no
+   product path reaches it — it prompts before it records, and the directory is gitignored so
+   fixtures stay on the machine that made them. A recording tool the operator invokes is a
+   different thing from a system that retains audio; this rule governs the second.
 4. **Truthful signalling.** The overlay's listening indicator must reflect actual pipeline
    state; `listening` ⇔ audio is being captured/processed. No dark listening, ever.
 5. **Mute is software (desk product).** With commodity audio gear there is no hardware mute

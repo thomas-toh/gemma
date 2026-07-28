@@ -1,6 +1,6 @@
 # Spec 20 — Contract B: brain adapters
 
-**Last reconciled: 2026-07-27** · Build progress: [STATE.md](../STATE.md) · Rationale: docs/02 §3
+**Last reconciled: 2026-07-28** · Build progress: [STATE.md](../STATE.md) · Rationale: docs/02 §3
 
 *(Interface contract. Build status + the standalone B1 API smoke test
 (`scripts/b1_smoke.py`) live in STATE, Tracks G & B.)*
@@ -123,14 +123,25 @@ advantage of both.
 
 ## Routing
 
-**Still not built** (D30 built the adapters, deliberately not the router). Both adapters now
-exist, so the remaining gate is M1's script. Then: config-file policy mapping (`local_only` → a
-local B2 forced; default → configured primary). No automatic content-sensitivity classification —
-routing is explicit, by session flag or utterance prefix ("private mode"), never inferred.
+**v1 BUILT (D33)** — `bridge/brains/router.py`. A **role** resolves to the configured provider +
+model, read fresh from settings each turn:
 
-Until it lands, `primary` in the settings file is **written but unread**: the orchestrator
-constructs B1 directly, so choosing another provider in the settings window changes nothing at
-turn time. That is a known gap, recorded here rather than papered over in the UI.
+  `assistant` → `primary` · `cleanup_dictation` → `cleanup_dictation` · `cleanup_prompts` → `cleanup_prompts`
+
+each naming a provider whose card config lives in `models[<provider>]`. `resolve(role)` returns the
+config or `None` (unconfigured — no provider named, never added, card off, or no model); `signature(role)`
+is the cache key the orchestrator rebuilds its adapter on (so the client is kept across turns, spec/20
+adapter lifetime, but a picker change lands next turn); `build_for_role(role)` builds the adapter via
+`providers.build_brain`. This is what makes the model picker **bite** — until D33 `primary` was
+written-but-unread and the orchestrator hardcoded Claude. The orchestrator applies the daemon default
+(`DAEMON_MODEL` on B1) / the Groq cleanup default when a role resolves to `None`, so an unconfigured
+profile still answers. An **injected** brain (replay/selfcheck) bypasses the router entirely.
+
+**Not in v1 (Layer 2, later):** several instances per provider + the roles/routes redesign
+(spec/70); per-task-type routing ("short → cheap") and its classifier; `local_only` policy mapping
+(a `local_only` session forcing a local B2). v1 is role → instance; the orchestrator seam
+(`build_for_role`) does not change when Layer 2 lands — only the data the router reads. B1's
+effort/extended-thinking are still unwired (M0.5), so `effort` reaches only the B2 wire for now.
 
 Note `local_only` is enforced per adapter, not per row: B2 refuses a `local_only` session when
 pointed at a cloud provider and serves it when pointed at a local runner, since the same class is

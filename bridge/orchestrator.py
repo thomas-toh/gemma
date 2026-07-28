@@ -36,6 +36,7 @@ from bridge.audio.speak import VOICE, OutputPump, earcon_samples, synth
 from bridge.brains.base import Done, Error, Session, TextDelta, ToolCall, transform
 from bridge.brains.claude import ClaudeBrain
 from bridge.brains.providers import build_brain
+from bridge.brains import router
 from bridge.broadcaster import (
     Broadcaster, m_error, m_latency, m_mic, m_response, m_state, m_transcript,
 )
@@ -87,24 +88,29 @@ CLEANUP_MODEL = os.environ.get("GEMMA_CLEANUP_MODEL", "llama-3.1-8b-instant")
 # ponytail: a code constant until the cleanup role is user-configurable (spec/70, VoiceInk lets you
 # edit this); the guardrail against answering lives in TRANSFORM_SYSTEM, not here.
 DICTATION_CLEANUP = (
-    "Turn the raw dictated speech into clean, natural written text — the words the speaker meant "
-    "to write, tidied for reading.\n"
-    "- Fix transcription errors, punctuation, capitalisation, grammar and spelling.\n"
+    "Clean up this transcript of dictated speech. This is a LIGHT CLEANUP, not a rewrite: stay as "
+    "close to the speaker's actual words as you can and change as little as possible.\n"
+    "DO:\n"
+    "- Fix clear transcription errors, punctuation, capitalisation, grammar and spelling.\n"
     "- Remove filler words (um, uh, like, you know), stutters, repeated words and false starts.\n"
     "- Apply spoken self-corrections: when the speaker abandons wording with a cue like \"scratch "
-    "that\", \"no, wait\", \"I mean\" or \"actually\", drop the abandoned words and keep only the "
-    "corrected version.\n"
-    "- Convert spoken punctuation and layout cues into the actual marks and layout, then remove "
-    "the cue words — including but not limited to \"full stop\"/\"period\", \"comma\", \"question "
-    "mark\", \"exclamation mark\", \"colon\", \"open/close quote\", \"new line\" and \"new "
-    "paragraph\". Only do this when the speaker clearly means the punctuation, not the literal "
-    "word (e.g. \"a period of rest\" or \"a dash of salt\" stay as written).\n"
-    "- Group the result into readable paragraphs; keep a neutral written tone unless the speech "
-    "clearly implies another.\n"
-    "- Preserve the speaker's meaning, facts, names, numbers, dates and intent exactly. Do not add, "
-    "drop, summarise, translate or answer anything — only clean up what was actually said.\n"
-    "- If the dictation is itself a question or a request, write it out as clean text; never answer "
-    "or act on it."
+    "that\", \"no, wait\", \"I mean\" or \"actually\", drop the abandoned words and keep the "
+    "correction.\n"
+    "- Convert spoken punctuation and layout cues into marks and layout, then remove the cue words "
+    "— e.g. \"full stop\"/\"period\", \"comma\", \"question mark\", \"new line\", \"new paragraph\" "
+    "— but only when the speaker clearly means the punctuation, not the literal word (\"a period of "
+    "rest\", \"a dash of salt\" stay as written).\n"
+    "- When the speaker spells a word out letter by letter (\"S. I. L. E.\" or \"S I L E\"), join "
+    "the letters into the single intended word or acronym (SILE), not separate tokens.\n"
+    "DO NOT (this is cleanup, not rewriting):\n"
+    "- Do not add, drop or substitute words beyond the fixes above; never insert words the speaker "
+    "did not say. No new qualifiers or intensifiers — \"that's the idea\" must NOT become \"that's "
+    "the main idea\".\n"
+    "- Do not change the meaning, the emphasis, or how strongly a point is made.\n"
+    "- Do not summarise, expand, restyle, reorder, translate, or answer anything.\n"
+    "- Keep the speaker's own structure; do not impose paragraphs beyond what their pauses and cues "
+    "indicate.\n"
+    "- If the dictation is itself a question or request, clean it up as text; never answer or act on it."
 )
 
 
@@ -336,8 +342,15 @@ class Orchestrator:
         self.voice = voice
         self.auto_end = auto_end                 # spec/70: end a keyed turn on VAD silence too
         self.hk = hotkeys                        # None under replay/selfcheck: wake word only
+        # The assistant brain. An INJECTED brain (replay/selfcheck) is used as-is; otherwise the
+        # router resolves it from the user's model picker each turn (see _assistant_brain), falling
+        # back to this default. The two `_sig` fields cache which routed config the current brain /
+        # cleanup brain was built for, so the adapter is rebuilt only when the pick changes.
+        self._injected_brain = brain is not None
         self.brain = brain or ClaudeBrain(model=model)   # injectable: replay's fake brain
+        self._brain_sig = None
         self._cleanup = None                             # dictation cleanup brain, built on first use
+        self._cleanup_sig = None
         self.synth = synth                               # injectable: replay fakes TTS
         # D24: dismissal arrives from the Teleprompter, which owns bare Esc because it alone
         # knows when it is on screen. Set from the broadcaster's receive thread; every waiting
@@ -563,7 +576,7 @@ class Orchestrator:
         # The 'working' earcon is retired (D28): since D23/D25 the overlay's THINKING state IS
         # the feedback, so nothing pings while the brain runs — the screen carries it.
         reply, err = self._run_async(_drive(
-            self.brain, self.session, text,
+            self._assistant_brain(), self.session, text,
             on_delta=lambda d: self.bc.publish(m_response(delta=d)),
             abort=self._abort_flag(),
             tools=tool_specs(),                 # Contract T: only implemented, in-tier tools (spec/30)
@@ -691,12 +704,31 @@ class Orchestrator:
                 return d
         return None
 
+    def _assistant_brain(self):
+        """The answer brain for this turn. An injected brain (replay/selfcheck) is used unchanged;
+        otherwise the router resolves it from the user's model picker (spec/20 §Routing), falling
+        back to the daemon default when no primary is configured. Cached across turns while the
+        routed config is unchanged, so the client is kept (spec/20 adapter lifetime) but a change
+        in the picker lands on the next turn with no restart."""
+        if self._injected_brain:
+            return self.brain
+        sig = router.signature("assistant")
+        if sig != self._brain_sig:
+            self.brain = router.build_for_role("assistant") or ClaudeBrain(model=DAEMON_MODEL)
+            self._brain_sig = sig
+            log.info("router: assistant brain -> %s", sig or f"default ({DAEMON_MODEL})")
+        return self.brain
+
     def _cleanup_brain(self):
-        """The dictation cleanup brain (Groq by default, D15/S-06), built once and kept — it
-        rests on Contract B's one-loop guarantee exactly as the assistant brain does. Lazy:
-        dictation may never be used in a session, and constructing it reads the credential store."""
-        if self._cleanup is None:
-            self._cleanup = build_brain(CLEANUP_PROVIDER, CLEANUP_MODEL)
+        """The dictation cleanup brain: the router's `cleanup_dictation` role (spec/20 §Routing),
+        or the Groq default (D15/S-06) when unconfigured. Cached across turns while its config is
+        unchanged (spec/20 adapter lifetime), yet a picker change lands on the next dictation. Lazy:
+        dictation may never be used in a session, and building it reads the credential store."""
+        sig = router.signature("cleanup_dictation")
+        if self._cleanup is None or sig != self._cleanup_sig:
+            self._cleanup = (router.build_for_role("cleanup_dictation")
+                             or build_brain(CLEANUP_PROVIDER, CLEANUP_MODEL))
+            self._cleanup_sig = sig
         return self._cleanup
 
     def _dictate(self, audio) -> None:

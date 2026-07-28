@@ -657,3 +657,25 @@ Track T's first build (spec/30). The registry has existed since M0 but nothing e
   the Gem row driven through `settings_check`. Live-on-the-box verification (tray, taskbar, entrance)
   is owed — headless cannot show them. Parked kit extra: the costume portraits for settings sections.
 
+**D33 (2026-07-28): the per-role router v1 — the model picker finally bites.** Until now the
+settings model-picker was decorative for the assistant: `primary` was written-but-unread and the
+orchestrator constructed B1 (Claude) directly, so the D30 multi-provider adapters went unused by the
+answer brain. `bridge/brains/router.py` closes that: a ROLE resolves to the configured provider +
+model, read fresh from settings each turn.
+
+- **Roles → settings, v1.** `assistant` ← `primary`; `cleanup_dictation` / `cleanup_prompts` ← their
+  own keys; each names a provider whose card config lives in `models[<provider>]`. `resolve` returns
+  the config or `None` (unconfigured); `build_for_role` builds the adapter via
+  `providers.build_brain`. The orchestrator caches on `signature(role)` and rebuilds only when the
+  pick changes — the client is kept across turns (spec/20 adapter lifetime), yet a change lands on the
+  next turn with no restart. Unconfigured → the daemon default (`DAEMON_MODEL` / the Groq cleanup
+  default), so a fresh profile still answers; an injected brain (replay) bypasses the router.
+- **Deliberately v1 only.** NOT the several-instances-per-provider redesign (spec/70), NOT
+  per-task-type routing ("short → cheap") + its classifier, NOT `local_only` policy mapping — those
+  are Layer 2, and v1 is the foundation they sit on (the `build_for_role` seam does not change when
+  they land, only the data the router reads). B1 effort/extended-thinking stay unwired (M0.5), so a
+  card's `effort` reaches only the B2 wire for now.
+- Guarded: `bridge.brains.router` selfcheck (resolution + signature, no network; CI-wired). spec/20
+  §Routing rewritten from "not built" to v1-built. Source: Thomas — "respect the config the user
+  inputs, so if the user says use X, it actually does so."
+
