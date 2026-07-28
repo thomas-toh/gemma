@@ -21,5 +21,9 @@ tests/replay/wav/
 # Scratch space for throwaway mockups/experiments — never committed.
 sandbox/
 
+# Staging area for things on their way out (and side-project notes that never belonged
+# here). Untracked 2026-07-27; the directory itself is yours to delete when you're ready.
+_to_delete/
+
 # Local logs (spec/50: transcripts land here; delete the folder to purge in one action)
 logs/

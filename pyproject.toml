@@ -51,5 +51,8 @@ packages = ["bridge", "teleprompter"]
 # the *.qml glob misses it — without it, `import teleprompter` (the Theme singleton) dies with
 # "module not installed" off an editable install. CI's `pip install -e .` masks it, so name each
 # explicitly (D27 added icons/, PeekPanel.qml is covered by *.qml).
+# `fonts/*.txt` + `fonts/*.md` are the font licences, not documentation: OFL 1.1 and Apache 2.0
+# both require the licence to travel with the font, so a wheel that carried the .ttf without them
+# would be the distribution that breaches. See teleprompter/fonts/ATTRIBUTION.md.
 [tool.setuptools.package-data]
-teleprompter = ["*.qml", "qmldir", "fonts/*.ttf", "icons/*.svg"]
+teleprompter = ["*.qml", "qmldir", "fonts/*.ttf", "fonts/*.txt", "fonts/*.md", "icons/*.svg"]
