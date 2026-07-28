@@ -1144,67 +1144,55 @@ Window {
                 onDoubleClicked: root.visibility = root.visibility === Window.Maximized
                                  ? Window.Windowed : Window.Maximized
             }
-            Row {
-                anchors.left: parent.left; anchors.leftMargin: 20
+            // segmented nav — Models | Config, CENTRED in the top bar. The orange brand Mark and
+            // the "Gemma" wordmark were removed (Thomas, 2026-07-28): Gem — the mic indicator at
+            // left — is the page's only mark now.
+            Rectangle {
+                anchors.horizontalCenter: parent.horizontalCenter
                 anchors.verticalCenter: parent.verticalCenter
-                spacing: 16
+                width: navRow.width + 6; height: 40; radius: 9
+                color: Theme.surfaceCard
+                border.width: 1; border.color: Theme.hairline
                 Row {
-                    spacing: 10
-                    anchors.verticalCenter: parent.verticalCenter
-                    Mark { px: 24; tint: Theme.flare; anchors.verticalCenter: parent.verticalCenter }
-                    Text {
-                        text: "Gemma"; color: Theme.uiText
-                        font.family: fontFamily; font.pixelSize: 18
-                        font.weight: Font.DemiBold; font.letterSpacing: -0.3
-                        anchors.verticalCenter: parent.verticalCenter
-                    }
-                }
-                // segmented nav — Models | Config
-                Rectangle {
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: navRow.width + 6; height: 40; radius: 9
-                    color: Theme.surfaceCard
-                    border.width: 1; border.color: Theme.hairline
-                    Row {
-                        id: navRow
-                        anchors.centerIn: parent
-                        spacing: 2
-                        Repeater {
-                            model: [{ v: "models", l: "Models" }, { v: "config", l: "Config" }]
-                            delegate: Rectangle {
-                                required property var modelData
-                                readonly property bool active: root.section === modelData.v
-                                width: nlbl.width + 30; height: 32; radius: 6
-                                color: active ? Theme.surfaceLift
-                                              : (nvh.hovered ? Theme.uiNavHover : "transparent")
-                                Behavior on color { ColorAnimation { duration: root.t } }
-                                HoverHandler { id: nvh }
-                                Text {
-                                    id: nlbl
-                                    anchors.centerIn: parent
-                                    text: modelData.l
-                                    color: active || nvh.hovered ? Theme.uiText : Theme.uiTextFaint
-                                    font.family: fontFamily; font.pixelSize: Theme.fontBase
-                                    font.weight: Font.DemiBold
-                                }
-                                MouseArea {
-                                    anchors.fill: parent
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: root.section = modelData.v
-                                }
+                    id: navRow
+                    anchors.centerIn: parent
+                    spacing: 2
+                    Repeater {
+                        model: [{ v: "models", l: "Models" }, { v: "config", l: "Config" }]
+                        delegate: Rectangle {
+                            required property var modelData
+                            readonly property bool active: root.section === modelData.v
+                            width: nlbl.width + 30; height: 32; radius: 6
+                            color: active ? Theme.surfaceLift
+                                          : (nvh.hovered ? Theme.uiNavHover : "transparent")
+                            Behavior on color { ColorAnimation { duration: root.t } }
+                            HoverHandler { id: nvh }
+                            Text {
+                                id: nlbl
+                                anchors.centerIn: parent
+                                text: modelData.l
+                                color: active || nvh.hovered ? Theme.uiText : Theme.uiTextFaint
+                                font.family: fontFamily; font.pixelSize: Theme.fontBase
+                                font.weight: Font.DemiBold
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.section = modelData.v
                             }
                         }
                     }
                 }
             }
-            // ── Gem: the mascot as the honest mic indicator (spec/50 rule 4), left of the caption
-            //    buttons. It plays the `arriving` entrance when the window opens, then rests at
-            //    `idle`, and shows `listening` ONLY while the mic is actually capturing — never
-            //    inferred. Limited to mic on/off (Thomas). Body flipped light for the dark shell by
-            //    the image://gem provider (gem.py); the native purple/orange accents are kept. ──
+            // ── Gem: the mascot as the honest mic indicator (spec/50 rule 4), at the far LEFT of
+            //    the top bar (the only mark on the page now — the brand Mark + "Gemma" were removed).
+            //    It plays the `arriving` entrance when the window opens, then rests at `idle`, and
+            //    shows `listening` ONLY while the mic is actually capturing — never inferred. Limited
+            //    to mic on/off (Thomas). Body flipped light for the dark shell by the image://gem
+            //    provider (gem.py); the native purple/orange accents are kept. ──
             Row {
                 id: gemRow
-                anchors.right: parent.right; anchors.rightMargin: 156
+                anchors.left: parent.left; anchors.leftMargin: 20
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 10
                 readonly property bool capturing: overlay.state === "listening"

@@ -42,6 +42,23 @@ def windows_uses_light_theme() -> bool:
         return True
 
 
+def windows_taskbar_is_light() -> bool:
+    """The TASKBAR/system theme (`SystemUsesLightTheme`) — distinct from `AppsUseLightTheme` above.
+    A tray icon sits on the taskbar, and the two settings differ on a common Windows 11 combo
+    (light apps + dark taskbar), which was rendering Gem's dark body invisible on the dark taskbar.
+    Defaults to dark (False) so the fallback is Gem's LIGHT body — readable on the usual dark
+    taskbar."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import winreg
+        key = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as k:
+            return bool(winreg.QueryValueEx(k, "SystemUsesLightTheme")[0])
+    except OSError:
+        return False
+
+
 def menu_qss(light: bool) -> str:
     bg, fg, border, hover, sep, dim = MENU_COLOURS["light" if light else "dark"]
     return f"""
@@ -177,11 +194,6 @@ def mark_icon(px: int = 256, colour: str | None = None) -> QIcon:
 
 
 class Tray(QSystemTrayIcon):
-    # States that rest on a single frame in the tray: an icon that wiggles forever is a nuisance,
-    # and idle/asleep are the long-lived ones. Every other state animates while it is briefly true,
-    # then the model returns to idle and the tray falls still again.
-    _STILL = {"idle", "asleep"}
-
     def __init__(self, app, model=None, on_settings=None) -> None:
         super().__init__()
         self._app = app
@@ -260,8 +272,10 @@ class Tray(QSystemTrayIcon):
     # --- Gem animation (spec/50 rule 4: the tray reflects real status, never inferred) --------
 
     def _palette(self) -> dict:
-        # Dark taskbar -> the light body; light taskbar -> the kit's native dark body. Accents kept.
-        return gem.NATIVE if windows_uses_light_theme() else gem.ISLAND
+        # Follow the TASKBAR (system) theme, not the app theme: a dark taskbar needs Gem's LIGHT
+        # body or the ghost vanishes (Thomas: "black is hard to see"). Light taskbar -> native dark
+        # body. Accents kept either way.
+        return gem.NATIVE if windows_taskbar_is_light() else gem.ISLAND
 
     def _on_model(self) -> None:
         # `changed` fires on every feed message (mic levels included); only a real STATE change
@@ -274,7 +288,9 @@ class Tray(QSystemTrayIcon):
             self._sync()
 
     def _sync(self) -> None:
-        if self._state in self._STILL or gem.frame_count(self._state) <= 1:
+        # Animate every state with more than one frame — idle's gentle loop included (Thomas wants
+        # the tray alive, not frozen on frame 0). Only a genuinely single-frame state rests.
+        if gem.frame_count(self._state) <= 1:
             self._anim.stop()
         else:
             self._anim.start(max(1, round(1000 / gem.fps(self._state))))

@@ -8,7 +8,7 @@ start, update it in the same commit as the work · when a step closes, collapse 
 entry to one or two lines — durable knowledge moves out (behaviour → spec · run
 instructions → README · findings → NOTES.md · decisions → a D-number in spec/00).
 
-Last updated: 2026-07-27
+Last updated: 2026-07-28
 
 ## Handoff — start here (2026-07-23)
 
@@ -434,9 +434,10 @@ install.)*
   kit's indices, never a repaint or a second export). Truthful by construction (spec/50 rule 4).
   Guarded: `teleprompter.gem` selfcheck (CI-wired) + the Gem row driven through `settings_check`.
   **Owed — live on the box:** the tray animation, taskbar icon and settings entrance need eyes on a
-  real desktop (headless can't show them). The overlay island is deliberately left alone for now, and
-  the top-left brand Mark is unchanged — Gem is the top-**right** mic indicator, not the logo. Parked
-  kit extra: the costume portraits (DJ/engineer/…) for settings sections.
+  real desktop (headless can't show them). The overlay island is deliberately left alone for now. The
+  settings top bar was simplified (Thomas, same day): the orange brand Mark + the "Gemma" wordmark
+  removed, Models/Config centred, and Gem is the **top-LEFT** mic indicator — the page's only mark.
+  Parked kit extra: the costume portraits (DJ/engineer/…) for settings sections.
 - **Decided (2026-07-20):** the visual front-end is the **Teleprompter** (component **P**),
   a separate **PySide6 + QML** process on the **Contract P** status feed
   (`spec/schemas/status.json`, committed). Front/back split: back-end = `bridge/` (headless
@@ -727,9 +728,44 @@ install.)*
   (`["transcribing","transforming","pasted","idle"]`, and `["transcribing","idle"]` on empty STT).
   Specs: spec/40 §State machine (dictation branch) + spec/60 §Overlay states. No new D-number — D2 is a
   named build slice. **Owed:** the live keypress test — Thomas to speak into it.
+- **Cleanup-quality pass + parked deepening (2026-07-28 handoff).** `DICTATION_CLEANUP`
+  (`orchestrator.py`) was rebuilt from a one-liner to VoiceInk's structured editing rules
+  (self-corrections "scratch that"; spoken punctuation/layout cues incl. "full stop"/"period",
+  open-ended with a false-positive guard), then **tightened to CLEANUP-NOT-REWRITING** (Thomas: it
+  was adding words and could shift emphasis, "that's the idea"→"the main idea") — a DO / DO NOT split:
+  never insert words the speaker didn't say, no new qualifiers/intensifiers, don't change
+  meaning/emphasis/strength, keep the speaker's structure; plus an **acronym-join** rule (spelled
+  "S I L E" → SILE). Groq `llama-3.1-8b-instant`, temperature 0. Study: agent parse of
+  github.com/Beingpax/VoiceInk cleanup (VoiceInk = ONE call, whole transcript, no chunking).
+  **⚠ The tightening is UNCOMMITTED in the working tree and UNTESTED — restart the daemon, dictate
+  against it, then commit.** Truncation fix already committed (`d9f85d2`): dictation's runaway cap is
+  300 s (`DICTATION_MAX_CHUNKS`), not the assistant's 30 s.
+  **Parked deepening (VoiceInk-derived; Thomas thinking), in rough value order:**
+  - **#2 custom vocabulary** — deterministic word-replace (the D15 seam) + a fuzzy `<CUSTOM_VOCABULARY>`
+    block as the spelling authority for names/acronyms Whisper mis-hears (the robust fix the
+    prompt's acronym-join only half-covers).
+  - **#3 live context** — inject clipboard / selected-text / (screen-OCR) as context blocks (VoiceInk's
+    Power Modes). Clipboard + selection are cheap on Windows; screen-OCR is the high-effort/low-
+    reliability piece (deferred, per the design-time "skip screen-OCR" call).
+  - **Formatting settings** — a deterministic typography layer AFTER cleanup (double-space after full
+    stop [Thomas's], em/en dashes, curly quotes — regexes, not prompt lines) + a user-editable cleanup
+    prompt (VoiceInk's model).
+  - **Chunking long dictation — RESOLVED: don't.** Single call is correct at our lengths (~1k tokens,
+    Groq ~1–2 s) and higher-quality (no boundary artefacts); VoiceInk agrees. Revisit ONLY if
+    dictations reach thousands of words → split at PARAGRAPH boundaries, never mid-thought. (Live
+    per-sentence cleanup parked with the same trigger.)
+  - **Cleanup-engine setting** — the settings "Engine" card is built but DIMMED (`cleanup_dictation`
+    `built:false`); activating it = read the setting in `_cleanup_brain` + flip the flag. Provider-level
+    now vs instance-level with the router; Thomas hasn't picked activate-now vs wait-for-router.
+- **Amber limit-warning (PARKED — waiting on the Design session's sprites).** As a capture nears its cap
+  the overlay should warn (dictation's 300 s in practice). Proposed: daemon sends seconds-remaining on
+  the `mic` message in the last ~30 s; listening bars go amber + a countdown. **Held on sprites;** choices
+  pending — form (countdown / amber-only / word-cue) · threshold (30 s).
 - **In flight:** —
-- **Next:** ③ measure `large-v3-turbo` vs `small.en` vs **Parakeet** (sherpa-onnx = torch-free ONNX
-  path; **gated** — adopt only if a real win, discuss first) on the 5080 for the per-mode STT model
+- **Next:** ① **test + commit the tightened cleanup prompt** (uncommitted, above) — restart the daemon,
+  dictate, confirm it stopped adding words · ② the parked deepening above (#2 vocabulary is the highest-
+  value next lift) · ③ measure `large-v3-turbo` vs `small.en` vs **Parakeet** (sherpa-onnx = torch-free
+  ONNX path; **gated** — adopt only if a real win, discuss first) on the 5080 for the per-mode STT model
   default (a parallel session is on Parakeet) · ④ **D3**: ask-door rewrite (D20, propose-then-tap) ·
   plus the **D15 word-replacement** schema (the pipeline has the seam; the table doesn't exist yet).
 - **Deferred at design time:** voice-switch into dictation ("take dictation") ·
@@ -804,4 +840,10 @@ works per sentence, so streaming = play-each-piece-as-ready; reopen only if meas
 daily use feels slow ·
 **long-task interaction pattern** (dispatch-and-notify, heartbeat cadence during long
 silence, mid-task status queries by wake, "work on this in the background" phrasing) —
-design when B3 or a heavyweight tool lands (D11 discussion, 2026-07-12)
+design when B3 or a heavyweight tool lands (D11 discussion, 2026-07-12) ·
+**usage/cost ledger** (2026-07-28) — record per-turn API usage + cost for **Ask and Dictate** to a
+small store (JSONL/SQLite in `%APPDATA%\gemma`): `{ts, role, provider, model, in/out tokens, cost}`.
+The data already exists (adapters normalise `usage`); it is just not persisted. RECORDING can start
+now (cheap, backend, router-independent) so the parked **data page** (the display, "not yet") inherits
+history instead of starting empty; cost needs a `$/token` table (home: the `settings.json` catalogue);
+splits by role, dovetails with the router's per-instance view
