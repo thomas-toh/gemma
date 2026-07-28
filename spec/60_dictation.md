@@ -1,6 +1,6 @@
 # Spec 60 — Dictation
 
-**Last reconciled: 2026-07-27** · Build progress: [STATE.md](../STATE.md), Track D · Rationale:
+**Last reconciled: 2026-07-28** · Build progress: [STATE.md](../STATE.md), Track D · Rationale:
 docs/01_scoping/Reviews/2026-07-18_1643 (VoiceInk study), spec/00 D12 · D15 · D20.
 
 Dictation is the second door (D20): a global hotkey (`ctrl+alt+2` by default) that turns speech
@@ -27,10 +27,14 @@ dictate key ─▶ capture (VAD, key endpoint) ─▶ STT ─▶ [word-replaceme
 2. **STT.** `transcribe()` (`bridge/audio/listen.py`), the same engine as the assistant path.
    *(Per-mode STT model — dictation is the stricter quality test, D12 — is deferred: the model is
    one process-wide constant today.)*
-3. **Word-replacement (D15) — deferred.** A deterministic, user-curated find-and-replace table for
-   known STT mishearings (names, jargon) runs before cleanup. The table is a `spec/schemas/` file
-   that does not exist yet, so this step is a no-op until it lands; `bridge/config.py` already globs
-   new schemas in, so adding it later is a JSON drop with no plumbing.
+3. **Word-replacement (D15, built).** A deterministic, user-curated find-and-replace runs before
+   cleanup: whole-word, case-insensitive occurrences of each `from` become `to` exactly (`to` is
+   literal — no regex). It is a lookup, not a model guess — the deterministic-first way to fix
+   acronyms, names and jargon the STT mishears. Table: `spec/schemas/word_replacements.json` (hard
+   rule 3); applied by `bridge/replace.py`; hooked in `_dictate()` immediately after STT. An empty
+   table (the default ships one entry, `gemma`→`Gemma`) is a no-op, and because the step precedes
+   cleanup it applies **even when cleanup is off** — deterministic fixes are never skipped. Curated
+   by editing the JSON; a settings surface for it is a later lift.
 4. **Cleanup — `transform`, "transform, never answer" (D12/D15/S-06).** The raw transcript is
    rewritten by the `transform` verb (spec/20): fix transcription errors, drop filler and
    duplicated words, restore punctuation and capitalisation — **never** answer, summarise or
@@ -72,7 +76,6 @@ states add to the overlay, not to this pipeline. Build progress: [STATE.md](../S
 
 ## Deferred
 
-- **Word-replacement table (D15)** — schema + wiring (step 3 above).
 - **Per-mode STT model (D12)** — dictation may want a higher-quality model than the voice loop;
   measure `large-v3-turbo` vs `small.en` vs Parakeet before choosing.
 - **Rewrite (D17/D20) — an ask-door outcome, not a mode.** Select text, invoke, speak an

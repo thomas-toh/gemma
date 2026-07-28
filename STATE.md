@@ -356,13 +356,21 @@ it is the unfinished half of D29/D30/D33.
   assistant's 30 s (fixed in `c091a65`).
   **⚠ Committed but UNTESTED against live speech** — restart the daemon, dictate, and confirm it
   stopped adding words.
+- **Works now (D15 word-replacement, 2026-07-28).** The deterministic find-and-replace seam is
+  filled: `spec/schemas/word_replacements.json` (whole-word, case-insensitive, literal `to`),
+  applied by `bridge/replace.py`, hooked in `_dictate()` right after STT — so it runs BEFORE
+  cleanup and applies even when cleanup is off (deterministic fixes are never skipped). Empty table
+  = no-op; ships one entry (`gemma`→`Gemma`). Selfchecked + CI-wired (`python -m bridge.replace`).
+  A curating UI is a later lift (spec/70 §3); the fuzzy `<CUSTOM_VOCABULARY>` prompt half of #2 is
+  still parked.
 - **Owed — the live keypress test.** The whole dictate path (D1 + D2) has been verified against
   recorded WAVs and selfchecks, but never once by Thomas pressing the key and speaking. Every
   hotkey path is like this; `RegisterHotKey` is proven live separately.
 - **Parked deepening (VoiceInk-derived), in rough value order:**
-  - **#2 custom vocabulary** — the deterministic word-replace seam (D15) plus a fuzzy
-    `<CUSTOM_VOCABULARY>` block as the spelling authority for names and acronyms Whisper mis-hears.
-    The robust fix that the prompt's acronym-join rule only half-covers; highest-value next lift.
+  - **#2 custom vocabulary** — the deterministic word-replace seam (D15) is **done** (see the
+    Works-now note above). What remains is the fuzzy `<CUSTOM_VOCABULARY>` block — a prompt-side
+    spelling authority for names/acronyms Whisper mis-hears in ways the exact table can't predict.
+    Still the highest-value prompt-side lift.
   - **#3 live context** — inject clipboard / selected text as context blocks (VoiceInk's Power
     Modes). Both are cheap on Windows; screen-OCR is the high-effort, low-reliability piece,
     deferred per the design-time "skip screen-OCR" call.
@@ -388,8 +396,7 @@ it is the unfinished half of D29/D30/D33.
   (#2 vocabulary first) · ③ measure `large-v3-turbo` vs `small.en` vs **Parakeet** (sherpa-onnx =
   a torch-free ONNX path; **gated** — adopt only if a real win, discuss first) on the 5080 for the
   per-mode STT default; a parallel session is on Parakeet · ④ **D3**: the ask-door rewrite (D20,
-  propose-then-tap) · plus the **D15 word-replacement** schema — the pipeline has the seam, the
-  table doesn't exist yet.
+  propose-then-tap). *(D15 word-replacement — done 2026-07-28, above.)*
 - **Deferred at design time:** voice-switch into dictation ("take dictation") · per-app modes
   (foreground-window detection) · streaming partials · browser-URL and screen-OCR context blocks.
 
@@ -407,13 +414,42 @@ it is the unfinished half of D29/D30/D33.
   `record_tool_round` serialises the round into history in its own wire shape (Anthropic blocks /
   OpenAI `tool` messages), re-entered with an empty utterance until the brain answers; one retry on
   `malformed_tool_call`, a 5-round cap, history committed only on success.
+- **Works now (2026-07-28) — `find_document`, the third Tier-1 tool** (ROADMAP #11, first slice).
+  "Find the document about X [from this day]" → one query against the **Windows Search index**
+  (`SystemIndex`), back as up to eight ranked hits, `name · date · path`. The model composes
+  `query` (+ optional `kind`, `since`) from the utterance; the tool retrieves and opens nothing.
+  Ranked rather than date-sorted — a date sort floats anything that merely *contains* the words
+  (a word-list file matches everything) above the document actually about them; `since` covers
+  "from this day". Verified live on the box against real documents.
+  Implementation: the index's provider (`Search.CollatorDSO`) is OLE-DB, so ADO is the only route
+  and the stdlib has no COM — reached via **PowerShell COM in a subprocess** rather than adding
+  pywin32, which is *not* a project dependency (the handoff assumed it was; `pywin32-ctypes` is
+  present but is a keyring shim with no COM). Not the raw shell spec/30 rule 1 forbids: the model
+  gives words, never a command; terms are stripped to bare `\w` before they reach the query and
+  each is quoted and AND-ed (which also demotes a stray `OR`/`NEAR` to a literal word); the SQL is
+  handed to the subprocess in an env var, so nothing the model wrote is parsed as PowerShell. Off
+  Windows, or with the Search service off, it answers "not available" instead of raising — so CI
+  needs no live index. Selfcheck covers the sanitiser directly plus both dispatch paths.
+- **The tool ledger (spec/30 rule 4).** Growth is tracked, not gated: nothing waits on a clock, but
+  no tool is assumed good until it has misfired-free invocations in real use behind it. Evidence is
+  `logs/audit.jsonl` (rule 2 already logs every call's outcome); this table is the human read of it,
+  and a tool that keeps misfiring is a candidate for removal.
+
+  | Tool | Tier | Built | Proven in real use |
+  |------|------|-------|--------------------|
+  | `system_status` | 1 | 2026-07-27 (D31) | **not yet** — no live tool turn on the box |
+  | `read_clipboard` | 1 | 2026-07-27 (D31) | **not yet** — same |
+  | `find_document` | 1 | 2026-07-28 | **not yet** — backend verified live against real documents, but never through a brain turn |
+
+  *Update the right-hand column when a tool has been invoked by the brain, in a real turn, several
+  times without misfiring — that is the column the rule exists for.*
 - **Not built:** Tier 2 (`open_app` · `focus_window` · `media_control` · `set_timer` — need backends
   plus the announce earcon) and Tier 3 (propose-then-tap confirmation, D26, on the Teleprompter). No
-  raw shell below Tier 3 (spec/30 rule 1). Growth rule: add tools only after ≥ 1 week of daily use
-  without misfires (spec/30 rule 4).
+  raw shell below Tier 3 (spec/30 rule 1).
 - **In flight:** —
-- **Next:** live-verify a tool turn on the box (Claude asks `system_status`, then answers), then
-  Tier 2 backends when a tool is genuinely wanted.
+- **Next:** `search_email` (Outlook), the second half of ROADMAP #11 — same pattern, model composes
+  the query. Then live-verify a tool turn end to end (Claude asks `system_status`, then answers),
+  and Tier 2 backends when a tool is genuinely wanted.
 
 ## Specs — spec & decision docs
 

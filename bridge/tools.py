@@ -23,6 +23,9 @@ from __future__ import annotations
 import ctypes
 import json
 import logging
+import os
+import re
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -111,9 +114,110 @@ def _win_battery() -> str:
     return f"Battery: {pct}% ({state})"
 
 
+# --- find_document: the Windows Search index -------------------------------------------------
+#
+# The model composes the query from the utterance and this retrieves; nothing here ever opens or
+# reads a file, so a wrong guess costs a wasted query, not a directory walk.
+#
+# ponytail: the index is reached through PowerShell's COM rather than pywin32. Its provider
+# (Search.CollatorDSO) is OLE-DB — ADO is the only route, the stdlib has no COM, and pywin32 is
+# not a dependency of this project (bridge/paste.py made the same call for the clipboard).
+# subprocess is a sanctioned Windows backend (docs/04 §Tools). This is NOT the raw-shell tool
+# spec/30 rule 1 forbids: the model supplies search WORDS, never a command, and the finished SQL
+# is handed over in an environment variable, so nothing the model wrote is ever parsed as
+# PowerShell. Swap to pywin32 if the ~0.5 s process start ever matters.
+
+FIND_LIMIT = 8
+
+_FIND_PS = r"""
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+try {
+  $c = New-Object -ComObject ADODB.Connection
+  $c.Open("Provider=Search.CollatorDSO;Extended Properties='Application=Windows'")
+  $rs = $c.Execute($env:GEMMA_SQL)
+  while (-not $rs.EOF) {
+    $d = $rs.Fields.Item(2).Value
+    @($rs.Fields.Item(0).Value,
+      $(if ($d) { $d.ToString('yyyy-MM-dd') } else { '?' }),
+      $rs.Fields.Item(1).Value) -join "`t"
+    $rs.MoveNext()
+  }
+  $c.Close()
+} catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }
+"""
+
+
+def _search_terms(q) -> str:
+    """Whatever the model wrote, reduced to plain search words. This is the trust boundary: the
+    result is spliced into a SQL string literal, so anything that could close it or mean something
+    to the query language is DROPPED rather than escaped — quotes, parens, `%`, `*`, `-` operators.
+    Windows Search wants bare terms anyway, so nothing useful is lost."""
+    return " ".join(re.sub(r"[^\w\s]", " ", str(q)).split())[:120]
+
+
+def _iso_date(s) -> str:
+    """`since` as a bare YYYY-MM-DD, or "" if the model sent something else (it does not go into
+    the query then). Same reason as above: this ends up inside a SQL literal."""
+    try:
+        return datetime.fromisoformat(str(s)[:10]).strftime("%Y-%m-%d")
+    except (TypeError, ValueError):
+        return ""
+
+
+def _find_document(args: dict) -> str:
+    if sys.platform != "win32":
+        # ponytail: registered on every platform and degrading here, as read_clipboard does —
+        # a per-platform _BACKENDS split earns its keep only when a macOS backend actually exists.
+        return "Searching files needs the Windows Search index, which this machine does not have."
+
+    query = _search_terms(args.get("query"))
+    if not query:
+        return "No usable search terms in that request — I need a word or two from the document."
+
+    # Each term double-quoted and AND-ed: bare multi-word text is a syntax error to CONTAINS, and
+    # quoting also demotes a stray AND/OR/NEAR from operator to literal word.
+    where = [f"""CONTAINS('{' AND '.join(f'"{t}"' for t in query.split())}')"""]
+    # The valid kinds live in the registry, not here (hard rule 3) — read them back off it.
+    entry = _entry("find_document") or {}
+    kinds = entry.get("parameters", {}).get("properties", {}).get("kind", {}).get("enum", [])
+    if args.get("kind") in kinds:
+        where.append(f"System.Kind = '{args['kind']}'")
+    if since := _iso_date(args.get("since")):
+        where.append(f"System.DateModified >= '{since}'")
+
+    # Ranked, not date-sorted: `since` already handles "from this day", and on a real index a
+    # date sort floats junk that merely CONTAINS the words (a word-list file matches everything)
+    # above the document actually about them. The date rides along in each line regardless.
+    sql = (f"SELECT TOP {FIND_LIMIT} System.ItemNameDisplay, System.ItemPathDisplay, "
+           f"System.DateModified FROM SystemIndex WHERE {' AND '.join(where)} "
+           f"ORDER BY System.Search.Rank DESC")
+
+    try:
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", _FIND_PS],
+            env={**os.environ, "GEMMA_SQL": sql},
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20,
+            creationflags=subprocess.CREATE_NO_WINDOW,  # no console flash over the overlay
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.warning("find_document: %s", exc)
+        return "Windows Search did not answer in time, so I could not look."
+
+    if proc.returncode:
+        log.warning("find_document: %s", proc.stderr.strip()[:200])
+        return "Windows Search is not available on this machine (the index service may be off)."
+
+    rows = [r.split("\t", 2) for r in proc.stdout.splitlines() if r.strip()]
+    hits = [f"{n} · {d} · {p}" for n, d, p in (r for r in rows if len(r) == 3)]
+    if not hits:
+        return f"Nothing in the Windows Search index matches {query!r}."
+    return f"Indexed matches for {query!r} (best first):\n" + "\n".join(hits)
+
+
 _BACKENDS: dict[str, Callable[[dict], str]] = {
     "system_status": _system_status,
     "read_clipboard": _read_clipboard,
+    "find_document": _find_document,
 }
 
 
@@ -203,11 +307,20 @@ def _selfcheck() -> None:
     # tools. Every Tier-2/3 starter tool (open_app, set_timer, …) must be absent, because a tool
     # the model cannot see is a tool it cannot call (spec/30 rule 3).
     offered = {t["name"] for t in tool_specs()}
-    assert offered == {"system_status", "read_clipboard"}, offered
+    assert offered == {"system_status", "read_clipboard", "find_document"}, offered
     for t in reg:
         if t["tier"] > MAX_TIER:
             assert t["name"] not in offered, f"{t['name']}: tier {t['tier']} must not be offered"
     assert all("tier" in t for t in tool_specs()), "specs carry the tier for the loop to read"
+
+    # find_document's trust boundary: the model's words end up inside a SQL string literal, so
+    # everything that could close it or steer the query is dropped, and a bad date never lands.
+    assert _search_terms("bob's ' OR 1=1 --") == "bob s OR 1 1", _search_terms("bob's ' OR 1=1 --")
+    assert "'" not in _search_terms("a'b\"c;d`e$f(g)") and "$" not in _search_terms("a$b")
+    assert _search_terms("café über") == "café über", "real words survive, only punctuation goes"
+    assert _search_terms("!!!") == "" and _search_terms(None) == "None"
+    assert _iso_date("2026-01-31") == "2026-01-31"
+    assert _iso_date("last tuesday") == "" and _iso_date(None) == "" and _iso_date(7) == ""
 
     with tempfile.TemporaryDirectory() as tmp:
         AUDIT_FILE = Path(tmp) / "audit.jsonl"
@@ -232,9 +345,23 @@ def _selfcheck() -> None:
         content, outcome = execute(ToolCall("4", "read_clipboard", {}))
         assert outcome in ("ok", "error"), (content, outcome)
 
-        # Every one of those four calls left exactly one audit line, with the required fields.
+        # find_document dispatches and ALWAYS answers in prose, whatever the machine offers: a
+        # real hit list on an indexed box, "not available" off Windows or with the index service
+        # off (a CI runner). A nonsense term keeps it deterministic — the point is the round trip,
+        # not the corpus, so no live index is required here.
+        content, outcome = execute(ToolCall("5", "find_document", {"query": "zzqx nosuch term"}))
+        assert outcome == "ok" and content.strip(), (content, outcome)
+
+        # ...including when the model sends junk in the optional params: an unknown `kind` and an
+        # unparseable `since` are dropped, not passed through to the query.
+        content, outcome = execute(
+            ToolCall("6", "find_document", {"query": "zzqx", "kind": "spaceship", "since": "soon"})
+        )
+        assert outcome == "ok" and content.strip(), (content, outcome)
+
+        # Every one of those six calls left exactly one audit line, with the required fields.
         lines = AUDIT_FILE.read_text(encoding="utf-8").splitlines()
-        assert len(lines) == 4, f"every call must audit once, got {len(lines)}"
+        assert len(lines) == 6, f"every call must audit once, got {len(lines)}"
         rec = json.loads(lines[0])
         assert set(rec) == {"ts", "session", "transcript_snippet", "tool", "args",
                             "outcome", "duration_ms"}, sorted(rec)

@@ -44,6 +44,7 @@ from bridge.hotkeys import Hotkeys
 from bridge.log import setup_logging
 from bridge.paste import paste_text
 from bridge.tools import execute as run_tool, tool_specs
+from bridge.replace import apply as apply_replacements  # aliased: `replace` is dataclasses.replace here
 from bridge import settings
 
 log = logging.getLogger("gemma.orchestrator")
@@ -759,6 +760,9 @@ class Orchestrator:
             self._ev("no-transcript", show="(no transcript)")
             self._publish_state("idle")
             return
+        # D15 (spec/60): deterministic word-replacement runs BEFORE cleanup — a lookup, not a
+        # model guess, so known acronym/name/jargon fixes land even when cleanup is off.
+        text = apply_replacements(text)
         # mirror=False: the transcript is traced for the harness but pastes at the caret — it is
         # never shown on the island and must not join the assistant's prompt history (D2).
         self._ev("transcript", text, show=f"> {text}", mirror=False)

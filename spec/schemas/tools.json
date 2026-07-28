@@ -1,6 +1,6 @@
 {
-  "$comment": "Contract T tool registry — SINGLE SOURCE OF TRUTH (spec/30). The bridge loads this at startup; brains receive it as their tool list; the executor refuses calls not defined here. tier: 1=read-only, 2=reversible (earcon announce), 3=destructive (spoken confirmation required). Growth rule: add tools only after a week of daily use without misfires.",
-  "version": "0.1.0",
+  "$comment": "Contract T tool registry — SINGLE SOURCE OF TRUTH (spec/30). The bridge loads this at startup; brains receive it as their tool list; the executor refuses calls not defined here. tier: 1=read-only, 2=reversible (earcon announce), 3=destructive (spoken confirmation required). Growth rule: adding a tool is tracked, not gated — STATE Track T records when each was built and whether it has been invoked in real use without misfiring.",
+  "version": "0.2.0",
   "tools": [
     {
       "name": "system_status",
@@ -13,6 +13,20 @@
       "tier": 1,
       "description": "Return the current text contents of the clipboard (truncated to 2000 chars).",
       "parameters": { "type": "object", "properties": {}, "additionalProperties": false }
+    },
+    {
+      "name": "find_document",
+      "tier": 1,
+      "description": "Find files on this PC by what they CONTAIN or are named, using the Windows Search index — use this for 'find the document about X', 'the letter I wrote last month', and similar. Returns up to 8 matches (name, date modified, full path), best match first. Searches only what Windows has already indexed; nothing leaves the machine.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "the distinguishing words to look for in file contents and names — plain terms only, no operators or punctuation" },
+          "kind": { "enum": ["document", "picture", "music", "video", "email", "folder"], "description": "optional: restrict to one kind of item" },
+          "since": { "type": "string", "description": "optional: only items modified on or after this date, as YYYY-MM-DD" }
+        },
+        "required": ["query"], "additionalProperties": false
+      }
     },
     {
       "name": "open_app",
