@@ -670,6 +670,8 @@ Window {
         prompt: root.prompt
         reply: overlay.reply
         generating: overlay.reply !== "" && !overlay.done   // mid-stream peek: more still coming
+        model: overlay.model                                 // the model + tokens for the footer (D34)
+        tokens: overlay.tokens
         visible: root.peeking || root.peekFade > 0.01
         opacity: root.peekFade
         onCopyRequested: root.copyRequested(overlay.reply)

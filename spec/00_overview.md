@@ -1,6 +1,6 @@
 # Spec 00 — System overview & status
 
-**Last reconciled: 2026-07-24** · Build progress: [STATE.md](../STATE.md) · Decisions record: [docs/02](../docs/02_architecture/02_system_architecture.md)
+**Last reconciled: 2026-07-28** · Build progress: [STATE.md](../STATE.md) · Decisions record: [docs/02](../docs/02_architecture/02_system_architecture.md)
 
 ## The system in one paragraph
 
@@ -185,8 +185,8 @@ configurable**, not one global choice. **Dictation** cleanup uses **Groq** (clou
 key in the tray → `("gemma","groq")`), revising this decision's "not the cloud brain" for that
 path. The **assistant-path `--clean-prompts`** engine **stays local for now** — this decision's
 latency/privacy argument holds there. Each role selects its own engine in settings (spec/70),
-default local; the config plumbing waits on the config source, M0-close gate. Composes with the
-parked multi-provider routing.)*
+default local. *(The config source landed at D28 and the per-role router at D33, so this plumbing
+now exists; what the router does not yet cover is its Layer 2 — see spec/20 §Routing.)*
 
 **D16 (2026-07-20): re-founding — the desk product.** Adversarial review of the
 accumulated D12–D15 patches against the original eyes-free spec; every survivor below
@@ -646,14 +646,21 @@ Track T's first build (spec/30). The registry has existed since M0 but nothing e
   / dark shell, so on dark surfaces the body renders light and the eyes become holes — the kit's own
   dark-surface rendering, a one-line palette MAP over the indices (README: "ship the indices, not the
   colours"), NOT a repaint or a second export from Design. Gem's purple/orange accents are kept
-  exactly (Thomas); the tray flips the body by the Windows light/dark setting.
+  exactly (Thomas); the tray flips the body by the Windows **taskbar** theme
+  (`SystemUsesLightTheme`). *(Amended 2026-07-28: this read "the Windows light/dark setting", which
+  is the APP theme `AppsUseLightTheme`. The two differ on a common Windows 11 combo — light apps,
+  dark taskbar — and a tray icon lives on the taskbar, so the app setting rendered Gem's dark body
+  invisible. The fallback is the light body, since the usual taskbar is dark.)*
 - **Truthful, never decorative** (spec/50 rule 4): every surface is driven by the real Contract-P
   state, so `listening` / `asleep` mean the mic truly is / isn't capturing. `gem.gem_state()` maps the
   daemon's few extra states (dictation's transcribing / transforming / pasted) onto the nearest Gem
   and rests unknowns at idle, so a consumer never KeyErrors.
 - **Staged, per Thomas.** Settings shows only `arriving` (on open) → `idle` → `listening` (mic on);
-  the tray shows the full vocabulary but rests idle/asleep on a single frame (no perpetual wiggle);
-  the overlay island is deliberately left untouched for now. Guarded: `teleprompter.gem` (CI-wired) +
+  the tray shows the full vocabulary and animates every state that has more than one frame, idle
+  included — only a genuinely single-frame state rests. *(Amended 2026-07-28: idle and asleep used
+  to rest on one frame, "no perpetual wiggle". Thomas wants the tray reading alive rather than
+  frozen on frame 0, so the exemption is gone.)* The overlay island is deliberately left untouched
+  for now. Guarded: `teleprompter.gem` (CI-wired) +
   the Gem row driven through `settings_check`. Live-on-the-box verification (tray, taskbar, entrance)
   is owed — headless cannot show them. Parked kit extra: the costume portraits for settings sections.
 
@@ -678,4 +685,17 @@ model, read fresh from settings each turn.
 - Guarded: `bridge.brains.router` selfcheck (resolution + signature, no network; CI-wired). spec/20
   §Routing rewritten from "not built" to v1-built. Source: Thomas — "respect the config the user
   inputs, so if the user says use X, it actually does so."
+
+**D34 (2026-07-28): model + token count in the peek footer.** The expanded-answer view now names the
+model that produced the reply and the turn's total token count — `claude-opus-4-8 • 1,847 tokens`, a
+quiet Martian-Mono line bottom-left, opposite Copy/Save (variant A of the sandbox; Thomas). It rides
+Contract P: the `response` message gains optional `model` + `tokens` fields (`status.json` → v0.5.0),
+stamped by the orchestrator on the `done` message — the model from the router-resolved assistant
+brain (`.model`), the tokens summed from each round's `Done(usage)` across the tool loop (input +
+output). The overlay reducer reads them (`decode.OverlayState`), `OverlayModel` exposes them, and
+`PeekPanel` renders the footer once the reply settles. Both fields are optional and absent on
+streaming deltas, so an older sender just shows no footer. Guarded: the shape in
+`bridge.broadcaster --selfcheck` (validates against the schema) + the read in
+`teleprompter.decode --selfcheck`; overlay/settings checks green. Owed: live on the box — peek a real
+answer and read the footer.
 

@@ -82,13 +82,13 @@
     },
     "cleanup_dictation_on": {
       "type": "bool", "default": true, "pane": null,
-      "label": "Tidy dictation", "built": false,
-      "$comment": "Paired with `cleanup_dictation` via its `toggledBy` \u2014 one row, two values."
+      "label": "Tidy dictation", "built": true,
+      "$comment": "Paired with `cleanup_dictation` via its `toggledBy` \u2014 one row, two values. Read by `orchestrator._dictate`: off skips the transform and pastes the raw transcript."
     },
     "cleanup_dictation": {
       "type": "provider", "default": "", "pane": "models",
-      "label": "Tidy dictation", "toggledBy": "cleanup_dictation_on", "built": false,
-      "$comment": "S-06/D15. Consumer is Track D's dictation pipeline, unbuilt."
+      "label": "Tidy dictation", "toggledBy": "cleanup_dictation_on", "built": true,
+      "$comment": "S-06/D15. Resolved by the router (D33) as the `cleanup_dictation` role; unset falls back to CLEANUP_PROVIDER."
     },
     "cleanup_prompts_on": {
       "type": "bool", "default": true, "pane": null,

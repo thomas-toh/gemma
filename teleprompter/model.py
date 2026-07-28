@@ -69,6 +69,16 @@ class OverlayModel(QObject):
         """The reply is complete (response done). Drives the peek's 'generating…' cue (D27)."""
         return self._s.done
 
+    @Property(str, notify=changed)
+    def model(self) -> str:
+        """The model that produced the reply — the peek footer names it (D34)."""
+        return self._s.model
+
+    @Property(int, notify=changed)
+    def tokens(self) -> int:
+        """The turn's total input+output tokens — shown beside the model in the peek footer (D34)."""
+        return self._s.tokens
+
     @Property(float, notify=changed)
     def mic(self) -> float:
         return self._s.mic

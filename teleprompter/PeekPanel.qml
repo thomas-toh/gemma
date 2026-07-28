@@ -18,6 +18,8 @@ Item {
     property string prompt: ""
     property string reply: ""
     property bool generating: false          // the reply is still streaming (mid-stream peek, D27)
+    property string model: ""                // the model that produced the reply (footer, D34)
+    property int tokens: 0                    // the turn's total input+output tokens (footer, D34)
     property string faceFamily: ""           // handed in by Overlay. DIFFERENT name from the
                                              // `fontFamily` context property on purpose: a property
                                              // named fontFamily makes `fontFamily: fontFamily`
@@ -219,5 +221,18 @@ Item {
             NumberAnimation { from: 0.45; to: 0.95; duration: 700; easing.type: Easing.InOutSine }
             NumberAnimation { from: 0.95; to: 0.45; duration: 700; easing.type: Easing.InOutSine }
         }
+    }
+
+    // The model that produced the reply + the turn's token count (D34, variant A): a quiet mono line
+    // bottom-left, opposite Copy/Save, once the reply has settled (not while it is still streaming).
+    Text {
+        id: modelLine
+        objectName: "modelLine"
+        visible: !panel.generating && panel.model !== ""
+        anchors.left: parent.left; anchors.leftMargin: panel.padSide
+        anchors.verticalCenter: actions.verticalCenter
+        text: panel.model + (panel.tokens > 0 ? "  •  " + panel.tokens + " tokens" : "")
+        color: Theme.textMuted
+        font.family: Theme.fontMono; font.pixelSize: Theme.fontSizeSmall
     }
 }

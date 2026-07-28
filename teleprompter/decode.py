@@ -173,6 +173,10 @@ class OverlayState:
     mic: float = 0.0
     error: str = ""
     kind: str = ""
+    # The model that produced the reply + the turn's total tokens (D34) — stamped on the 'done'
+    # response message, shown in the peek footer.
+    model: str = ""
+    tokens: int = 0
     # Per-turn instrument readings (spec/40 targets: feedback < 1500 ms, first word < 4000 ms).
     # status.json calls these "not user-facing chrome by default", so the overlay only shows
     # them behind a toggle — but D13 wants them on screen for the M0 acceptance run.
@@ -184,8 +188,9 @@ class OverlayState:
     def clear_turn(self) -> None:
         """Forget the current turn — prompt, reply, fault, instrument readings. The session's
         prompt history deliberately survives (it belongs to the session, not the turn)."""
-        self.transcript = self.reply = self.error = self.kind = ""
+        self.transcript = self.reply = self.error = self.kind = self.model = ""
         self.done = False
+        self.tokens = 0
         self.feedback_ms = self.first_word_ms = 0.0
 
     def apply(self, msg: dict) -> None:
@@ -206,6 +211,10 @@ class OverlayState:
         elif t == "response":
             self.reply += msg.get("delta", "")
             self.done = bool(msg.get("done", False))
+            if msg.get("model"):
+                self.model = msg["model"]        # stamped on the 'done' message (D34)
+            if msg.get("tokens"):
+                self.tokens = int(msg["tokens"])
         elif t == "mic":
             self.mic = float(msg["level"])
         elif t == "error":
@@ -290,8 +299,8 @@ def _selfcheck() -> None:
     s.apply({"type": "state", "state": "speaking"})
     assert s.reply == "It's clear in Tokyo.", "speaking must not clear the reply"
     assert s.transcript == "what's the weather", "speaking must not clear the prompt"
-    s.apply({"type": "response", "done": True})
-    assert s.done
+    s.apply({"type": "response", "done": True, "model": "claude-opus-4-8", "tokens": 421})
+    assert s.done and s.model == "claude-opus-4-8" and s.tokens == 421, (s.model, s.tokens)
     # ...and it must survive `idle` too (D24). `idle` now means the DAEMON has finished, not
     # "blank the island": the overlay owns that, because only it knows how much text is left to
     # reveal. While the daemon owned it, it was timing a reveal it could not see, and long
@@ -304,6 +313,7 @@ def _selfcheck() -> None:
     # which existed because that clear lived in one caller instead of in the state itself.
     s.apply({"type": "state", "state": "listening"})
     assert s.reply == "" and s.transcript == "" and not s.done, "listening must clear the turn"
+    assert s.model == "" and s.tokens == 0, "the turn clear must reset the model + token footer"
     assert s.history == ["what's the weather"], s.history
     s.apply({"type": "state", "state": "thinking"})
     s.apply({"type": "transcript", "text": "set a timer"})

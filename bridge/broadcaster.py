@@ -85,8 +85,13 @@ def m_transcript(text: str, final: bool = True) -> dict:
     return {"type": "transcript", "text": text, "final": final}
 
 
-def m_response(delta: str = "", done: bool = False) -> dict:
-    return {"type": "response", "delta": delta, "done": done}
+def m_response(delta: str = "", done: bool = False, model: str = "", tokens: int = 0) -> dict:
+    msg = {"type": "response", "delta": delta, "done": done}
+    if model:                       # stamped only on the 'done' message; streaming deltas stay lean (D34)
+        msg["model"] = model
+    if tokens:
+        msg["tokens"] = tokens
+    return msg
 
 
 def m_mic(level: float) -> dict:

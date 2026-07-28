@@ -1,6 +1,6 @@
 # Spec 70 — Settings & configuration
 
-**Last reconciled: 2026-07-27** · Build progress: [STATE.md](../STATE.md) · Decisions: [spec/00](00_overview.md)
+**Last reconciled: 2026-07-28** · Build progress: [STATE.md](../STATE.md) · Decisions: [spec/00](00_overview.md)
 
 > The **window is built** (D29, 2026-07-27) and renders from `spec/schemas/settings.json` — the
 > executable truth for panes, defaults and the provider catalogue (hard rule 3). §2's architecture
@@ -11,8 +11,9 @@
 ## 1. What it is
 
 The user-facing configuration surface for Gemma: a **tray icon** (always present) and an
-on-demand **settings window**. This is the *"settings surface for tool setup"* named as the
-M0-close gate in STATE — the missing piece being a **config source: file → panel**.
+on-demand **settings window**, over a **config source: file → panel**. *(This was once called the
+"M0-close gate"; that gate was retired on 2026-07-28 — it was never part of spec/00's M0 criterion,
+and build status belongs in STATE, not here.)*
 
 ## 2. Architecture (decided 2026-07-20)
 
@@ -42,7 +43,7 @@ M0-close gate in STATE — the missing piece being a **config source: file → p
 
 ## 3. Settings inventory (OWED — the concurrent line-item work)
 
-Seed list (from the STATE M0-close gate + this session) — expand, group, and specify
+Seed list (from the settings-surface sessions) — expand, group, and specify
 types / defaults / validation:
 
 - **Output toggles (LANDED 2026-07-24, D28) — the config source's first step:** `tts` (spoken

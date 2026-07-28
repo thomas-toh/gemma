@@ -67,16 +67,14 @@ MIC_LEVEL_REF = 6000.0  # int16 RMS mapped to a full overlay bar (Contract P 'mi
 # else says belongs to the caller. Until spec/20's router lands, the orchestrator constructs B1
 # directly (see __init__), so this is necessarily a Claude model — a Groq id would fail on B1.
 # When the router arrives it reads the primary provider + model from settings and this goes away.
-# ponytail: env override until settings-driven selection exists (STATE, M0-close gate).
+# The fallback when the router (D33) finds no `primary` configured — env-overridable.
 DAEMON_MODEL = os.environ.get("GEMMA_BRAIN_MODEL", "claude-opus-4-8")
 
 # Dictation cleanup (spec/60, D15/S-06): Groq by default — cloud, fast, cheap, and the key is
-# already in the credential store. The cleanup ROLE is meant to be settings-configurable
-# (spec/70), but that plumbing is unbuilt (settings.json `cleanup_dictation` is built:false), so
-# these are the stopgap, env-overridable like DAEMON_MODEL. Must be an OpenAI-wire provider for
-# now — build_brain picks the adapter by wire, so pointing this at Anthropic would work too, but
-# a small fast model is the point of cleanup.
-# ponytail: replace with the settings-driven cleanup-role selection when spec/70 lands.
+# already in the credential store. Since D33 the cleanup ROLE is settings-configurable, so these
+# are the FALLBACK for an unconfigured `cleanup_dictation`, not the only path. Must be an
+# OpenAI-wire provider — build_brain picks the adapter by wire, so pointing this at Anthropic
+# would work too, but a small fast model is the point of cleanup.
 CLEANUP_PROVIDER = os.environ.get("GEMMA_CLEANUP_PROVIDER", "groq")
 CLEANUP_MODEL = os.environ.get("GEMMA_CLEANUP_MODEL", "llama-3.1-8b-instant")
 
@@ -181,12 +179,12 @@ async def _wait_flag(flag) -> None:
 
 
 async def _drive(brain, session: Session, utterance: str, on_delta=None,
-                 abort=None, tools=None, execute=None) -> tuple[str, str | None]:
+                 abort=None, tools=None, execute=None, on_usage=None) -> tuple[str, str | None]:
     """Run one brain turn, racing it against the dismiss signal. This is THE abort seam:
     without it a dismiss could not interrupt THINKING, which is exactly when you most want
     to bail (a misheard prompt, a question you have thought better of). Cancelling the task
     closes the stream, so the HTTP request is dropped rather than drained."""
-    turn = asyncio.create_task(_collect(brain, session, utterance, on_delta, tools, execute))
+    turn = asyncio.create_task(_collect(brain, session, utterance, on_delta, tools, execute, on_usage))
     if abort is None:
         return await turn
     watch = asyncio.create_task(_wait_flag(abort))
@@ -213,7 +211,7 @@ MAX_TOOL_ROUNDS = 5
 
 async def _one_round(brain, session: Session, tools):
     """One Contract-B round: collect the round's text (+ a console dev trace), collect tool calls,
-    map errors. Returns (text, calls, error_kind_or_None, malformed). Deliberately does NOT stream
+    map errors. Returns (text, calls, error_kind_or_None, malformed, usage). Deliberately does NOT stream
     to the overlay: a tool round's text is the model narrating that it is about to call a tool, and
     only the final answering round should reach the island (the streaming is _collect's job now).
     The utterance is always "" — the turn's input is already in session.history (the real user
@@ -226,6 +224,7 @@ async def _one_round(brain, session: Session, tools):
     calls: list[ToolCall] = []
     err: str | None = None
     malformed = False
+    usage: dict | None = None
     stream = brain.converse(session, "", tools)
     try:
         async for ev in stream:
@@ -235,6 +234,7 @@ async def _one_round(brain, session: Session, tools):
             elif isinstance(ev, ToolCall):
                 calls.append(ev)
             elif isinstance(ev, Done):
+                usage = ev.usage                     # {input_tokens, output_tokens} — _collect sums it
                 log.info("brain done: %s", ev.usage)
             elif isinstance(ev, Error):
                 if ev.kind == "malformed_tool_call":
@@ -246,11 +246,11 @@ async def _one_round(brain, session: Session, tools):
         await stream.aclose()
     if parts:
         print()
-    return "".join(parts).strip(), calls, err, malformed
+    return "".join(parts).strip(), calls, err, malformed, usage
 
 
 async def _collect(brain, session: Session, utterance: str, on_delta=None,
-                   tools=None, execute=None) -> tuple[str, str | None]:
+                   tools=None, execute=None, on_usage=None) -> tuple[str, str | None]:
     """Drive one assistant turn to a spoken answer, running the Contract T tool loop in between
     (spec/30): the brain may ask for tools, the orchestrator executes them and feeds the results
     back, and this repeats until the brain answers with no further tool call.
@@ -268,8 +268,11 @@ async def _collect(brain, session: Session, utterance: str, on_delta=None,
     working = list(session.history) + [{"role": "user", "content": utterance}]
     turn = replace(session, history=working)          # a copy: uncommitted until success
     retried = False
+    total_tokens = 0                                  # summed across every round, for the peek footer
     for _round in range(MAX_TOOL_ROUNDS + 1):
-        text, calls, err, malformed = await _one_round(brain, turn, tools)
+        text, calls, err, malformed, usage = await _one_round(brain, turn, tools)
+        if usage:
+            total_tokens += (usage.get("input_tokens") or 0) + (usage.get("output_tokens") or 0)
         if malformed and not retried:
             retried = True                            # spec/20: retry a malformed tool call once
             log.info("malformed tool call — retrying the round once (spec/20)")
@@ -279,6 +282,8 @@ async def _collect(brain, session: Session, utterance: str, on_delta=None,
         if not calls:
             if on_delta and text:
                 on_delta(text)                        # only the ANSWER reaches the overlay
+            if on_usage:
+                on_usage(total_tokens)                # the turn's total tokens -> the peek footer
             working.append({"role": "assistant", "content": text})
             session.history[:] = working              # commit — success only
             return text, None
@@ -575,12 +580,14 @@ class Orchestrator:
 
         # The 'working' earcon is retired (D28): since D23/D25 the overlay's THINKING state IS
         # the feedback, so nothing pings while the brain runs — the screen carries it.
+        usage_box = {"tokens": 0}
         reply, err = self._run_async(_drive(
             self._assistant_brain(), self.session, text,
             on_delta=lambda d: self.bc.publish(m_response(delta=d)),
             abort=self._abort_flag(),
             tools=tool_specs(),                 # Contract T: only implemented, in-tier tools (spec/30)
             execute=lambda c: run_tool(c, session=self.session.id, transcript=text),
+            on_usage=lambda n: usage_box.__setitem__("tokens", n),
         ))
         if err == "aborted":
             self._dismissed()                   # consume the signal the race saw
@@ -592,7 +599,10 @@ class Orchestrator:
             if settings.get("tts"):
                 return self._speak(self.synth(spoken_error(kind), self.voice), state="error")
             return None      # TTS off: the fault MESSAGE shows on the overlay (as no_transcript does)
-        self.bc.publish(m_response(done=True))  # reply text complete on the overlay
+        # Reply complete: stamp the model that produced it + the turn's total tokens, so the peek
+        # footer can name them (D34). getattr — a replay/fake brain may carry no `.model`.
+        self.bc.publish(m_response(done=True, model=getattr(self.brain, "model", "") or "",
+                                   tokens=usage_box["tokens"]))
         # History is committed inside _collect now (it must persist tool rounds mid-turn, and only
         # on success), so there is no post-turn append here any more.
         # The hold survives; the "say 'read it'" escape hatch does not. Holding is what stops
@@ -736,7 +746,8 @@ class Orchestrator:
         answer and no follow-up chain — the key was the endpoint and the text goes to whatever
         app has focus. Cleanup is an ENHANCEMENT, not a gate: if it is unavailable the raw
         transcript is delivered, so dictation still works with no cleanup key and, in that case,
-        nothing leaves the machine."""
+        nothing leaves the machine. The user can also turn it off outright ('Tidy dictation',
+        spec/70), which is the same delivery path."""
         self.fed_back = False                       # a fresh turn: let it record feedback once
         self._ev("transcribing", show="[dictation: transcribing]")   # own state, not 'thinking' (D2)
         self._feedback("overlay thinking")          # D25: the screen is the feedback
@@ -752,15 +763,21 @@ class Orchestrator:
         # never shown on the island and must not join the assistant's prompt history (D2).
         self._ev("transcript", text, show=f"> {text}", mirror=False)
 
-        self._ev("transforming", show="[dictation: cleaning up]")    # own state (D2)
-        cleaned, err = self._run_async(
-            transform(self._cleanup_brain(), text, DICTATION_CLEANUP))
-        if err or not cleaned:
-            log.warning("dictation cleanup unavailable (%s) — pasting the raw transcript",
-                        err.kind if err else "empty result")
-            cleaned = text
+        # 'Tidy dictation' (spec/70): off means paste exactly what was said — no transform, and
+        # no 'transforming' state either, since showing "Tidying…" while nothing tidies would be
+        # a lie. Read fresh like every setting, so a flip lands on the next turn.
+        if settings.get("cleanup_dictation_on"):
+            self._ev("transforming", show="[dictation: cleaning up]")    # own state (D2)
+            cleaned, err = self._run_async(
+                transform(self._cleanup_brain(), text, DICTATION_CLEANUP))
+            if err or not cleaned:
+                log.warning("dictation cleanup unavailable (%s) — pasting the raw transcript",
+                            err.kind if err else "empty result")
+                cleaned = text
+            else:
+                self._ev("transcript", cleaned, show=f"> {cleaned}", mirror=False)
         else:
-            self._ev("transcript", cleaned, show=f"> {cleaned}", mirror=False)
+            cleaned = text
 
         if paste_text(cleaned):
             self._ping("success")
@@ -1163,7 +1180,8 @@ def _selfcheck() -> None:
     # `__main__` and the import gives a SECOND copy, so patching the import would miss the names
     # `_dictate` actually reads. globals() is this module's own namespace either way.
     g = globals()
-    _orig = {n: g[n] for n in ("transcribe", "transform", "paste_text")}
+    _orig = {n: g[n] for n in ("transcribe", "transform", "paste_text", "settings")}
+    _real_settings = _orig["settings"]           # captured: g["settings"] gets shadowed below
     try:
         pasted: list = []
         g["paste_text"] = lambda text, restore=True: (pasted.append(text) or True)
@@ -1197,6 +1215,24 @@ def _selfcheck() -> None:
         assert dr.bc.states == ["transcribing", "transforming", "pasted", "idle"], dr.bc.states
 
         pasted.clear()
+        # 'Tidy dictation' off: no transform at all, so the raw transcript is pasted and the
+        # 'transforming' state never shows. Only that one key is faked; everything else
+        # (`pings`) still reads the real file.
+        class _NoTidy:
+            get = staticmethod(lambda k: False if k == "cleanup_dictation_on"
+                               else _real_settings.get(k))
+
+        g["settings"], g["transform"] = _NoTidy, _clean_ok
+        dt = Orchestrator(brain=object(), broadcaster=_Rec())
+        dt.pump, dt._cleanup = _Pump(), object()
+        dt._dictate(object())
+        assert pasted == ["um so like hello there"], \
+            f"tidy off must paste the raw transcript, got {pasted}"
+        assert dt.bc.states == ["transcribing", "pasted", "idle"], \
+            f"tidy off must skip the 'transforming' state: {dt.bc.states}"
+        g["settings"] = _real_settings
+
+        pasted.clear()
         g["transcribe"] = lambda audio: ""
         dn = Orchestrator(brain=object(), broadcaster=_Rec())
         dn.pump, dn._cleanup = _Pump(), object()
@@ -1209,7 +1245,7 @@ def _selfcheck() -> None:
 
     print("selfcheck OK: speak/hold split, capture endpoint, barge-in counter, error lines, "
           "latency table + targets, feedback credits the screen (D25), pings toggle gates earcons, "
-          "dictation dispatch + cleanup-fallback-to-raw (spec/60)")
+          "dictation dispatch + cleanup-fallback-to-raw + the tidy toggle (spec/60)")
 
 
 def main() -> None:
