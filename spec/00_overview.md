@@ -634,3 +634,26 @@ Track T's first build (spec/30). The registry has existed since M0 but nothing e
   `bridge.tools`, the loop/retry/cap in `bridge.orchestrator`, and `record_tool_round` in both
   adapter selfchecks. Source: Thomas, the adapter → dictation → tools sequence.
 
+**D32 (2026-07-28): Gem the mascot arrives — first surfaces.** Thomas commissioned a pixel ghost
+("Gem") derived from the Gemma mark; it is introduced STAGED, and only where it earns its place.
+
+- **One renderer, three surfaces.** `teleprompter/gem.py` reads the kit's palette-indexed frames
+  (`teleprompter/gem/gem-sprites.json`, its own source of truth — never hand-edited) and paints a
+  QImage/QIcon. It feeds the Windows **taskbar / app icon** (`portrait.plain` on a rounded chip), the
+  **tray** (animated by the live status feed, `tray.py`), and the **settings top-bar** (via a
+  `QQuickImageProvider`, `image://gem/<state>/<frame>`), which replaces the on-air lamp.
+- **The body flips, the accents don't.** Gem's native body `#1B1714` is invisible on the black island
+  / dark shell, so on dark surfaces the body renders light and the eyes become holes — the kit's own
+  dark-surface rendering, a one-line palette MAP over the indices (README: "ship the indices, not the
+  colours"), NOT a repaint or a second export from Design. Gem's purple/orange accents are kept
+  exactly (Thomas); the tray flips the body by the Windows light/dark setting.
+- **Truthful, never decorative** (spec/50 rule 4): every surface is driven by the real Contract-P
+  state, so `listening` / `asleep` mean the mic truly is / isn't capturing. `gem.gem_state()` maps the
+  daemon's few extra states (dictation's transcribing / transforming / pasted) onto the nearest Gem
+  and rests unknowns at idle, so a consumer never KeyErrors.
+- **Staged, per Thomas.** Settings shows only `arriving` (on open) → `idle` → `listening` (mic on);
+  the tray shows the full vocabulary but rests idle/asleep on a single frame (no perpetual wiggle);
+  the overlay island is deliberately left untouched for now. Guarded: `teleprompter.gem` (CI-wired) +
+  the Gem row driven through `settings_check`. Live-on-the-box verification (tray, taskbar, entrance)
+  is owed — headless cannot show them. Parked kit extra: the costume portraits for settings sections.
+

@@ -423,6 +423,20 @@ install.)*
 
 ## Track P — Teleprompter (Contract P) — **back-end built (C1); front-end next**
 
+- **Gem the mascot — first surfaces (2026-07-28, D32).** The commissioned ghost sprite kit
+  (`teleprompter/gem/`, its own source of truth — never hand-edit) renders in three places via one
+  renderer, `teleprompter/gem.py`: the **Windows taskbar / app icon** (`portrait.plain` on a rounded
+  chip, `__main__` `setWindowIcon`), the **tray** (status-driven off the live feed, `tray.py`; idle/
+  asleep rest on one frame, the rest animate; body flips with the Windows theme), and the **settings
+  top-bar** (replaces the on-air lamp — `arriving` on open → `idle` → `listening` while capturing,
+  mic on/off only). QML draws it through a `QQuickImageProvider` (`image://gem/<state>/<frame>`).
+  Native purple/orange accents kept; the **body flips light** on dark surfaces (a palette MAP over the
+  kit's indices, never a repaint or a second export). Truthful by construction (spec/50 rule 4).
+  Guarded: `teleprompter.gem` selfcheck (CI-wired) + the Gem row driven through `settings_check`.
+  **Owed — live on the box:** the tray animation, taskbar icon and settings entrance need eyes on a
+  real desktop (headless can't show them). The overlay island is deliberately left alone for now, and
+  the top-left brand Mark is unchanged — Gem is the top-**right** mic indicator, not the logo. Parked
+  kit extra: the costume portraits (DJ/engineer/…) for settings sections.
 - **Decided (2026-07-20):** the visual front-end is the **Teleprompter** (component **P**),
   a separate **PySide6 + QML** process on the **Contract P** status feed
   (`spec/schemas/status.json`, committed). Front/back split: back-end = `bridge/` (headless

@@ -19,7 +19,9 @@ M0-close gate in STATE — the missing piece being a **config source: file → p
 - **Tray icon** — `QSystemTrayIcon` (PySide6 / QtWidgets), cross-platform: Windows
   notification area · macOS menu bar (D10). Doubles as the always-visible **mic-live
   indicator** (spec/50 truthful-indicator role) for when the overlay is hidden. Menu:
-  Open settings · Quit · (Mute).
+  Open settings · Quit · (Mute). Since **D32** the tray icon **is Gem** (the mascot, `teleprompter/gem.py`),
+  animated by the live status feed; the settings top-bar carries Gem too, in place of the on-air
+  lamp (`arriving` → `idle` → `listening`). The mic-live role is now Gem's `listening`/`idle`.
 - **Settings window** — **QML** (Controls.Basic borrowed only for text entry, scrolling and popup
   dismissal; every visible control hand-drawn to match the island — D29), hosted in the UI process
   (D13 — the separate process), **spawned only when opened** (zero idle cost), no Chromium.

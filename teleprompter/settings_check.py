@@ -39,6 +39,7 @@ from PySide6.QtWidgets import QApplication                               # noqa:
 from bridge import settings                                              # noqa: E402
 from teleprompter.model import OverlayModel                              # noqa: E402
 from teleprompter.settings_model import SettingsModel                    # noqa: E402
+from teleprompter import gem                                             # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 
@@ -160,6 +161,10 @@ def check() -> None:
     engine.rootContext().setContextProperty("overlay", overlay)
     engine.rootContext().setContextProperty("fontFamily", "Arial")
     engine.rootContext().setContextProperty("reducedMotion", False)
+    # Gem in the top bar (Track P): the same provider + frame-count property the real host wires,
+    # so the window's Gem row renders here instead of throwing an unknown-source / undefined warning.
+    engine.addImageProvider("gem", gem.GemImageProvider())
+    engine.rootContext().setContextProperty("gemFrames", gem.frame_counts())
 
     warnings: list[str] = []
     engine.warnings.connect(lambda ws: warnings.extend(w.toString() for w in ws))

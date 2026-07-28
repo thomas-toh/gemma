@@ -1197,34 +1197,63 @@ Window {
                     }
                 }
             }
-            // ── on-air lamp: the honest mic indicator, left of the caption buttons ──
+            // ── Gem: the mascot as the honest mic indicator (spec/50 rule 4), left of the caption
+            //    buttons. It plays the `arriving` entrance when the window opens, then rests at
+            //    `idle`, and shows `listening` ONLY while the mic is actually capturing — never
+            //    inferred. Limited to mic on/off (Thomas). Body flipped light for the dark shell by
+            //    the image://gem provider (gem.py); the native purple/orange accents are kept. ──
             Row {
-                id: lampRow
+                id: gemRow
                 anchors.right: parent.right; anchors.rightMargin: 156
                 anchors.verticalCenter: parent.verticalCenter
-                spacing: 9
-                readonly property bool ringOpen: cfg.values.listen_for_me === true
+                spacing: 10
                 readonly property bool capturing: overlay.state === "listening"
-                readonly property string phase: capturing ? "live" : (ringOpen ? "ring" : "off")
-                Rectangle {
+                property string gemState: "idle"
+                property int frame: 0
+                // Replay the entrance each time the window opens; reduced motion skips to rest.
+                function settle() {
+                    frame = 0;
+                    gemState = reducedMotion ? (capturing ? "listening" : "idle") : "arriving";
+                }
+                Image {
                     anchors.verticalCenter: parent.verticalCenter
-                    width: 26; height: 13; radius: 7
-                    color: lampRow.phase === "live" ? Theme.flare
-                         : lampRow.phase === "ring" ? "transparent" : Theme.uiTrackOff
-                    border.width: lampRow.phase === "ring" ? 2 : 0
-                    border.color: Theme.flare
-                    scale: lampRow.phase === "live" && !reducedMotion
-                           ? 0.94 + Math.min(1, overlay.mic * 2.2) * 0.12 : 1
-                    Behavior on color { ColorAnimation { duration: root.t } }
-                    Behavior on scale { NumberAnimation { duration: Theme.durationBars } }
+                    width: 40; height: 40                      // 2× the 20px cell — an integer scale (kit rule)
+                    sourceSize: Qt.size(40, 40)
+                    smooth: false                              // nearest-neighbour: keep the cells crisp
+                    source: "image://gem/" + gemRow.gemState + "/" + gemRow.frame
                 }
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
-                    text: lampRow.phase === "live" ? "Listening"
-                        : lampRow.phase === "ring" ? "Mic open" : "Mic closed"
-                    color: lampRow.phase === "off" ? Theme.uiTextFaint : Theme.flare
+                    text: gemRow.capturing ? "Listening" : "Mic closed"
+                    color: gemRow.capturing ? Theme.flare : Theme.uiTextFaint
                     font.family: fontFamily; font.pixelSize: Theme.fontSmall
                     font.weight: Font.DemiBold
+                }
+                Timer {
+                    interval: Math.round(1000 / 9)             // the kit's 9 fps beat
+                    repeat: true
+                    running: !reducedMotion
+                    onTriggered: {
+                        gemRow.frame += 1;
+                        // `arriving` is a one-shot: once its frames run out, settle to the resting state.
+                        if (gemRow.gemState === "arriving"
+                                && gemRow.frame >= (gemFrames.arriving || 16)) {
+                            gemRow.gemState = gemRow.capturing ? "listening" : "idle";
+                            gemRow.frame = 0;
+                        }
+                    }
+                }
+                // The mic starting or stopping flips the loop — unless the entrance is still playing.
+                onCapturingChanged: {
+                    if (gemState !== "arriving") {
+                        gemState = capturing ? "listening" : "idle";
+                        frame = 0;
+                    }
+                }
+                Component.onCompleted: settle()
+                Connections {
+                    target: root
+                    function onVisibleChanged() { if (root.visible) gemRow.settle(); }
                 }
             }
             Rectangle {

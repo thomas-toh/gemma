@@ -58,6 +58,10 @@ jobs:
           QSG_RHI_BACKEND: software
       # The settings window's model — add/remove/enable/primary bookkeeping, no QML needed.
       - run: python -m teleprompter.settings_model
+      # The Gem mascot renderer (Track P): frames load, the body-flip palette keeps the accents,
+      # the app icon builds, image://gem tolerates a bad id, and the feed->Gem state map never
+      # KeyErrors. Renders on Qt's offscreen platform (the module sets it itself).
+      - run: python -m teleprompter.gem
       # ...and the window itself (D29), driven through every state it has. QML binding errors
       # are only warnings at runtime, so this fails on any of them. Headless, same as above.
       - run: python -m teleprompter.settings_check

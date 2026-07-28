@@ -10,9 +10,11 @@ from __future__ import annotations
 import logging
 import sys
 
-from PySide6.QtCore import QRectF, Qt
+from PySide6.QtCore import QRectF, Qt, QTimer
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
+
+from teleprompter import gem
 
 log = logging.getLogger("gemma.teleprompter")
 
@@ -175,11 +177,28 @@ def mark_icon(px: int = 256, colour: str | None = None) -> QIcon:
 
 
 class Tray(QSystemTrayIcon):
+    # States that rest on a single frame in the tray: an icon that wiggles forever is a nuisance,
+    # and idle/asleep are the long-lived ones. Every other state animates while it is briefly true,
+    # then the model returns to idle and the tray falls still again.
+    _STILL = {"idle", "asleep"}
+
     def __init__(self, app, model=None, on_settings=None) -> None:
-        super().__init__(mark_icon(colour="#ffffff"))
+        super().__init__()
         self._app = app
         self._model = model
         self.setToolTip("Gemma — Teleprompter")
+
+        # Gem, driven by the live status feed (spec/50 rule 4 — the tray shows only what the daemon
+        # is really doing, never inferred). The palette is read per state-change, not per frame:
+        # winreg on every tick would be waste.
+        self._state = gem.gem_state(model.state) if model is not None else "idle"
+        self._frame = 0
+        self._pal = self._palette()
+        self._anim = QTimer(self)
+        self._anim.timeout.connect(self._tick)
+        if model is not None:
+            model.changed.connect(self._on_model)
+        self._sync()                              # initial icon + start/stop the loop for `idle`
 
         menu = QMenu()
         self._act_settings = None
@@ -237,3 +256,33 @@ class Tray(QSystemTrayIcon):
             self._act_lat.setIcon(glyph_icon(CHECK, ink) if self._model.showLatency else QIcon())
         self._act_quit.setIcon(glyph_icon(POWER, ink))
         style_menu_native(self._menu, light)
+
+    # --- Gem animation (spec/50 rule 4: the tray reflects real status, never inferred) --------
+
+    def _palette(self) -> dict:
+        # Dark taskbar -> the light body; light taskbar -> the kit's native dark body. Accents kept.
+        return gem.NATIVE if windows_uses_light_theme() else gem.ISLAND
+
+    def _on_model(self) -> None:
+        # `changed` fires on every feed message (mic levels included); only a real STATE change
+        # restarts the animation.
+        s = gem.gem_state(self._model.state)
+        if s != self._state:
+            self._state = s
+            self._frame = 0
+            self._pal = self._palette()
+            self._sync()
+
+    def _sync(self) -> None:
+        if self._state in self._STILL or gem.frame_count(self._state) <= 1:
+            self._anim.stop()
+        else:
+            self._anim.start(max(1, round(1000 / gem.fps(self._state))))
+        self._paint()
+
+    def _tick(self) -> None:
+        self._frame += 1
+        self._paint()
+
+    def _paint(self) -> None:
+        self.setIcon(gem.icon(self._state, self._frame, 32, self._pal))

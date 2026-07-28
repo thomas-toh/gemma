@@ -36,7 +36,8 @@ from teleprompter.decode import HOST, PORT, m_dismiss, targets           # noqa:
 from teleprompter.feed import Feed                                       # noqa: E402
 from teleprompter.model import OverlayModel                              # noqa: E402
 from teleprompter.settings_model import SettingsModel                    # noqa: E402
-from teleprompter.tray import Tray, mark_icon                            # noqa: E402
+from teleprompter.tray import Tray                                       # noqa: E402
+from teleprompter import gem                                             # noqa: E402
 
 log = logging.getLogger("gemma.teleprompter")
 
@@ -339,7 +340,7 @@ def main() -> int:
 
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)   # the island hides at idle — that is not a quit
-    app.setWindowIcon(mark_icon())         # the Gemma mark on the taskbar (and any window)
+    app.setWindowIcon(gem.app_icon())      # Gem (portrait.plain) on the taskbar (and any window)
     if sys.platform == "win32":
         # Running as python.exe, Windows groups the taskbar button under python and shows ITS icon,
         # ignoring the app's window icon. An explicit AppUserModelID makes Windows treat us as our
@@ -366,6 +367,9 @@ def main() -> int:
 
     model = OverlayModel(show_latency=args.latency)
     engine = QQmlApplicationEngine()
+    # Gem the mascot (Track P): the taskbar icon (above) and the tray (tray.py) render it directly;
+    # the settings window draws it through this provider — `image://gem/<state>/<frame>`.
+    engine.addImageProvider("gem", gem.GemImageProvider())
     # The repo root, so `import teleprompter` resolves this package's qmldir and its Theme
     # singleton (the design tokens).
     engine.addImportPath(str(Path(__file__).resolve().parent.parent))
@@ -377,6 +381,9 @@ def main() -> int:
     engine.rootContext().setContextProperty("cfg", cfg)
     engine.rootContext().setContextProperty("fontFamily", pick_font())
     engine.rootContext().setContextProperty("targets", targets())   # latency targets (D25)
+    # Frame counts per Gem state, so the settings window knows when the one-shot `arriving`
+    # entrance is done without hard-coding it (gem.py stays the source of truth).
+    engine.rootContext().setContextProperty("gemFrames", gem.frame_counts())
     reduce_state = reduced_motion()
     engine.rootContext().setContextProperty("reducedMotion", reduce_state)
     if reduce_state:
@@ -486,7 +493,7 @@ def main() -> int:
         # Claiming C++ ownership is what makes the window survive being closed.
         QQmlEngine.setObjectOwnership(win_, QQmlEngine.ObjectOwnership.CppOwnership)
         try:
-            win_.setIcon(mark_icon())    # the taskbar button for this window, explicitly
+            win_.setIcon(gem.app_icon())  # the taskbar button for this window, explicitly
         except Exception as e:                                       # noqa: BLE001
             log.debug("could not set settings-window icon: %s", e)
         settings_win["win"] = win_
