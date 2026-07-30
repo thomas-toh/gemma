@@ -207,6 +207,27 @@ it is the unfinished half of D29/D30/D33.
 
 ## Track P — Teleprompter (Contract P) — built and live; in polish
 
+- **DONE 2026-07-30 — dropdowns standardised to two classes.** Every dropdown shows either WORDS
+  (provider names, languages, enum choices) or a MACHINE VALUE (a model id); the class picks the
+  face *and* the size together and applies to the button and its popup rows alike. `Theme.fontDropdown`
+  (16) / `fontDropdownMono` (12) — no new numbers, both taken from the exemplars Thomas named
+  (Config > Preferences > Language, and Ask > Model). The enforcement is that `Dropdown.fontPx` is now
+  **readonly**, computed from `mono`: a call site picks the class and *cannot* invent a size, which is
+  how the window had drifted to three sizes across six dropdowns. Two were wrong and are the only
+  visual change: Dictate > Engine was sans at the mono size (12 → 16, Thomas's complaint) and
+  Add-provider > Model was mono at the sans size (16 → 12). Spec: spec/70 §2.
+- **DONE 2026-07-30 — the Test button did nothing while a probe was in flight.** A production bug,
+  not a test flake: `settings_model._fetch` guarded on `pid in self._fetching` *before* honouring
+  `force`, so `testProvider` was swallowed by any probe already running — exactly when the user has
+  just changed a key or endpoint, which is the only reason to press Test. Surfaced as a selfcheck
+  failure on Thomas's box only (`a dead runner must be nameable, got 'empty'`): a live local Ollama
+  with no models pulled answers `empty`, and CI has none, so it had always passed there. Fix is two
+  parts — `force` now overtakes an in-flight probe, and a per-provider **generation counter** makes a
+  returning worker prove it is still the newest before it writes, so the overtaken (slow, stale)
+  answer is discarded instead of landing last. The check fakes both probes and returns them out of
+  order, so it is deterministic and needs no network or local runner; confirmed to fail without the
+  guard before being restored.
+
 - **DONE 2026-07-28 (D34) — model + token count in the peek footer.** The peek names the model that
   answered + the turn's total tokens (`claude-opus-4-8 • 1847 tokens`, mono, bottom-left — variant A).
   Contract P: `response` gains optional `model`+`tokens` (`status.json` → v0.5.0), stamped on the `done`
@@ -412,6 +433,38 @@ it is the unfinished half of D29/D30/D33.
   = no-op; ships one entry (`gemma`→`Gemma`). Selfchecked + CI-wired (`python -m bridge.replace`).
   A curating UI is a later lift (spec/70 §3); the fuzzy `<CUSTOM_VOCABULARY>` prompt half of #2 is
   still parked.
+- **Works now (D37, 2026-07-30) — spoken formatting commands.** `enumerate list` (numbered) /
+  `itemize list` (bulleted) / `end list`, with items separated by spoken counting ("one", "two") —
+  the ordinals are separators, deleted, never the printed marker. Lives in `DICTATION_CLEANUP`, so
+  detection is prompt-side and there is no new module: a formatting command restructures a *span*,
+  which D15's word→word swap table cannot express, so `replace.py` is deliberately not its home
+  (confirmed before building). **Dictation only.** Behaviour spec: spec/60 §Spoken formatting
+  commands. `python -m bridge.orchestrator --check-format` runs the 9 cases live; the offline
+  selfcheck asserts only that the prompt still *states* the contract, because a prompt is where the
+  detection is. Deferred: a literal escape for a command phrase, parked until spoken quoting.
+  - **A 30-case adversarial sweep (2026-07-30) broke the first cut**, 4 hard failures — and the
+    5 shipped cases all passed while they broke, because none contained the trigger word for word.
+    (a) the phrase VERBATIM inside prose fired ("the statute requires us to enumerate list items"
+    → a list); (b) reported speech fired ("he told me to itemize list everything"); (c) **spoken
+    counting with no command at all formatted** ("I need to do three things one call the bank two
+    send the email" → a list) — the most damaging, since that is ordinary speech; (d) bare ordinals
+    both formatted and LOST words ("list one is the priority" → `1. is the priority`). Fixed with
+    three prompt rules: ordinals are inert unless a list is open · a phrase is a command only where
+    the speaker is issuing it, not inside a sentence doing something else · never emit an empty
+    marker and never drop words to make a list fit. All four are now committed cases, so they
+    cannot regress silently.
+  - **Verification status — read this before trusting it.** The 5 original cases passed on
+    **groq/llama-3.3-70b-versatile** (the configured `cleanup_dictation` model). The 4 promoted
+    cases and the re-run after the three fixes were done on **openai/gpt-4o-mini** instead —
+    Groq's daily token quota was exhausted — where **8 of 9 pass**. The failure is the
+    ordinal-ambiguity case ("one buy two apples two get milk"), which 70B handles and 4o-mini does
+    not: it reads the inner "two" as a separator and drops "apples". So that one rule is
+    **model-dependent**, and the full 9 have never run green on one model in one pass. Owed: re-run
+    `--check-format` on the configured model when the quota resets.
+  - Also seen on 4o-mini and NOT covered by the assertions: the two verbatim-mention cases keep
+    their prose but drop the word "list" ("...to enumerate items"). Cleanup word-fidelity, not
+    D37's formatting contract — same family as the untested-against-live-speech note above.
+  - **Still owed: a real keypress + voice**, same gap as the rest of Track D.
 - **Owed — the live keypress test.** The whole dictate path (D1 + D2) has been verified against
   recorded WAVs and selfchecks, but never once by Thomas pressing the key and speaking. Every
   hotkey path is like this; `RegisterHotKey` is proven live separately.
@@ -504,13 +557,30 @@ it is the unfinished half of D29/D30/D33.
   | `system_status` | 1 | 2026-07-27 (D31) | **not yet** — no live tool turn on the box |
   | `read_clipboard` | 1 | 2026-07-27 (D31) | **not yet** — same |
   | `find_document` | 1 | 2026-07-28 | **not yet** — backend verified live against real documents, but never through a brain turn |
-  | `search_email` | 1 | 2026-07-28 | **no** — cannot be: no Outlook mail profile on this box, so the retrieval path has never run at all |
+  | `search_email` | 1 | 2026-07-28 | **once, 2026-07-30** — driven by a brain end to end (D36), but it answered "no mail profile"; the retrieval itself has still never run |
 
   *Update the right-hand column when a tool has been invoked by the brain, in a real turn, several
   times without misfiring — that is the column the rule exists for.*
 - **Not built:** Tier 2 (`open_app` · `focus_window` · `media_control` · `set_timer` — need backends
   plus the announce earcon) and Tier 3 (propose-then-tap confirmation, D26, on the Teleprompter). No
   raw shell below Tier 3 (spec/30 rule 1).
+- **Fixed (D36, 2026-07-30) — a rejected tool call now retries.** `search_email`'s first live outing
+  narrated "Something went wrong on my end"; the tool never ran. groq/llama-3.3-70b glued the
+  arguments onto `function.name` and Groq rejected it server-side. **Measured: ~1 round in 3 fails
+  this way** (5 of 14), the rest compose a correct call — so a resample is the cure, and the tool
+  loop has had one since D31. It was gated on the `malformed_tool_call` kind and this arrived as
+  `unknown`. Now mapped by a third typed input (did the round offer tools?), which keeps B-02's
+  no-prose rule. The rejection arrives MID-STREAM — HTTP 200, bare `APIError`, no status code — so
+  a first pass keyed on a 400 changed nothing; both shapes are mapped now. First real
+  `search_email` invocation is in `logs/audit.jsonl`.
+  - **Owed — Thomas's calls.** (1) A **capability failure narrated as a negative result**: the
+    backend said "no mail profile", the brain said "I did not find the email". Nothing was
+    searched, and the answer implies otherwise — a spec/40 narration question. (2) Whether
+    tool-offering turns should route to a stronger tool-caller: one retry still leaves ~13% of
+    turns failing, and that is a cost decision.
+  - **Note:** the Groq free tier's daily token budget (100k) was exhausted measuring this, by the
+    measurement runs themselves. Tool specs are ~2k tokens a round, so a tool turn is not cheap on
+    a small daily cap.
 - **In flight:** —
 - **Next:** live-verify a tool turn end to end (Claude asks `system_status`, then answers) — no tool
   has yet been driven by a brain, which is what the ledger's right-hand column is waiting on. Then

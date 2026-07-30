@@ -138,6 +138,15 @@ QtObject {
     readonly property int fontCardLabel: 13   // Model / Effort / Extended thinking / Notes
     readonly property int fontCardMeta:  12   // mono model ids, the key-status footer
 
+    // ── dropdowns: exactly two classes ─────────────────────────────────────
+    // Every dropdown shows either WORDS (provider names, languages, enum choices) or a MACHINE
+    // VALUE (a model id). The class picks the family and the size TOGETHER, and it applies to the
+    // button and the popup rows alike — `Dropdown.fontPx` is readonly, so a call site chooses the
+    // class and cannot invent a third size (standardised 2026-07-30, Thomas). No new numbers: the
+    // exemplars are Config > Preferences > Language for words and Ask > Model for machine values.
+    readonly property int fontDropdown:     fontBase       // 16, the UI face
+    readonly property int fontDropdownMono: fontCardMeta   // 12, Martian Mono
+
     // Icons — Material Symbols Outlined (bundled in teleprompter/fonts, subset to the glyphs the
     // window uses). Drawn as font text, not hand-authored paths, so weight/optical-size are real
     // font axes, not stroke fudges (Thomas, 2026-07-27). A call site picks a size by role; the

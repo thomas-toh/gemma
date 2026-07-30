@@ -814,3 +814,36 @@ switch off restoring the pre-Gem formulas) and a new `teleprompter.tray` selfche
 pixels + the repaint gate), all CI-wired. Owed: live on the box — the tray ring against a real
 mic, the taskbar icon, and Gem miming a real turn on both surfaces.
 
+**D36 (2026-07-30): a rejected tool call is a `malformed_tool_call`, so the retry can catch it.**
+`search_email`'s first live outing failed with "Something went wrong on my end". The tool was
+innocent — it never ran. The turn was routed to groq/llama-3.3-70b, which emitted a call whose
+`function.name` carried the arguments glued onto it (`search_email {"sender": …}`), and Groq's own
+validator rejected it. **Measured before fixing anything: ~1 round in 3 fails this way** (5 of 14
+on the same utterance with four tools offered), and the other two thirds compose a perfectly
+correct call. So the model is not incapable, it is unreliable — and the recovery for unreliable is
+a resample, which the tool loop has already had since D31.
+
+- **Why the retry never fired.** It is gated on the `malformed_tool_call` kind, and this failure
+  arrived as `unknown`. The obvious fix — read the provider's message — is barred by **B-02**,
+  which maps errors by exception TYPE and status code precisely so a prose heuristic cannot
+  mis-narrate. The way through is a third typed input: **whether the round offered tools**. A
+  rejection on a tools round is a bad tool call by construction, no prose required.
+- **The shape was the trap.** The rejection arrives **mid-stream**: the HTTP request logs `200 OK`
+  and the exception is a bare `openai.APIError` with **no status code at all**. A first pass keyed
+  on a 400 and could never match — the live run proved it by not changing. Both forms are mapped
+  now, since a provider rejecting before it streams would give the 400 instead.
+- **Cost of being wrong:** one retried round. A mid-stream hiccup narrates as a bad tool call, and
+  a retry was the right response to that anyway. `malformed_tool_call` also gained a spoken line —
+  it had been falling through to the generic apology, which is why the failure was unreadable.
+- **A capability failure must not narrate as a negative result.** End to end, the loop now works:
+  the brain called `search_email`, the backend answered "Outlook has no mail profile set up on this
+  machine", and the brain said *"I did not find the email"* — turning **can't** into **didn't**.
+  Nothing was searched, and the answer implies the mailbox was. This is not model-specific and it
+  is a spec/40 narration question, not a tool one. **Open — Thomas.**
+- **Open — Thomas:** whether tool-offering turns should route to a stronger tool-caller at all. One
+  retry leaves ~13% of turns failing, and this is a cost decision, not an engineering one.
+
+Guarded: `bridge.brains.compat` — the tools-offered refinement in both shapes, and the kinds it must
+NOT swallow (a 5xx, an auth failure, a dropped connection, a bad model id). Verified live against
+groq: the kind now maps, and `logs/audit.jsonl` carries the first real `search_email` invocation.
+

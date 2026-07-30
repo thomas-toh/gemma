@@ -40,6 +40,10 @@ class SettingsModel(QObject):
         # The last probe outcome per provider: ok · nokey · auth · unreachable · empty · error
         # (bridge/brains/providers.probe). Absent until something has actually asked.
         self._status: dict[str, str] = {}
+        # Per-provider probe generation. A forced probe can overtake one already in flight (that
+        # is what Test means), so a returning worker must prove it is still the newest before it
+        # writes — otherwise the stale answer lands last and the user reads the wrong status.
+        self._gen: dict[str, int] = {}
         self._lock = threading.Lock()
 
     # --- the schema: what to draw ------------------------------------------------
@@ -292,8 +296,12 @@ class SettingsModel(QObject):
         if cat is None:
             return
         with self._lock:
-            if pid in self._fetching or (not force and pid in self._live):
+            # `force` overtakes a probe already in flight rather than being swallowed by it: Test
+            # is pressed precisely when the key or endpoint just changed, so the in-flight answer
+            # is about to be wrong. Unforced fetches keep both cheap idempotences.
+            if not force and (pid in self._fetching or pid in self._live):
                 return
+            gen = self._gen[pid] = self._gen.get(pid, 0) + 1
             self._fetching.add(pid)
         # A local runner's port is user-editable, so ask the entry before the catalogue default.
         endpoint = (self.models.get(pid) or {}).get("endpoint")
@@ -305,6 +313,9 @@ class SettingsModel(QObject):
                 log.warning("model probe failed for %s: %s", pid, e)
                 found, status = [], "error"
             with self._lock:
+                if self._gen.get(pid) != gen:   # a newer probe overtook this one — drop the answer
+                    log.info("model probe %s: superseded, discarding %s", pid, status)
+                    return                      # and leave `_fetching` set: the newer one owns it
                 self._fetching.discard(pid)
                 self._status[pid] = status
                 if found:
@@ -458,6 +469,42 @@ if __name__ == "__main__":
         assert m.modelState("ollama") == "unreachable", \
             f"a dead runner must be nameable, got {m.modelState('ollama')!r}"
         assert m.modelsFor("ollama") == m.catalog["ollama"]["models"], "fallback must survive"
+
+        # Test OVERTAKES a probe already in flight, and the overtaken answer is DISCARDED rather
+        # than landing last. Both halves matter: without the first, pressing Test right after
+        # adding a provider does nothing (the bug — `force` was swallowed by the in-flight guard);
+        # without the second, the stale reply overwrites the fresh one and the user reads a status
+        # for an endpoint they have already changed. Faked probes, so this needs no network and no
+        # local runner: slow-and-wrong vs fast-and-right, deliberately returned out of order.
+        real_probe = providers.probe
+        try:
+            first_started = threading.Event()
+
+            def slow_then_fast(pid, endpoint=None, timeout=None, key=None):
+                if endpoint == "127.0.0.1:2":
+                    return [], "unreachable"          # the forced probe: immediate, correct
+                first_started.set()
+                time.sleep(0.5)                       # the overtaken probe: late, and wrong
+                return [], "empty"
+
+            providers.probe = slow_then_fast
+            race = SettingsModel()
+            race.addProvider("ollama")
+            assert first_started.wait(3), "the first probe never started"
+            race.setModel("ollama", "endpoint", "127.0.0.1:2")
+            race.testProvider("ollama")               # must overtake, not be swallowed
+            for _ in range(60):
+                if race.modelState("ollama") == "unreachable":
+                    break
+                time.sleep(0.05)
+            assert race.modelState("ollama") == "unreachable", \
+                f"Test must overtake a probe in flight, got {race.modelState('ollama')!r}"
+            time.sleep(0.8)                           # let the overtaken probe return late
+            assert race.modelState("ollama") == "unreachable", \
+                f"a superseded probe must not land last, got {race.modelState('ollama')!r}"
+            race.removeProvider("ollama")
+        finally:
+            providers.probe = real_probe
 
         # ...and a probe that DID find something wins over the card, without another round trip.
         with m._lock:

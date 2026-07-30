@@ -44,6 +44,13 @@ and build status belongs in STATE, not here.)*
   startup (no system-font or icon-pack dependency): Archivo (UI), Martian Mono (machine values),
   Instrument Serif (reserved, gated), and **Material Symbols Outlined** for the icons — drawn as
   font glyphs, not hand-authored paths (D29), and subset to only the glyphs the window uses.
+- **Dropdowns come in exactly two classes** — a dropdown shows either **words** (provider names,
+  languages, enum choices) or a **machine value** (a model id). The class picks the face *and* the
+  size together, and applies to the button and its popup rows alike, so a control never changes
+  size when opened. The two sizes are `Theme.fontDropdown` / `fontDropdownMono`, and
+  `Dropdown.fontPx` is **readonly**: a call site chooses the class, never a size. Standardised
+  2026-07-30, after per-site sizes had drifted the window to three of them across six dropdowns —
+  including a sans control at the mono size and a mono control at the sans size.
 
 ## 3. Settings inventory (OWED — the concurrent line-item work)
 

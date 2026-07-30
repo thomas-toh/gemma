@@ -361,8 +361,11 @@ Window {
         property string value: ""
         property bool enabled: true
         property color bg: Theme.surfaceSunk      // the card "well" variant passes surfaceDeep (pure black)
-        property int fontPx: Theme.fontBase
-        property bool mono: false                 // model-id pickers set true; words (language) stay sans
+        // The CLASS, and the only typographic choice a call site makes: machine values (model ids)
+        // in mono, words (languages, provider names) in the UI face. The size follows from it and
+        // is readonly on purpose — a per-site size is how the window drifted to three of them.
+        property bool mono: false
+        readonly property int fontPx: mono ? Theme.fontDropdownMono : Theme.fontDropdown
         // Nothing to choose (no options yet, or still fetching) → the whole control greys out and is
         // inert, instead of opening to a placeholder item. One rule, every dropdown (Thomas 2026-07-28).
         readonly property bool active: enabled && options.length > 0
@@ -944,7 +947,7 @@ Window {
                        font.pixelSize: Theme.fontCardLabel; font.weight: Font.DemiBold }
                 Dropdown {
                     width: parent.width; implicitHeight: 34
-                    bg: Theme.surfaceDeep; fontPx: Theme.fontCardMeta; mono: true
+                    bg: Theme.surfaceDeep; mono: true
                     value: mc.st !== undefined && mc.st.model ? mc.st.model : ""
                     options: cfg.modelOptions[mc.pid] !== undefined ? cfg.modelOptions[mc.pid] : []
                     onPicked: function (v) { cfg.setModel(mc.pid, "model", v) }
@@ -1099,7 +1102,7 @@ Window {
                        font.pixelSize: Theme.fontCardLabel; font.weight: Font.DemiBold }
                 Dropdown {
                     width: parent.width; implicitHeight: 34
-                    bg: Theme.surfaceDeep; fontPx: Theme.fontCardMeta
+                    bg: Theme.surfaceDeep
                     value: cfg.values[cc.key] ? cfg.values[cc.key] : ""
                     options: cfg.addedProviders
                     enabled: cc.m.built

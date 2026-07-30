@@ -1,7 +1,7 @@
 # Spec 60 — Dictation
 
-**Last reconciled: 2026-07-28** · Build progress: [STATE.md](../STATE.md), Track D · Rationale:
-docs/01_scoping/Reviews/2026-07-18_1643 (VoiceInk study), spec/00 D12 · D15 · D20.
+**Last reconciled: 2026-07-30** · Build progress: [STATE.md](../STATE.md), Track D · Rationale:
+docs/01_scoping/Reviews/2026-07-18_1643 (VoiceInk study), spec/00 D12 · D15 · D20 · D37.
 
 Dictation is the second door (D20): a global hotkey (`ctrl+alt+2` by default) that turns speech
 into text **in whatever application has focus**, with no answer and no conversation. It reuses the
@@ -48,6 +48,41 @@ dictate key ─▶ capture (VAD, key endpoint) ─▶ STT ─▶ [word-replaceme
    The previous clipboard **text** is restored afterwards (best-effort; non-text clipboard content
    is not preserved — see `bridge/paste.py`). Windows only for now; macOS is a D10 seam.
 
+## Spoken formatting commands (D37)
+
+Three spoken phrases change the **shape** of the dictated text, not just its words:
+
+| Said | Effect |
+|------|--------|
+| `enumerate list` | begins a **numbered** list (`1. `, `2. `, …) |
+| `itemize list` | begins a **bulleted** list (`- `) |
+| `end list` | closes it; what follows is prose again |
+
+Inside a list the speaker separates items by **counting** — "one", "two", "three" (the transcript
+may spell them or use digits). An ordinal begins the next item and is deleted: it is a separator,
+never part of the item and never the printed marker — so `itemize list` still yields bullets
+despite the counting. Only the **next ordinal in sequence** separates, so a number inside an item
+stays content ("one buy two apples two get milk" → `1. buy two apples` / `2. get milk`). A list
+that is never closed runs to the end of the transcript.
+
+**Dictation only** — the assistant door is untouched, which is trigger-is-the-mode (D12) applied to
+commands as well as modes.
+
+**The design constraint is mention vs. command.** Dictating *about* a list must not produce one:
+"add a numbered list to the contract" and "I asked them to itemize the costs" are ordinary
+sentences and survive verbatim. This is the same guard the spoken punctuation cues already carry
+("a period of rest" stays as written), one step up — a punctuation cue fires once at one site,
+whereas a list command changes everything until `end list`.
+
+Where it lives: the command vocabulary is part of the cleanup instruction (`DICTATION_CLEANUP`),
+so detection is **prompt-side** and costs no new machinery — a formatting command restructures a
+span, which the D15 word-replacement table (a word→word substring swap at isolated match sites)
+cannot express, so `bridge/replace.py` is deliberately not its home. If it misfires in real use the
+upgrade is a deterministic pre-pass that finds the phrases and marks the spans before cleanup sees
+them. Because detection is prompt-side, its proof is a **live** run —
+`python -m bridge.orchestrator --check-format` puts the commands and both mention cases through the
+real cleanup model; the offline selfcheck can only assert the prompt still states the contract.
+
 Where it lives: the dictation turn is `Orchestrator._dictate()` (a turn *type*, not a separate
 subsystem — it shares the capture machine, STT, doors and event loop with the assistant); delivery
 is `bridge/paste.py`. There is no `bridge/dictation/` package, deliberately — it would duplicate the
@@ -84,4 +119,7 @@ states add to the overlay, not to this pipeline. Build progress: [STATE.md](../S
 - **Cleanup-role config (spec/70)** — engine, model and the cleanup instruction are code constants
   (`orchestrator.CLEANUP_PROVIDER` / `CLEANUP_MODEL` / `DICTATION_CLEANUP`) until the settings
   surface exposes them; `cleanup_dictation` is declared in `settings.json` but `built:false`.
+- **Literal escape for a command phrase (D37)** — there is no way to force `enumerate list` through
+  as text; a phrase either fires as a command or is judged prose. Deferred to when spoken quoting
+  ("open quote" / "close quote") lands, which is its natural home.
 - **Streaming partials · per-app modes · voice-switch into dictation** — design-time deferrals (D12).

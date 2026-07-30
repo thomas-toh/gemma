@@ -84,8 +84,13 @@ CLEANUP_MODEL = os.environ.get("GEMMA_CLEANUP_MODEL", "llama-3.1-8b-instant")
 # review): fix, don't rewrite, and handle the two things a one-line "clean it up" misses — spoken
 # self-corrections ("scratch that") and spoken punctuation/layout cues. Context injection (selected
 # text / clipboard / screen) is deliberately NOT here — that is the separate #3 lift.
+# D37 adds the spoken LIST commands, which are the same idea one step up: a punctuation cue fires
+# once at one site, a list command changes the shape of everything until "end list". Dictation only.
 # ponytail: a code constant until the cleanup role is user-configurable (spec/70, VoiceInk lets you
 # edit this); the guardrail against answering lives in TRANSFORM_SYSTEM, not here.
+# ponytail: list-command DETECTION is prompt-side, so its real proof is a live model run
+# (`--check-format`), not the offline selfcheck. If it misfires in use, the upgrade is a
+# deterministic pre-pass that finds the phrases and marks the spans before cleanup sees them.
 DICTATION_CLEANUP = (
     "Clean up this transcript of dictated speech. This is a LIGHT CLEANUP, not a rewrite: stay as "
     "close to the speaker's actual words as you can and change as little as possible.\n"
@@ -101,6 +106,30 @@ DICTATION_CLEANUP = (
     "rest\", \"a dash of salt\" stay as written).\n"
     "- When the speaker spells a word out letter by letter (\"S. I. L. E.\" or \"S I L E\"), join "
     "the letters into the single intended word or acronym (SILE), not separate tokens.\n"
+    "SPOKEN LIST COMMANDS — these phrases, and only these, change the SHAPE of the text:\n"
+    "- \"enumerate list\" begins a NUMBERED list; \"itemize list\" begins a BULLETED list; \"end "
+    "list\" closes it and the text after it is ordinary prose again. A list that is never closed "
+    "runs to the end of the transcript.\n"
+    "- Inside an OPEN list the speaker separates items by counting: \"one\", \"two\", \"three\" "
+    "(the transcript may spell these or use digits). Each ordinal begins the next item and is "
+    "REMOVED — it is a separator, never part of the item and never the printed marker. Only the "
+    "NEXT ordinal in sequence separates: in \"one buy two apples two get milk\", the first "
+    "\"two\" is part of item one and the second \"two\" begins item two.\n"
+    "- Counting means NOTHING unless a list is open. A speaker who counts without having said "
+    "\"enumerate list\" or \"itemize list\" is dictating ordinary prose — \"I need to do three "
+    "things one call the bank two send the email three go home\" contains no command and stays "
+    "as spoken, and so does \"list one is the priority list two can wait\".\n"
+    "- A phrase is a command ONLY where the speaker is issuing it: it opens a clause and the "
+    "items follow. Where it sits inside a sentence that is doing something else it is prose, even "
+    "word for word — \"the statute requires us to enumerate list items in schedule two\" and \"he "
+    "told me to itemize list everything before Friday\" stay exactly as written, as do \"add a "
+    "numbered list to the contract\" and \"I asked them to itemize the costs\". This is the same "
+    "guard the punctuation cues carry.\n"
+    "- Render a numbered list as \"1. \", \"2. \", … and a bulleted list as \"- \", one item per "
+    "line, and delete the command phrases themselves.\n"
+    "- NEVER build structure at the cost of the words. If there are no items, keep the sentence "
+    "as prose — never emit a bare \"1.\" or \"-\" — and never drop, merge or reorder any of the "
+    "speaker's words to make a list fit.\n"
     "DO NOT (this is cleanup, not rewriting):\n"
     "- Do not add, drop or substitute words beyond the fixes above; never insert words the speaker "
     "did not say. No new qualifiers or intensifiers — \"that's the idea\" must NOT become \"that's "
@@ -144,6 +173,9 @@ SPOKEN_ERRORS = {
     # (was "Wake me afresh", wake-word framing for a product whose wake word is off by default).
     "context": "This conversation got too long for me. Start a new turn to reset me.",
     "unavailable": "My brain is unreachable right now.",
+    # D36: reached only after the tool loop's retry has also failed, so "try again" is the honest
+    # advice — the same words usually work on a resample.
+    "malformed_tool_call": "I couldn't form a valid request to my tools. Try again.",
 }
 
 
@@ -1176,6 +1208,15 @@ def _selfcheck() -> None:
     disp.hk.doors["dictate"].start.set()
     assert disp._pressed().name == "ask", "the assistant wins a simultaneous press"
 
+    # D37 spoken list commands (spec/60). Detection lives in the PROMPT, so the real proof is
+    # `--check-format` against the live model; what is checkable offline is that the contract is
+    # still stated. An edit that drops a command, the separator rule or the mention-vs-command
+    # guard fails silently otherwise — it only shows up later as bad dictation.
+    for _phrase in ("enumerate list", "itemize list", "end list"):
+        assert _phrase in DICTATION_CLEANUP, f"list command missing from the prompt: {_phrase}"
+    assert "numbered list to the contract" in DICTATION_CLEANUP, \
+        "the mention-vs-command guard (the D37 failure mode) must stay in the prompt"
+
     # _dictate: transcribe -> clean -> paste, with the whole pipeline faked (no whisper, no
     # network, no Win32). The load-bearing behaviours: the cleaned text is delivered; a cleanup
     # failure falls back to the RAW transcript (dictation must work with no cleanup key); and an
@@ -1249,7 +1290,75 @@ def _selfcheck() -> None:
 
     print("selfcheck OK: speak/hold split, capture endpoint, barge-in counter, error lines, "
           "latency table + targets, feedback credits the screen (D25), pings toggle gates earcons, "
-          "dictation dispatch + cleanup-fallback-to-raw + the tidy toggle (spec/60)")
+          "dictation dispatch + cleanup-fallback-to-raw + the tidy toggle (spec/60), "
+          "D37 list commands declared in the cleanup prompt")
+
+
+# D37 (spec/60): what the spoken list commands must and must not do, as transcripts the STT would
+# actually produce — no punctuation, spelled-out counting. The last two are the point of the whole
+# feature: dictating ABOUT a list must stay prose.
+_FORMAT_CASES = [
+    ("enumerate list one buy milk two collect the dry cleaning three call the bank end list "
+     "then I went home",
+     ["1.", "2.", "3."], ["4.", "enumerate", "end list"],
+     "numbered list, then the tail returns to prose (not a fourth item)"),
+    ("itemize list one milk two eggs three bread end list",
+     ["- "], ["1.", "2.", "itemize"],
+     "itemize gives bullets despite the spoken counting"),
+    ("enumerate list one buy two apples two get milk end list",
+     ["1.", "2.", "two apples"], ["3."],
+     "only the NEXT ordinal separates — a number inside an item is content"),
+    ("please add a numbered list to the contract before we send it",
+     [], ["1.", "- "],
+     "TALKING ABOUT a list must not become one (the D37 failure mode)"),
+    ("I asked them to itemize the costs in the schedule",
+     [], ["1.", "- "],
+     "...including a command verb used as an ordinary verb"),
+    # The four below were live FAILURES on the first cut of the prompt (30-case sweep, 2026-07-30).
+    # They are the regressions worth guarding: the shipped mention cases above all PASSED while
+    # these broke, because none of them contains the trigger phrase word for word.
+    ("the statute requires us to enumerate list items in schedule two",
+     ["schedule two"], ["1.", "- "],
+     "the trigger VERBATIM inside a sentence doing something else is prose"),
+    ("he told me to itemize list everything before Friday",
+     ["everything before Friday"], ["1.", "- "],
+     "...and in reported speech"),
+    ("I need to do three things one call the bank two send the email three go home",
+     ["three things"], ["1.", "- "],
+     "counting with NO command must stay prose — the most natural false positive"),
+    ("list one is the priority list two can wait",
+     ["list one"], ["1.", "- "],
+     "bare ordinals must not format, and must not swallow the speaker's words"),
+]
+
+
+def _check_format() -> None:
+    """D37, LIVE: run the list commands through the real `cleanup_dictation` model (spec/60).
+    Detection is prompt-side, so this is the check that actually proves it — the offline selfcheck
+    can only prove the prompt still says so. Skips rather than fails when the cleanup engine is
+    unreachable, so it stays runnable on a machine with no key."""
+    import asyncio
+
+    brain = (router.build_for_role("cleanup_dictation")
+             or build_brain(CLEANUP_PROVIDER, CLEANUP_MODEL))
+    failures = []
+    for said, want, unwanted, why in _FORMAT_CASES:
+        out, err = asyncio.run(transform(brain, said, DICTATION_CLEANUP))
+        if err:
+            print(f"SKIPPED — cleanup engine unavailable ({err.kind}: {err.detail})")
+            return
+        missing = [w for w in want if w not in out]
+        present = [u for u in unwanted if u in out.lower()]
+        ok = not missing and not present
+        failures += [] if ok else [why]
+        print(f"\n{'ok  ' if ok else 'FAIL'} {why}\n  said: {said}\n  got:  {out!r}")
+        if missing:
+            print(f"  missing: {missing}")
+        if present:
+            print(f"  must not contain: {present}")
+    if failures:
+        raise SystemExit(f"\n{len(failures)} of {len(_FORMAT_CASES)} format cases FAILED")
+    print(f"\nformat check OK: {len(_FORMAT_CASES)} cases, including the two mention cases")
 
 
 def main() -> None:
@@ -1257,6 +1366,9 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Gemma orchestrator — the M0 loop (Track G step 6)")
     ap.add_argument("--selfcheck", action="store_true",
                     help="verify decision logic without mic, models or network, then exit")
+    ap.add_argument("--check-format", action="store_true",
+                    help="D37: run the spoken list commands through the live cleanup model, then "
+                         "exit (needs the cleanup key; skips without one)")
     ap.add_argument("--silence-ms", type=int, default=SILENCE_MS,
                     help=f"end-of-speech silence in ms (default {SILENCE_MS}); tune by ear")
     ap.add_argument("--voice", default=VOICE, help=f"Kokoro voice (default {VOICE})")
@@ -1267,6 +1379,9 @@ def main() -> None:
     args = ap.parse_args()
     if args.selfcheck:
         _selfcheck()
+        return
+    if args.check_format:
+        _check_format()
         return
     orch = Orchestrator(args.silence_ms, args.voice, args.model, auto_end=args.auto_end)
     try:
