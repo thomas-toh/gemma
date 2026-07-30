@@ -4,17 +4,19 @@ The island hides completely at idle (spec/40: "gone = asleep"), so without this 
 tell the overlay from a dead process. Since D29 it is also the door to the settings window:
 the output toggles and the Groq key that used to live in this menu as a stopgap now have a
 real home, so the menu is back to three items.
+
+The icon is a mic-level ring — hollow while the mic is closed, a coral core with a halo that
+tracks your voice while it is open. Gem the mascot briefly lived here (D32); it moved off when
+the kit went to v2, and the tray gets its own character later.
 """
 from __future__ import annotations
 
 import logging
 import sys
 
-from PySide6.QtCore import QRectF, Qt, QTimer
-from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPainterPath, QPixmap
+from PySide6.QtCore import QRectF, Qt
+from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
-
-from teleprompter import gem
 
 log = logging.getLogger("gemma.teleprompter")
 
@@ -141,54 +143,44 @@ def style_menu_native(menu: QMenu, light: bool) -> None:
         log.debug("could not style the tray menu natively: %s", e)
 
 
-def make_icon() -> QIcon:
-    """The island silhouette, painted rather than shipped as a binary asset. White fill with a
-    dark keyline so it survives both light and dark taskbars.
-
-    ponytail: one state. D29's on-air lamp gives this three — ink / amber outline while the
-    wake ring is open / filled amber while capturing — and lands with the `listen_for_me`
-    gating that makes the middle state mean anything.
-    """
-    pm = QPixmap(32, 32)
-    pm.fill(Qt.GlobalColor.transparent)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    path = QPainterPath()
-    path.addRoundedRect(QRectF(4, 9.5, 24, 13), 6, 6)
-    p.fillPath(path, QColor("#f4f6f8"))
-    p.setPen(QColor(0, 0, 0, 150))
-    p.drawPath(path)
-    p.end()
-    return QIcon(pm)
+# --- the mic ring: the tray's whole picture -----------------------------------------------
+# Theme.flare — the app's on-air coral, so the tray and the settings window agree on what
+# "capturing" looks like. The idle ink follows the TASKBAR theme, not the app's, since that is
+# the surface it sits on.
+ON_AIR = "#cf6142"
+GAIN = 4          # real mic RMS sits low; the island lifts it by the same factor (Overlay.qml)
 
 
-def mark_icon(px: int = 256, colour: str | None = None) -> QIcon:
-    """The Gemma mark, for the tray and the Windows taskbar — loaded from the shipped SVG so the
-    shape lives in one place (`teleprompter/icons/gemma-mark.svg`). `colour` recolours the mark
-    (the tray passes white); the default keeps the asset's coral. Falls back to the island
-    silhouette if the asset is ever missing.
+def mic_icon(level: float, capturing: bool, light_taskbar: bool, px: int = 64) -> QIcon:
+    """A level ring, the way a call app draws one: a hollow ink circle while the mic is CLOSED,
+    a filled coral core the moment it opens, and a halo that pushes outward with your voice.
 
-    ponytail: the tray is a flat white mark. Its on-air role (spec/50 rule 4, D29) could later
-    tint it by mic state; the settings window's top-bar lamp carries that meaning for now.
-    """
-    from pathlib import Path
-    from PySide6.QtCore import QByteArray
-    from PySide6.QtSvg import QSvgRenderer
-    src = Path(__file__).resolve().parent / "icons" / "gemma-mark.svg"
-    try:
-        svg = src.read_text(encoding="utf-8")
-    except OSError:
-        return make_icon()
-    if colour:
-        svg = svg.replace("#cf6142", colour)
-    r = QSvgRenderer(QByteArray(svg.encode("utf-8")))
-    if not r.isValid():
-        return make_icon()
+    Truthful by construction (spec/50 rule 4): `capturing` is the daemon's real capture state and
+    `level` its real RMS — nothing here is inferred or faked while the mic is shut."""
     pm = QPixmap(px, px)
     pm.fill(Qt.GlobalColor.transparent)
     p = QPainter(pm)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    r.render(p)
+    c = px / 2
+    if capturing:
+        lvl = max(0.0, min(1.0, level * GAIN))
+        halo = QColor(ON_AIR)
+        halo.setAlphaF(0.18 + 0.32 * lvl)             # louder reads as brighter, not just bigger
+        r = px * (0.24 + 0.22 * lvl)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(halo)
+        p.drawEllipse(QRectF(c - r, c - r, 2 * r, 2 * r))
+        p.setBrush(QColor(ON_AIR))                    # the core says "open", at any volume
+        p.drawEllipse(QRectF(c - px * 0.2, c - px * 0.2, px * 0.4, px * 0.4))
+    else:
+        ink = QColor("#1b1b1b" if light_taskbar else "#ffffff")
+        ink.setAlphaF(0.75)
+        pen = QPen(ink)
+        pen.setWidthF(px * 0.09)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        r = px * 0.28
+        p.drawEllipse(QRectF(c - r, c - r, 2 * r, 2 * r))
     p.end()
     return QIcon(pm)
 
@@ -200,17 +192,13 @@ class Tray(QSystemTrayIcon):
         self._model = model
         self.setToolTip("Gemma — Teleprompter")
 
-        # Gem, driven by the live status feed (spec/50 rule 4 — the tray shows only what the daemon
-        # is really doing, never inferred). The palette is read per state-change, not per frame:
-        # winreg on every tick would be waste.
-        self._state = gem.gem_state(model.state) if model is not None else "idle"
-        self._frame = 0
-        self._pal = self._palette()
-        self._anim = QTimer(self)
-        self._anim.timeout.connect(self._tick)
+        # The mic ring, driven by the live status feed (spec/50 rule 4 — the tray shows only what
+        # the daemon is really doing, never inferred). No timer: mic frames ARE the clock.
+        self._light = windows_taskbar_is_light()
+        self._shown = None                        # last (capturing, level bucket) painted
         if model is not None:
             model.changed.connect(self._on_model)
-        self._sync()                              # initial icon + start/stop the loop for `idle`
+        self._on_model()
 
         menu = QMenu()
         self._act_settings = None
@@ -269,36 +257,74 @@ class Tray(QSystemTrayIcon):
         self._act_quit.setIcon(glyph_icon(POWER, ink))
         style_menu_native(self._menu, light)
 
-    # --- Gem animation (spec/50 rule 4: the tray reflects real status, never inferred) --------
-
-    def _palette(self) -> dict:
-        # Follow the TASKBAR (system) theme, not the app theme: a dark taskbar needs Gem's LIGHT
-        # body or the ghost vanishes (Thomas: "black is hard to see"). Light taskbar -> native dark
-        # body. Accents kept either way.
-        return gem.NATIVE if windows_taskbar_is_light() else gem.ISLAND
+    # --- the mic ring (spec/50 rule 4: the tray reflects real status, never inferred) ---------
 
     def _on_model(self) -> None:
-        # `changed` fires on every feed message (mic levels included); only a real STATE change
-        # restarts the animation.
-        s = gem.gem_state(self._model.state)
-        if s != self._state:
-            self._state = s
-            self._frame = 0
-            self._pal = self._palette()
-            self._sync()
+        """`changed` fires on every feed message. Repaint only when the drawn picture would
+        actually differ — the level is quantised to 12 steps, so a steady voice is a handful of
+        `setIcon` calls a second rather than one per mic frame."""
+        capturing = self._model is not None and self._model.state == "listening"
+        level = self._model.mic if capturing else 0.0
+        shown = (capturing, round(min(1.0, level * GAIN) * 12))
+        if shown == self._shown:
+            return
+        if self._shown is None or shown[0] != self._shown[0]:
+            # Re-read the taskbar theme on the capture edge, not per frame: winreg is not free,
+            # and the idle ring is the only thing the theme affects.
+            self._light = windows_taskbar_is_light()
+        self._shown = shown
+        self.setIcon(mic_icon(level, capturing, self._light))
 
-    def _sync(self) -> None:
-        # Animate every state with more than one frame — idle's gentle loop included (Thomas wants
-        # the tray alive, not frozen on frame 0). Only a genuinely single-frame state rests.
-        if gem.frame_count(self._state) <= 1:
-            self._anim.stop()
-        else:
-            self._anim.start(max(1, round(1000 / gem.fps(self._state))))
-        self._paint()
 
-    def _tick(self) -> None:
-        self._frame += 1
-        self._paint()
+def _selfcheck() -> None:
+    """`python -m teleprompter.tray` — the ring's pixels and the repaint gate, offscreen."""
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtGui import QGuiApplication
+    QGuiApplication.instance() or QGuiApplication([])
 
-    def _paint(self) -> None:
-        self.setIcon(gem.icon(self._state, self._frame, 32, self._pal))
+    def coral(icon):
+        """Opaque-ish pixels that are warm — white ink and coral both have a high red, so the
+        test is red-vs-green, not red alone."""
+        img = icon.pixmap(64, 64).toImage()
+        return sum(1 for y in range(64) for x in range(64)
+                   if img.pixelColor(x, y).alpha() > 40
+                   and img.pixelColor(x, y).red() > img.pixelColor(x, y).green() + 50)
+
+    closed, quiet, loud = (mic_icon(0.0, False, False), mic_icon(0.0, True, False),
+                           mic_icon(1.0, True, False))
+    assert all(not i.isNull() for i in (closed, quiet, loud))
+    # Closed reads as ink, open reads as coral: the honest difference (spec/50 rule 4).
+    assert coral(closed) == 0, "the closed ring must not be coral"
+    assert coral(quiet) > 0, "an open mic must show the coral core"
+    # ...and louder is a bigger picture, which is the whole point of the ring.
+    assert coral(loud) > coral(quiet) * 1.5, (coral(quiet), coral(loud))
+
+    # The repaint gate: identical levels must not repaint, a real change must.
+    class FakeModel:
+        state, mic = "listening", 0.05         # below the gain's ceiling, so a change still moves
+
+    class Probe(Tray):
+        def __init__(self):                       # no QSystemTrayIcon, no menu — just the gate
+            self._model, self._light, self._shown, self.painted = FakeModel(), False, None, 0
+
+        def setIcon(self, _icon):
+            self.painted += 1
+
+    t = Probe()
+    t._on_model()
+    t._on_model()
+    assert t.painted == 1, f"an unchanged level must not repaint ({t.painted})"
+    FakeModel.mic = 0.15                          # several buckets up
+    t._on_model()
+    assert t.painted == 2, "a real level change must repaint"
+    FakeModel.state = "idle"
+    t._on_model()
+    assert t.painted == 3 and t._shown == (False, 0), t._shown
+
+    print("tray selfcheck OK: mic ring (closed=ink, open=coral, louder=bigger), "
+          "repaint gate quantised to 12 steps")
+
+
+if __name__ == "__main__":
+    _selfcheck()

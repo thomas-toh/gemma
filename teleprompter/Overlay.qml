@@ -16,21 +16,58 @@ Window {
     id: root
 
     // --- locked geometry / palette (mockup v7) ---
+    // Gem, inside the pill on the left — switchable (settings → preferences, "Show Gem in the
+    // island"). OFF is not an approximation of the pre-Gem island: every expression she touches
+    // is written `gemOn ? … : <the original>`, so the classic pill collapses to exactly the
+    // geometry it had before she existed. `overlay_check` asserts that, because "drop-in" is a
+    // claim that rots silently.
+    //
+    // She is drawn at 52 (2× the kit's 26 cell — integer scales only) in a pill that is 46 tall,
+    // and that is deliberate: the kit's cell carries 3–4 cells of dead margin around the ghost,
+    // so what actually spills past the silhouette is at most 3px, and only `done/sparkle` (1px,
+    // top) and `needs-permission/granted` (3px, bottom) spill at all. Letting the box overhang
+    // rather than growing `baseH` to contain it is Thomas's call: the margin is a safety area,
+    // and using it is cheaper than making the island 35% taller.
+    readonly property bool gemOn: cfg.values.gem_in_island !== false
+    readonly property int gemPx: 52
+    readonly property int gemLeft: 4                     // inner-left edge -> Gem's CELL. Far less
+                                                         // than padSide because the cell already
+                                                         // carries ~12px of its own margin before
+                                                         // the ghost, so padSide was paid twice.
+                                                         // The floor is ~3: below that the props
+                                                         // she holds (the listening tablet, the
+                                                         // guitar) crowd the pill's bottom-left
+                                                         // corner radius, which they overhang.
+    readonly property int gemGap: 6                      // her cell -> the wave / the text. Small
+                                                         // because the cell ALSO carries its own
+                                                         // right margin (~14px at rest), so the
+                                                         // visual gap is roughly 20px, not 6.
+    readonly property int gemCol: gemLeft + gemPx + gemGap
+    // What the content is inset by on the left: Gem's whole column, or the plain padding.
+    readonly property int leftInset: gemOn ? gemCol : padSide
     readonly property int openW: 440
     readonly property int baseH: 46
     readonly property real flare: 18            // outward concave fillet at the top edge
     readonly property real botR: 13.5           // bottom corner radius (convex)
     // Scrolling listening waveform — a level history flowing right->left (dots in silence, swelling
     // into bars on sound). Params tuned in sandbox/teleprompter-waveform-mockup.html (Thomas).
-    readonly property int  waveCount: 20
+    // Cut when Gem is in: she takes 76px of the compact pill, and at 20 samples the pill grew
+    // from 230 to 306. Fourteen keeps it near its old width, and the wave is a rolling history
+    // whose oldest samples fade out on the left anyway — so the cut comes off the end that was
+    // already disappearing.
+    readonly property int  waveCount: gemOn ? 14 : 20
     readonly property real waveBarW: 3
     readonly property real waveGap: 6
     readonly property real waveMaxH: 24
     readonly property real waveGain: 4          // real mic RMS sits low; lift it so speech reads as bars
     readonly property int  waveTickMs: 60       // flow rate (also the per-slot height smoothing)
-    readonly property real waveFade: 22         // ends fade into the black pill
+    // The fade was tuned when the wave floated alone in the middle of an empty pill. With Gem as
+    // its left neighbour, 22px of it ate the wave's first two bars ON TOP of the gap, which read
+    // as a hole rather than as breathing room — so the Gem theme fades less.
+    readonly property real waveFade: gemOn ? 10 : 22   // ends fade into the black pill
     readonly property real waveWidth: waveCount * waveBarW + (waveCount - 1) * waveGap
-    readonly property int  compactW: Math.round(waveWidth) + 20   // the listening pill hugs the wave
+    readonly property int  compactW: gemOn ? (gemCol + Math.round(waveWidth) + padSide)
+                                           : (Math.round(waveWidth) + 20)   // hugs the wave
     // Colour, opacity, type and motion all come from the Theme singleton (Theme.qml) — see
     // the note there on why island geometry stays local while those do not.
     // Whole pixels by construction. Qt rounds the WINDOW height to integers, so a fractional
@@ -78,7 +115,7 @@ Window {
     // inset; it was always 0, so it is gone, U-02.)
     // FINAL layout width — the text never reflows mid-animation. Shrinks by the gutter when
     // the latency readout is on, so an instrument can never overlap a reply.
-    readonly property real textW: openW - 2 * padSide - latencyGutter
+    readonly property real textW: openW - leftInset - padSide - latencyGutter
     // Measured from the font, at the WIDEST reading it can ever show (both readings appear at
     // once during the acceptance run). A guessed constant undersized it; sizing to the CURRENT
     // reading would reflow the reply every time a number arrived.
@@ -115,6 +152,15 @@ Window {
                                      : (replyReady ? overlay.reply : prompt)
     // Has the typewriter caught up with everything it has been given?
     readonly property bool revealDone: reveal.shown >= bodyText.length
+    // Published to the model so the OTHER window can follow the typewriter. The daemon's stream
+    // finishes well before the reveal does, so `overlay.done` is the wrong clock for anything
+    // miming the answer — and this is the only window that can see the real one. The settings
+    // Gem reads it today; Gem-on-the-island will read the same flag.
+    Binding {
+        target: overlay
+        property: "revealing"
+        value: root.replyReady && !root.revealDone
+    }
 
     Timer {                                   // the prompt's hold, before the reply takes over
         id: promptHold
@@ -450,7 +496,11 @@ Window {
         visible: root.st === "listening"
         width: root.waveWidth
         height: root.waveMaxH
-        x: root.islandX + (root.animW - width) / 2
+        // Centred in the pill when Gem is out — but centring it with her IN put its left fade
+        // straight over her cell (they overlapped by 30px), which is why there was no gap. With
+        // her in, it starts after her column and the pill hugs it, leaving `padSide` on the right.
+        x: root.gemOn ? (root.islandX + root.flare + root.gemCol)
+                      : (root.islandX + (root.animW - width) / 2)
         y: (root.animH - height) / 2
         Row {
             anchors.fill: parent
@@ -493,14 +543,37 @@ Window {
     // line) the text is REVEALED rather than spilling outside the black. Its width follows the
     // animating island, but the Text inside is laid out at the final width — so the line count
     // never changes mid-animation and the height animates once, straight to its target.
+    // Gem. Deliberately a SIBLING of the viewport, not a child: the viewport clips (it has to,
+    // for the scroll), and clipping her would defeat the whole point of letting the cell overhang.
+    // `y` is pinned to the first line box rather than centred on the animating height, so she
+    // stays put as the island grows downward for more lines — same reason the text is top-anchored.
+    // max(0, …) keeps the cell inside the WINDOW: overhanging the pill is intended, being clipped
+    // away by the window edge is not.
+    Image {
+        objectName: "gem"                      // reached by name from the checks / sandbox builder
+        // ROUNDED, and that is not cosmetic: `islandX` is (width - animW) / 2, so any odd pill
+        // width lands her on a half pixel — and half a pixel of offset is exactly what destroys
+        // pixel art, since every cell edge then straddles two device pixels and Qt has to blend
+        // them. The island's own antialiased shapes do not care; a 26-cell sprite does.
+        x: Math.round(root.islandX + root.flare + root.gemLeft)
+        y: Math.round(Math.max(0, (root.baseH - root.gemPx) / 2))
+        width: root.gemPx; height: root.gemPx
+        sourceSize: Qt.size(root.gemPx, root.gemPx)
+        smooth: false                          // nearest-neighbour: keep the cells crisp
+        opacity: root.entrance                 // fades with the island, never on its own
+        visible: root.gemOn && !root.peeking   // the peek is its own surface (D27)
+        source: gemPlayer.source
+        z: 5
+    }
+
     Item {
         id: viewport
         // Hidden the INSTANT a peek opens, not cross-faded over the 200ms grow — otherwise the
         // compact reply lingers behind the (transparent) peek panel as a ghost during the transition.
         opacity: root.peeking ? 0 : 1
-        x: root.islandX + root.flare + root.padSide
+        x: root.islandX + root.flare + root.leftInset
         y: 0
-        width: Math.max(0, root.animW - 2 * (root.flare + root.padSide))
+        width: Math.max(0, root.animW - 2 * root.flare - root.leftInset - root.padSide)
         height: Math.max(0, root.animH - root.padBottom)
         clip: true
         visible: root.open

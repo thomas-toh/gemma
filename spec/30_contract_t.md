@@ -62,14 +62,23 @@ constants:
   refuse-if-unloggable is noted in code.
 - **A tool fault is data, not a crash.** A backend that raises returns an `error` string the brain
   reads and narrates; the turn survives.
-- **Retrieval tools compose the query, never read the corpus.** `find_document` turns the model's
-  words into one Windows Search (`SystemIndex`) query and returns at most eight ranked hits —
-  name, date, path. It opens nothing; deciding what to do with a hit is a later turn. Its backend
-  drives the index's ADO provider through PowerShell COM, which is a sanctioned Windows backend
-  (rule 3) and **not** the raw shell rule 1 forbids: the model supplies search terms, never a
-  command, the terms are stripped to bare words before they reach the query, and the finished SQL
-  is passed to the subprocess in an environment variable so nothing the model wrote is parsed as
-  PowerShell. The index is local; no query and no result leaves the machine (spec/50).
+- **Retrieval tools compose the query, never read the corpus.** The model turns the utterance into
+  query parameters, the STORE does the filtering, and at most eight headers come back — never the
+  content itself, and nothing is opened. `find_document` queries the Windows Search index
+  (`SystemIndex`) for `name · date · path`; `search_email` restricts the desktop Outlook inbox over
+  MAPI to `sender · date · subject`. Deciding what to do with a hit is a later turn.
+
+  Both backends drive a COM provider through PowerShell, a sanctioned Windows backend (rule 3) and
+  **not** the raw shell rule 1 forbids: the model supplies search *terms*, never a command; the
+  terms are stripped to bare words before they can enter a query string (a DASL restriction is an
+  injection surface exactly as a SQL `WHERE` is); and the finished query reaches the subprocess in
+  an environment variable, so nothing the model wrote is ever parsed as PowerShell.
+
+  Both corpora are **local** — the Windows index and the desktop mail store, no Graph and no cloud
+  API — so a query and its results stay on the machine (spec/50). What the model then *says* about
+  a result travels wherever that turn is routed, which is the `local_only` question, not this one.
+  A retrieval tool that cannot reach its store (no index, no mail profile) answers "not available"
+  in prose rather than raising, so a missing corpus degrades the turn instead of ending it.
 
 The multi-round loop that carries a tool result back to the brain is Contract B's, not Contract
 T's — see spec/20 "The tool loop".
@@ -77,4 +86,5 @@ T's — see spec/20 "The tool loop".
 ## Starter set (defined in schemas/tools.json)
 
 `system_status` (Tier 1) · `read_clipboard` (Tier 1) · `find_document` (Tier 1, Windows-only) ·
-`open_app` (Tier 2) · `focus_window` (Tier 2) · `media_control` (Tier 2) · `set_timer` (Tier 2)
+`search_email` (Tier 1, Outlook on Windows) · `open_app` (Tier 2) · `focus_window` (Tier 2) ·
+`media_control` (Tier 2) · `set_timer` (Tier 2)

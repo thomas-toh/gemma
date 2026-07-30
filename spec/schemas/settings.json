@@ -69,6 +69,11 @@
       "built": true,
       "$comment": "D23/D28. Key name stays `tts` \u2014 the file already written to %APPDATA% uses it."
     },
+    "gem_in_island": {
+      "type": "bool", "default": true, "pane": "general", "group": "preferences",
+      "label": "Show Gem in the island", "built": true,
+      "$comment": "D35. Off restores the pre-Gem island exactly \u2014 padding, wave width and text column all fall back to their original formulas (asserted in teleprompter/overlay_check.py)."
+    },
 
     "models": {
       "type": "object", "default": {}, "pane": "models",

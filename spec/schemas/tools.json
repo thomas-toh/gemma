@@ -29,6 +29,22 @@
       }
     },
     {
+      "name": "search_email",
+      "tier": 1,
+      "description": "Search the mail in the desktop Outlook inbox and return matching HEADERS only — sender, date received, subject — up to 8, newest first. Use for 'the email from Sarah about the lease', 'what did X send me last week'. Every parameter is optional and they are combined with AND; give only the ones the request actually implies. Bodies are searched but never returned, and nothing is opened, replied to or sent.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "sender": { "type": "string", "description": "optional: part of the sender's name or email address" },
+          "subject": { "type": "string", "description": "optional: words appearing in the subject line" },
+          "query": { "type": "string", "description": "optional: free text — each word must appear in the subject or the body" },
+          "since": { "type": "string", "description": "optional: only mail received on or after this date, as YYYY-MM-DD" },
+          "before": { "type": "string", "description": "optional: only mail received before this date, as YYYY-MM-DD" }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "open_app",
       "tier": 2,
       "description": "Launch an application by its friendly name from the configured app map (e.g. 'spotify', 'word', 'chrome'). Fails with the list of known names if not found.",

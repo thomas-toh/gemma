@@ -1,6 +1,6 @@
 # Spec 00 — System overview & status
 
-**Last reconciled: 2026-07-28** · Build progress: [STATE.md](../STATE.md) · Decisions record: [docs/02](../docs/02_architecture/02_system_architecture.md)
+**Last reconciled: 2026-07-30** · Build progress: [STATE.md](../STATE.md) · Decisions record: [docs/02](../docs/02_architecture/02_system_architecture.md)
 
 ## The system in one paragraph
 
@@ -698,4 +698,119 @@ streaming deltas, so an older sender just shows no footer. Guarded: the shape in
 `bridge.broadcaster --selfcheck` (validates against the schema) + the read in
 `teleprompter.decode --selfcheck`; overlay/settings checks green. Owed: live on the box — peek a real
 answer and read the footer.
+
+**D35 (2026-07-29): the Gem sprite kit goes to v3 — Gem gains behaviour; the tray gets a mic ring
+instead.** Design shipped two kits in a day (v2, then v2.2/v3), and neither is drop-in over v1: the
+cell grew from 20px (props can now leave the body — a guitar, a phone, a laptop), a state is no
+longer a flat frame list but a set of named **clips** with policies (`loop` / `oneshot` / `hold`),
+and the kit carries its own **timing script**. `idle/rest` is a single frame, so the character is
+now the script's, not the app's. Landed as one decision because none of it shipped separately.
+
+- **The kit's script runs in `gem.py`.** `GemPlayer` is a Qt-free port of the kit's own
+  `gem_sprites.py::GemPlayer` (minus its Pillow dependency): base loop, scripted idle clips,
+  enter/exit clips on a state change, holds that freeze until released.
+  `QmlGem` puts it on a QTimer and gives QML one bindable URL, so the settings window sets a state
+  and binds a source — it no longer counts frames or hard-codes a one-shot's length. Kit-side
+  reference loaders (`gem_sprites.py`, `gem_sprites.rs`) are deliberately NOT vendored: `gem.py` is
+  the renderer, and a second loader would be a second, divergent source of behaviour.
+- **Both palettes now come from the JSON.** The kit ships a light AND a dark hex per role (plus a
+  `shade` role for depth on the body), so each ground takes the set drawn for it — amending D32's
+  "the accents don't flip", which predates the kit having ground-specific accents (Thomas). Only the
+  body and eye are overridden, to the app's own off-white and true black. Still a MAP over the
+  indices, never a repaint.
+- **The tray is no longer a Gem surface.** Thomas is commissioning a separate set for it; until then
+  the tray draws its own **mic-level ring** — a hollow ink circle while the mic is closed, a coral
+  (`Theme.flare`) core with a halo that grows and brightens with the real RMS while it is open. Same
+  honesty rule (spec/50 rule 4), fewer moving parts: no timer, mic frames are the clock, and the
+  repaint is gated on a 12-step quantisation so a steady voice is a handful of `setIcon` calls a
+  second. This retires `tray.make_icon` / `tray.mark_icon` (dead since D32) and their `ponytail:`
+  note asking for exactly this on-air behaviour.
+- **What v1 named and the new kit does not.** `portrait.plain` is gone — the app icon uses
+  `idle/rest`, a genuine one-frame still. `arriving` is gone, so the settings window has no
+  entrance; idle running its own fidgets is livelier than the fixed one it replaces.
+  `question` / `alert` are gone;
+  `permission` → `needs-permission`, `asleep` → `resting`, and `misheard` is now a hold clip inside
+  `listening`. `gem.gem_state()` (D32's feed→Gem map) went with the tray, its only consumer — the
+  next Gem surface will map whatever vocabulary it needs.
+- **The kit is Design's 26px build (v2.2, 2026-07-29).** The 32px cell carried dead margin in every
+  frame, so Design ships a tighter crop as a first-class variant — same artwork, same clip and state
+  names, same script, but Gem is 54% of the cell's width instead of 44%, i.e. 1.23× at a given box.
+  We take it (Thomas). Verified on arrival: 462 frames across 24 clips, every frame 26 rows of 26
+  legal characters, and both atlases compared to the JSON **pixel-for-pixel** — a 26-cell JSON
+  beside a 32-cell atlas is the one failure that throws nothing and renders garbage. *(An earlier
+  pass recropped v2 ourselves with Design's `recrop_26.py`; that script is superseded by their own
+  `26/` export and has been removed.)* **Owed to the sprite lab:** `needs-permission/granted` f5
+  (the falling lock) loses 5px off the bottom to the crop — flag it, do not invent pixels.
+- **The idle script went two-tier, and a v2 loader gets it wrong silently.** v2 had one weight
+  table, which cannot say "blink often, play guitar rarely" — the two draw from the same pool, so
+  every blink is a missed gag. v3 splits them: `filler` (blink, look-around) fires every
+  `restHold` passes, and every `gagEvery` fillers a **gag** fires instead, from six new/expanded
+  clips (`jump` `skip-rope` `guitar` `phone` `basketball` `disguise`, all weight 1). The
+  compatibility hinge is the dangerous part — a state with no `filler` key falls back to v2
+  behaviour, so a v2 loader *runs* a v3 kit and merely plays gags where fillers belong, i.e. Gem
+  performs constantly instead of blinking. `GemPlayer` was ported to the two-tier shape from the
+  kit's own loader, and `teleprompter.gem` now asserts the **tiers stay separate** (measured over
+  ~74 simulated minutes: both tiers fire, and the filler:gag ratio sits inside `gagEvery`), because
+  the failure is a behaviour drift no smoke test would catch. Also in this pass: the **eyes are 2px
+  wide** (v2's 1px was 1:14 of the body against Clawd's 1:8; it was also the first thing a
+  fractional downscale destroyed, and a 1px hole closes up in the tray template).
+- **Sizes in the app.** The settings Gem renders at **2× (52px)** — the whole cell fits the 58px top
+  bar, so nothing is cropped and the props get their full run of the margin. 3× (78px) was tried and
+  rejected as too tall: it needed the cell clipped to the played clips' ink box to fit at all, and
+  there is no integer step between the two (a fractional scale makes some pixel-cells wider than
+  their neighbours, which the kit forbids). `app_icon` crops to the **frame's own ink** rather than
+  the kit's `anchor` box, which is the whole cell in the 26px build — cropping to it would have
+  *shrunk* the icon by a fifth. No other call site assumed a cell size.
+
+- **Gem mimes the turn, off the island's typewriter.** The settings Gem was mic-on/mic-off; she now
+  runs `listening` → `working` (composing — the laptop, Thomas's pick over `thinking`/orbit) →
+  `speaking` (the answer landing) → `done` → `idle`. Two things make this less obvious than it
+  looks. First, **`speaking` cannot come from the feed**: the orchestrator only publishes that state
+  when TTS actually plays, and TTS is off by default (D23), so the reply streams in while the state
+  word still says `thinking`. Second, **the daemon's stream and the island's reveal finish at
+  different times, in either order** — on a long answer the typewriter runs seconds past
+  `response.done`. Gem follows the SCREEN, so `Overlay.qml` publishes its reveal state onto
+  `OverlayModel.revealing` (UI state, not feed state — the precedent is `showLatency`); it is the
+  only place a second window can read it, and it is what puts Gem on the island below.
+  That field needed its **own** notify signal: published through the model's blanket `changed` it
+  invalidated the very properties it was computed from, and QML spun a binding loop.
+  `done` enters on `sparkle`, which is a HOLD, so `QmlGem` releases an enter-hold once it has
+  played — that is what settles `done` onto `settled` and `error` onto `held`, per the kit's rule
+  that a hold is the app's to release. A non-enter hold (`misheard`) still waits to be released by
+  hand. Two ordering bugs were found by walking it rather than reading it: `gemState` reported the
+  player's *current* state, so a QML Binding re-requesting during an exit clip restarted that clip
+  forever (it now reports the REQUEST); and a ladder built from several derived booleans could see
+  them disagree for one evaluation and drop through a lower rung, flashing the laptop between the
+  answer and the sparkle — it is one expression now.
+
+- **Gem joins the island, behind a switch.** The island is the app's professional face, so a mascot
+  on it is a taste call that has to stay reversible: **`gem_in_island`** (preferences, default ON)
+  turns her off, and off means the island is *exactly* what it was before her. Every Gem-aware
+  value is written `gemOn ? … : <the original formula>`, and `overlay_check` re-derives those
+  originals from scratch rather than trusting the branch — 230px classic against 238px with Gem on
+  the compact pill. A drop-in nobody re-checks is a geometry claim that rots silently.
+  She sits **inside** the pill on the left at 52px, the same 2× as the settings bar. The 26px cell
+  carries ~12px of its own margin, so a 4px inset reads as ~16 and a prop can still leave the body;
+  at worst the cell overhangs the 46px pill by 3px, which is the safety area doing its job
+  (Thomas). She is a **sibling** of the clipping viewport rather than a child, and her x/y are
+  rounded to whole pixels — `islandX` is a real number, an odd pill width lands a nearest-neighbour
+  sprite on a half pixel, and a half-pixel pixel-art sprite is the one thing that visibly ruins it.
+  CI guards the rounding. Fitting her cost the waveform its old anchor: it was centred in the
+  *whole* pill, so it ran 30px underneath her. It now starts after her column, and the Gem theme
+  narrows to 14 bars with a 10px fade (from 20 / 22) so the two never touch. The peek (D27) is its
+  own surface and draws no Gem for now — a `search` clip for it is commissioned.
+  With two windows driving one player, the phase ladder moved **out of QML** into `QmlGem`: two
+  sets of bindings racing over one player is a bug waiting for a slow frame. It also gained the
+  rungs the settings bar never exercised — an `error` outranks a pending reply (a fault used to
+  fall through to `idle`), and dictation maps `transcribing` / `transforming` → `working` and
+  `pasted` → `done` (Thomas). `listening` outranks everything, so a fresh mic is never masked by a
+  stale fault.
+
+Guarded: `teleprompter.gem` (the kit loads, palettes come from the JSON, both script tiers fire and
+stay separate, enters resolve, enter-holds settle, a re-requested state cannot restart an exit, and
+the resting pose fills the app-icon chip whatever the cell becomes next), `settings_check` (the turn
+walked end to end, both reveal/stream orderings), `overlay_check` (whole-pixel placement, and the
+switch off restoring the pre-Gem formulas) and a new `teleprompter.tray` selfcheck (the ring's
+pixels + the repaint gate), all CI-wired. Owed: live on the box — the tray ring against a real
+mic, the taskbar icon, and Gem miming a real turn on both surfaces.
 

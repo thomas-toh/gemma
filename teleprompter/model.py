@@ -23,6 +23,7 @@ class OverlayModel(QObject):
         super().__init__()
         self._s = OverlayState()
         self._show_latency = show_latency
+        self._revealing = False
 
     def feed_lost(self) -> None:
         """The daemon went away. Show nothing rather than a frozen last frame — `idle` alone
@@ -41,6 +42,29 @@ class OverlayModel(QObject):
     @Property(bool, notify=changed)
     def showLatency(self) -> bool:
         return self._show_latency
+
+    # Written BY the overlay, read by everything else: is the island's typewriter still laying
+    # down the reply? Not feed state — the daemon finishes streaming well before the reveal
+    # catches up, and only the overlay can see how far along it is. It lives here because it is
+    # the one place a second surface can read it: Gem mimes the reply as it lands, on both the
+    # island and the settings bar.
+    #
+    # It has its OWN notify signal rather than sharing `changed`. `changed` is deliberately
+    # blanket — every feed field re-evaluates on it — and the overlay computes `revealing` from
+    # two of those fields, so routing it through `changed` made the write invalidate its own
+    # inputs: Qt reported a binding loop on `replyReady`. Harmless in effect (the setter below
+    # is idempotent) but a real cycle, and this breaks it.
+    revealingChanged = Signal()
+
+    def _get_revealing(self) -> bool:
+        return self._revealing
+
+    def _set_revealing(self, on: bool) -> None:
+        if on != self._revealing:
+            self._revealing = on
+            self.revealingChanged.emit()
+
+    revealing = Property(bool, _get_revealing, _set_revealing, notify=revealingChanged)
 
     def apply(self, msg: dict) -> None:
         self._s.apply(msg)

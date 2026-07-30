@@ -147,12 +147,17 @@ try {
 """
 
 
-def _search_terms(q) -> str:
-    """Whatever the model wrote, reduced to plain search words. This is the trust boundary: the
-    result is spliced into a SQL string literal, so anything that could close it or mean something
-    to the query language is DROPPED rather than escaped — quotes, parens, `%`, `*`, `-` operators.
-    Windows Search wants bare terms anyway, so nothing useful is lost."""
-    return " ".join(re.sub(r"[^\w\s]", " ", str(q)).split())[:120]
+def _search_terms(q, keep: str = "") -> str:
+    """Whatever the model wrote, reduced to plain search words. This is the trust boundary shared
+    by every retrieval tool here: the result is spliced into a query string literal, so anything
+    that could close it or mean something to the query language is DROPPED rather than escaped —
+    quotes, parens, `%` and `_` (LIKE wildcards), `*`, `-` operators. These query languages want
+    bare terms anyway, so nothing useful is lost. `keep` re-admits characters a particular field
+    genuinely needs (an address needs `@` and `.`); it is never given a quote.
+    An absent optional parameter is "", NOT the string "None" — that would search for the word."""
+    if q is None:
+        return ""
+    return " ".join(re.sub(rf"[^\w\s{re.escape(keep)}]", " ", str(q)).split())[:120]
 
 
 def _iso_date(s) -> str:
@@ -214,10 +219,129 @@ def _find_document(args: dict) -> str:
     return f"Indexed matches for {query!r} (best first):\n" + "\n".join(hits)
 
 
+# --- search_email: the desktop Outlook store --------------------------------------------------
+#
+# find_document's shape, second corpus: the model composes the criteria, the STORE does the
+# filtering, and only headers come back — sender, date, subject. Bodies are searched (that is what
+# `query` is for) but never returned, and nothing is opened, replied to or sent.
+#
+# Strictly the LOCAL desktop store over MAPI — no Graph, no cloud API, no credentials (spec/50).
+# Same PowerShell-COM subprocess as find_document, and for the same reason: Outlook automation is
+# COM-only and pywin32 is not a dependency.
+
+MAIL_LIMIT = 8
+
+_MAIL_PS = r"""
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+try {
+  $ol = New-Object -ComObject Outlook.Application
+  $inbox = $ol.GetNamespace("MAPI").GetDefaultFolder(6)   # olFolderInbox
+} catch { [Console]::Error.WriteLine($_.Exception.Message); exit 2 }
+try {
+  $items = $inbox.Items
+  $items.Sort("[ReceivedTime]", $true)                    # newest first, BEFORE restricting
+  if ($env:GEMMA_DASL) { $items = $items.Restrict($env:GEMMA_DASL) }
+  $n = 0
+  foreach ($m in $items) {
+    if ($n -ge [int]$env:GEMMA_MAX) { break }             # stop early: never walk a whole mailbox
+    if ($m.Class -ne 43) { continue }                     # olMail only — a meeting request has no sender
+    $d = $m.ReceivedTime
+    @($m.SenderName, $(if ($d) { $d.ToString('yyyy-MM-dd HH:mm') } else { '?' }), $m.Subject) -join "`t"
+    $n++
+  }
+} catch { [Console]::Error.WriteLine($_.Exception.Message); exit 3 }
+"""
+
+
+def _mail_profile_exists() -> bool:
+    """Is there a MAPI profile at all? Checked in the REGISTRY, before any COM call: asking
+    Outlook for a mailbox when no profile exists can raise a "create a profile" DIALOG on the
+    desktop, and a modal prompt behind a voice assistant is a hang with no way to answer it.
+    ponytail: Office 16.0 covers 2016 through 365 — add a version if an older Outlook ever
+    turns up. A profile existing does not prove it WORKS; the COM path still degrades on its own."""
+    import winreg
+
+    for path in (r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows Messaging Subsystem\Profiles",
+                 r"SOFTWARE\Microsoft\Office\16.0\Outlook\Profiles"):
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path) as key:
+                if winreg.QueryInfoKey(key)[0]:  # at least one profile subkey
+                    return True
+        except OSError:
+            continue
+    return False
+
+
+def _mail_filter(args: dict) -> tuple[str, list[str]]:
+    """Build the DASL restriction, plus a plain-English echo of what it asks for. A DASL filter is
+    an injection surface exactly like the SQL one, so every value goes through `_search_terms`
+    first and dates through `_iso_date` — a value that sanitises to nothing is simply left out."""
+    clauses, said = [], []
+    p = "urn:schemas:httpmail:"
+
+    if sender := _search_terms(args.get("sender"), keep="@.-"):
+        clauses.append(f"""("{p}fromname" LIKE '%{sender}%' OR "{p}fromemail" LIKE '%{sender}%')""")
+        said.append(f"from {sender!r}")
+    if subject := _search_terms(args.get("subject")):
+        clauses.append(f""""{p}subject" LIKE '%{subject}%'""")
+        said.append(f"subject containing {subject!r}")
+    if query := _search_terms(args.get("query")):
+        # Word by word, not as one phrase: "lease renewal" should still find a mail whose subject
+        # says "renewal of the lease". Each word must appear in the subject OR the body.
+        for word in query.split():
+            clauses.append(f"""("{p}subject" LIKE '%{word}%' OR "{p}textdescription" LIKE '%{word}%')""")
+        said.append(f"mentioning {query!r}")
+    if since := _iso_date(args.get("since")):
+        clauses.append(f""""{p}datereceived" >= '{since}'""")
+        said.append(f"on or after {since}")
+    if before := _iso_date(args.get("before")):
+        clauses.append(f""""{p}datereceived" < '{before}'""")
+        said.append(f"before {before}")
+
+    return ("@SQL=" + " AND ".join(clauses) if clauses else ""), said
+
+
+def _search_email(args: dict) -> str:
+    if sys.platform != "win32":
+        return "Searching mail needs Outlook on Windows, which this machine does not have."
+    if not _mail_profile_exists():
+        return ("Outlook has no mail profile set up on this machine, so there is no mailbox to "
+                "search.")
+
+    dasl, said = _mail_filter(args)
+    asked = ", ".join(said) if said else "the most recent mail"
+
+    try:
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", _MAIL_PS],
+            env={**os.environ, "GEMMA_DASL": dasl, "GEMMA_MAX": str(MAIL_LIMIT)},
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+            creationflags=subprocess.CREATE_NO_WINDOW,  # no console flash over the overlay
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        # ponytail: 30 s covers a cold Outlook start; a warm one answers in well under a second.
+        log.warning("search_email: %s", exc)
+        return "Outlook did not answer in time, so I could not search your mail."
+
+    if proc.returncode == 2:
+        log.warning("search_email: no Outlook (%s)", proc.stderr.strip()[:200])
+        return "Outlook is not available on this machine, so I could not search your mail."
+    if proc.returncode:
+        log.warning("search_email: %s", proc.stderr.strip()[:200])
+        return "Outlook could not run that search."
+
+    rows = [r.split("\t", 2) for r in proc.stdout.splitlines() if r.strip()]
+    hits = [f"{s} · {d} · {subj}" for s, d, subj in (r for r in rows if len(r) == 3)]
+    if not hits:
+        return f"No mail in the Outlook inbox matches: {asked}."
+    return f"Inbox matches ({asked}), newest first:\n" + "\n".join(hits)
+
+
 _BACKENDS: dict[str, Callable[[dict], str]] = {
     "system_status": _system_status,
     "read_clipboard": _read_clipboard,
     "find_document": _find_document,
+    "search_email": _search_email,
 }
 
 
@@ -307,7 +431,7 @@ def _selfcheck() -> None:
     # tools. Every Tier-2/3 starter tool (open_app, set_timer, …) must be absent, because a tool
     # the model cannot see is a tool it cannot call (spec/30 rule 3).
     offered = {t["name"] for t in tool_specs()}
-    assert offered == {"system_status", "read_clipboard", "find_document"}, offered
+    assert offered == {"system_status", "read_clipboard", "find_document", "search_email"}, offered
     for t in reg:
         if t["tier"] > MAX_TIER:
             assert t["name"] not in offered, f"{t['name']}: tier {t['tier']} must not be offered"
@@ -318,9 +442,26 @@ def _selfcheck() -> None:
     assert _search_terms("bob's ' OR 1=1 --") == "bob s OR 1 1", _search_terms("bob's ' OR 1=1 --")
     assert "'" not in _search_terms("a'b\"c;d`e$f(g)") and "$" not in _search_terms("a$b")
     assert _search_terms("café über") == "café über", "real words survive, only punctuation goes"
-    assert _search_terms("!!!") == "" and _search_terms(None) == "None"
+    # An OMITTED optional parameter must vanish, not become a search for the word "None".
+    assert _search_terms("!!!") == "" and _search_terms(None) == ""
+    # `keep` re-admits what an address needs, and not one character more.
+    assert _search_terms("sarah.jones@example.com", keep="@.-") == "sarah.jones@example.com"
+    assert "'" not in _search_terms("o'brien@x.com", keep="@.-")
     assert _iso_date("2026-01-31") == "2026-01-31"
     assert _iso_date("last tuesday") == "" and _iso_date(None) == "" and _iso_date(7) == ""
+
+    # search_email's DASL is built from the same sanitised parts. Nothing the model wrote can
+    # close the string literal or smuggle in a LIKE wildcard, and an omitted param adds no clause.
+    dasl, said = _mail_filter({"sender": "sarah", "since": "2026-05-01"})
+    assert dasl.startswith("@SQL=") and "fromname" in dasl and "datereceived" in dasl, dasl
+    assert "subject\" LIKE" not in dasl, "an omitted parameter must not add a clause"
+    assert said == ["from 'sarah'", "on or after 2026-05-01"], said
+    hostile = _mail_filter({"subject": "x%' OR '1'='1"})[0]
+    assert hostile.count("'") == 2, f"the value must stay inside ONE literal: {hostile}"
+    assert "x OR 1 1" in hostile, f"...as its declawed self: {hostile}"
+    assert _mail_filter({})[0] == "", "no criteria means no restriction, not a malformed one"
+    # Each free-text word gets its own subject-OR-body clause, so word order never matters.
+    assert _mail_filter({"query": "lease renewal"})[0].count("textdescription") == 2
 
     with tempfile.TemporaryDirectory() as tmp:
         AUDIT_FILE = Path(tmp) / "audit.jsonl"
@@ -359,9 +500,20 @@ def _selfcheck() -> None:
         )
         assert outcome == "ok" and content.strip(), (content, outcome)
 
-        # Every one of those six calls left exactly one audit line, with the required fields.
+        # search_email dispatches and answers in prose on every machine: real headers where
+        # Outlook has a profile, "not available" where it does not (a CI runner, and this box —
+        # Outlook is installed here but no profile exists). No live mailbox is required.
+        content, outcome = execute(ToolCall("7", "search_email", {"sender": "zzqx", "since": "2026-01-01"}))
+        assert outcome == "ok" and content.strip(), (content, outcome)
+
+        # ...and with NO criteria at all, which is legal here (every parameter is optional) and
+        # must mean "the most recent mail", not a malformed restriction.
+        content, outcome = execute(ToolCall("8", "search_email", {}))
+        assert outcome == "ok" and content.strip(), (content, outcome)
+
+        # Every one of those eight calls left exactly one audit line, with the required fields.
         lines = AUDIT_FILE.read_text(encoding="utf-8").splitlines()
-        assert len(lines) == 6, f"every call must audit once, got {len(lines)}"
+        assert len(lines) == 8, f"every call must audit once, got {len(lines)}"
         rec = json.loads(lines[0])
         assert set(rec) == {"ts", "session", "transcript_snippet", "tool", "args",
                             "outcome", "duration_ms"}, sorted(rec)

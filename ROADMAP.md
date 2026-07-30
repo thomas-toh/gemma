@@ -13,8 +13,8 @@ the coordinator at commit time.
 
 | Owner | Item | May edit (file scope) | Status |
 |-------|------|-----------------------|--------|
-| **coordinator** | #12 dictation word-replacement | `bridge/replace.py` *(new)* · `spec/schemas/word_replacements.json` *(new)* · `bridge/orchestrator.py` (`_dictate` hook only) · `spec/60_dictation.md` · `checks.yml` · `STATE.md` | built + green — awaiting review to commit |
-| **session A** | #11 `find_document` | `bridge/tools.py` · `spec/schemas/tools.json` · `.github/workflows/checks.yml` · `spec/30_contract_t.md` · `STATE.md` | in progress (backend has landed in the working tree) |
+| **coordinator** | #12 word-replacement → **done** (committed `d2188b0`). Next: TBD | — | idle, awaiting next pick |
+| **session A** | #11 `search_email` (find_document **done**, committed `d2188b0`) | `bridge/tools.py` · `spec/schemas/tools.json` · `.github/workflows/checks.yml` · `spec/30_contract_t.md` · `STATE.md` | instructed |
 
 Off-limits to everyone but their owner: `bridge/orchestrator.py` (coordinator), `bridge/tools.py`
 (session A), all `teleprompter/` (UI-session lane), `spec/schemas/settings.json` (router #7 later).
@@ -29,7 +29,7 @@ Off-limits to everyone but their owner: `bridge/orchestrator.py` (coordinator), 
 - [x] **Tier-1** + the tool loop + audit (D31)
 - [ ] **#9 Tier-2** — open_app · focus_window · media_control · set_timer
 - [ ] **#10 Tier-3 + propose-then-tap** (D26) — destructive actions; overlay confirmation + limited account
-- [ ] **#11 find_document** (Windows Search) → **search_email** (Outlook)   ← *session A*
+- [~] **#11** find_document ✓ (Windows Search, `d2188b0`) → **search_email** (Outlook) next   ← *session A*
 - *A **skill** (intent-invoked) and a **tool** (LLM-invoked) share the same deterministic backend — build it once.*
 
 ## Dictation

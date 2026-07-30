@@ -1,6 +1,6 @@
 # Spec 70 — Settings & configuration
 
-**Last reconciled: 2026-07-28** · Build progress: [STATE.md](../STATE.md) · Decisions: [spec/00](00_overview.md)
+**Last reconciled: 2026-07-30** · Build progress: [STATE.md](../STATE.md) · Decisions: [spec/00](00_overview.md)
 
 > The **window is built** (D29, 2026-07-27) and renders from `spec/schemas/settings.json` — the
 > executable truth for panes, defaults and the provider catalogue (hard rule 3). §2's architecture
@@ -20,9 +20,13 @@ and build status belongs in STATE, not here.)*
 - **Tray icon** — `QSystemTrayIcon` (PySide6 / QtWidgets), cross-platform: Windows
   notification area · macOS menu bar (D10). Doubles as the always-visible **mic-live
   indicator** (spec/50 truthful-indicator role) for when the overlay is hidden. Menu:
-  Open settings · Quit · (Mute). Since **D32** the tray icon **is Gem** (the mascot, `teleprompter/gem.py`),
-  animated by the live status feed; the settings top-bar carries Gem too, in place of the on-air
-  lamp (`arriving` → `idle` → `listening`). The mic-live role is now Gem's `listening`/`idle`.
+  Open settings · Quit · (Mute). The icon is a **mic-level ring** driven by the live feed —
+  hollow while the mic is closed, a coral core with a halo that tracks the real RMS while it is
+  open (**D35**). *(D32 put Gem the mascot here; D35 moved her off when the sprite kit went to v2
+  — a tray set of her own is commissioned.)* The settings top-bar still carries Gem, in place of
+  the on-air lamp: `idle` (with the kit's own fidgets) → `listening` while capturing. She is on
+  the **island** too, behind **`gem_in_island`** (preferences, default on) — off restores the
+  pre-Gem island exactly (D35; spec/40 § Visual output).
 - **Settings window** — **QML** (Controls.Basic borrowed only for text entry, scrolling and popup
   dismissal; every visible control hand-drawn to match the island — D29), hosted in the UI process
   (D13 — the separate process), **spawned only when opened** (zero idle cost), no Chromium.

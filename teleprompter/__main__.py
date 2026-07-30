@@ -340,7 +340,7 @@ def main() -> int:
 
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)   # the island hides at idle — that is not a quit
-    app.setWindowIcon(gem.app_icon())      # Gem (portrait.plain) on the taskbar (and any window)
+    app.setWindowIcon(gem.app_icon())      # Gem, resting, on the taskbar (and any window)
     if sys.platform == "win32":
         # Running as python.exe, Windows groups the taskbar button under python and shows ITS icon,
         # ignoring the app's window icon. An explicit AppUserModelID makes Windows treat us as our
@@ -367,8 +367,8 @@ def main() -> int:
 
     model = OverlayModel(show_latency=args.latency)
     engine = QQmlApplicationEngine()
-    # Gem the mascot (Track P): the taskbar icon (above) and the tray (tray.py) render it directly;
-    # the settings window draws it through this provider — `image://gem/<state>/<frame>`.
+    # Gem the mascot (Track P): the taskbar icon (above) renders her directly; the settings window
+    # draws her through this provider — `image://gem/<state>/<clip>/<frame>`.
     engine.addImageProvider("gem", gem.GemImageProvider())
     # The repo root, so `import teleprompter` resolves this package's qmldir and its Theme
     # singleton (the design tokens).
@@ -381,10 +381,16 @@ def main() -> int:
     engine.rootContext().setContextProperty("cfg", cfg)
     engine.rootContext().setContextProperty("fontFamily", pick_font())
     engine.rootContext().setContextProperty("targets", targets())   # latency targets (D25)
-    # Frame counts per Gem state, so the settings window knows when the one-shot `arriving`
-    # entrance is done without hard-coding it (gem.py stays the source of truth).
-    engine.rootContext().setContextProperty("gemFrames", gem.frame_counts())
+    # Gem's player. The kit ships its own timing script (idle fidgets, enters, exits, holds), so
+    # the window binds one URL and nothing else — it never counts frames. It follows the turn
+    # itself off the model (QmlGem._follow) rather than being driven from QML.
+    gem_player = gem.QmlGem(model=model)
+    engine.rootContext().setContextProperty("gemPlayer", gem_player)
     reduce_state = reduced_motion()
+    # Free-running at the kit's 9 fps: the island shows Gem too, so the clock cannot belong to the
+    # settings window. The tick is a small state machine and a signal; painting only happens when
+    # a visible Image pulls the provider. Reduced motion stops it dead.
+    gem_player.running = not reduce_state
     engine.rootContext().setContextProperty("reducedMotion", reduce_state)
     if reduce_state:
         log.info("system 'show animations' is off — island transitions run instant")

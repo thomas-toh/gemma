@@ -389,7 +389,7 @@ if __name__ == "__main__":
         assert [g["id"] for g in m.groupsFor("general")] == ["profile", "preferences"]
         assert m.groupsFor("triggers") == [], "a flat pane declares no groups"
         assert m.rowsInGroup("general", "preferences") == \
-            ["theme", "language", "pings", "listen_for_me", "tts"], \
+            ["theme", "language", "pings", "listen_for_me", "tts", "gem_in_island"], \
             m.rowsInGroup("general", "preferences")
         # Every row of a grouped pane must land in a group, or it renders nowhere.
         grouped = sum(len(m.rowsInGroup("general", g["id"])) for g in m.groupsFor("general"))

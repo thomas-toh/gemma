@@ -1,6 +1,6 @@
 # Spec 40 — Interaction model
 
-**Last reconciled: 2026-07-27** · Build progress: [STATE.md](../STATE.md) (Tracks G · P) · Earcon ids: [schemas/earcons.json](schemas/earcons.json)
+**Last reconciled: 2026-07-30** · Build progress: [STATE.md](../STATE.md) (Tracks G · P) · Earcon ids: [schemas/earcons.json](schemas/earcons.json)
 
 ## State machine (orchestrator: `bridge/orchestrator.py`)
 
@@ -222,7 +222,10 @@ state. Text is a **typewriter**: the transcribed prompt, then Gemma's reply *rep
 stacked. While THINKING with no text yet, a **morphing status word** occupies the prompt's slot.
 **No state labels, no dot, no spinner, no status icons, and no controls at rest** — the ⌄ handle
 was built and cut (D22); interaction arrives only in the **expanded view** (D27, below).
-Idle hides the window outright. Component row in spec/00; the top-level `teleprompter/` package
+Idle hides the window outright. **Gem** (the mascot) may sit at the pill's left edge, behind
+`gem_in_island` — on by default, and off restores the pre-Gem geometry exactly (D35); she is a
+mascot, never an indicator, so the bars keep the spec/50 truthful-indicator role either way.
+Component row in spec/00; the top-level `teleprompter/` package
 (component P, D19). Blueprint: `sandbox/teleprompter-mockup.html` (gitignored).
 
 **Expanded view — "peek" (D27).** The island is controlless *at rest*, but **hovering a shown

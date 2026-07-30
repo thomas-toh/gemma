@@ -53,8 +53,10 @@ jobs:
       # Contract T (spec/30): the Tier-1 tool executor — the filter (only implemented, in-tier
       # tools reach the brain), dispatch, the refusal backstop, and that every call is audited to
       # logs/audit.jsonl. No network; degrades gracefully with no clipboard on a headless runner.
-      # find_document included: the term sanitiser (its SQL trust boundary) is checked directly,
-      # and the call itself must answer in prose whether or not the runner has a Search index.
+      # find_document and search_email included: the shared term sanitiser and the DASL builder
+      # (their SQL/DASL trust boundaries) are checked directly, and each call must answer in prose
+      # whether or not the runner has a Search index or an Outlook mail profile — neither is
+      # required here.
       - run: python -m bridge.tools --selfcheck
       # The Teleprompter's Qt-free half: NDJSON framing + the reducer (imports no Qt).
       - run: python -m teleprompter.decode --selfcheck
@@ -67,10 +69,13 @@ jobs:
           QSG_RHI_BACKEND: software
       # The settings window's model — add/remove/enable/primary bookkeeping, no QML needed.
       - run: python -m teleprompter.settings_model
-      # The Gem mascot renderer (Track P): frames load, the body-flip palette keeps the accents,
-      # the app icon builds, image://gem tolerates a bad id, and the feed->Gem state map never
-      # KeyErrors. Renders on Qt's offscreen platform (the module sets it itself).
+      # The Gem mascot renderer (Track P): the v2 kit loads, both palettes come from the JSON,
+      # the kit's script drives the player (enters resolve, holds freeze, idle fidgets), the app
+      # icon builds and image://gem tolerates a bad id. Offscreen (the module sets it itself).
       - run: python -m teleprompter.gem
+      # The tray's mic ring: the level→picture mapping and the repaint gate that keeps a steady
+      # voice from calling setIcon once per mic frame.
+      - run: python -m teleprompter.tray
       # ...and the window itself (D29), driven through every state it has. QML binding errors
       # are only warnings at runtime, so this fails on any of them. Headless, same as above.
       - run: python -m teleprompter.settings_check

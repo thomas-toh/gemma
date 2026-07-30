@@ -269,11 +269,60 @@ it is the unfinished half of D29/D30/D33.
     state rests). The settings top bar was simplified in the same commit: the orange brand Mark and
     the "Gemma" wordmark removed, Models/Config centred, Gem moved to the **top-LEFT** as the page's
     only mark and its mic indicator.
-  - **⚠ Owed — spec/00 D32 was not updated with `d468005`** (hard rule 1): it still says the tray
-    "flips the body by the Windows light/dark setting" and "rests idle/asleep on a single frame
-    (no perpetual wiggle)". Both are now false.
-  - **Owed — live on the box:** the tray animation, the taskbar icon and the settings entrance need
-    eyes on a real desktop; headless cannot show them.
+  - **Superseded 2026-07-29 by D35 (below).** The tray is no longer a Gem surface, and the kit is
+    v3. Read D35 for what is true; the paragraph above is kept as the record of what D32 shipped.
+    *(This also closes the "spec/00 D32 not updated with `d468005`" debt — D35 restates the tray.)*
+- **Built (D35, 2026-07-29) — sprite kit v3 + the tray's mic ring.** Design shipped v2 then v2.2/v3
+  in a day; neither is drop-in over v1. States hold named **clips** with
+  policies (loop / oneshot / hold), and the kit carries its own **timing script**. `idle/rest` is a
+  single frame, so `gem.py` now runs that script — `GemPlayer` (a Qt-free port of the kit's own
+  player) plus `QmlGem`, which hands QML one bindable URL, so the settings window sets a state and
+  stops counting frames. Both palettes are read **from the JSON** (a light + a dark hex per role,
+  plus a `shade`); only body and eye are overridden — this amends D32's "the accents don't
+  flip", which predates the kit having ground-specific accents (Thomas). Gem's surfaces are now two:
+  the **taskbar / app icon** (`idle/rest`, cropped to the frame's own ink) and the **settings top
+  bar at 52px** (2× the cell — the whole cell fits the 58px bar, so nothing is cropped; 3×/78px was
+  tried and is too tall, and there is no integer step between). `idle` with its own fidgets →
+  `listening` while capturing. The **tray drops Gem**
+  for a **mic-level ring** — hollow ink while the mic is closed, a coral core with a halo that grows
+  and brightens with the real RMS while open; no timer (mic frames are the clock), repaint gated on
+  a 12-step quantisation. Thomas is commissioning a separate tray set. Gone with v1: `portrait.plain`,
+  `arriving`, `question`, `alert`, and `gem.gem_state()` (the tray was its only consumer).
+  Guarded: `teleprompter.gem` + a new `teleprompter.tray` selfcheck, both CI-wired.
+  - **We ship Design's 26px build**, not their 32 — same art, tighter cell, Gem 54% of the width
+    instead of 44%. Checked on arrival: 462 frames / 24 clips, every frame 26 × 26 legal chars,
+    both atlases compared to the JSON pixel-for-pixel (a 26-cell JSON beside a 32-cell atlas throws
+    nothing and renders garbage). Our earlier self-recrop and its `recrop_26.py` are superseded by
+    Design's own export and removed.
+  - **The idle script is two-tier now** — `filler` (blink, look-around) on a fast beat, a **gag**
+    (`jump` `skip-rope` `guitar` `phone` `basketball` `disguise`) every `gagEvery` fillers. The trap:
+    a v2 loader *runs* a v3 kit and just plays gags where fillers belong, so Gem performs constantly
+    — no crash, no warning. `GemPlayer` was ported to the two-tier shape and the selfcheck asserts
+    the tiers stay separate over ~74 simulated minutes. Eyes are 2px wide as of this kit.
+  - **Owed — the sprite lab:** `needs-permission/granted` f5 (the falling lock) loses 5px off the
+    bottom to the 26px crop. Design says flag it and leave it — it wants a human pass, not invented
+    pixels.
+  - **Gem mimes the turn (settings bar):** `listening` → `working` while the brain composes →
+    `speaking` for as long as the ISLAND's typewriter is still laying the answer down → `done` →
+    `idle`. Driven by `overlay.revealing`, a new UI-side field on `OverlayModel` that `Overlay.qml`
+    publishes — the daemon's `speaking` state never fires with TTS off, and its stream finishes
+    seconds before the reveal does. It needed its own notify signal — published through the model's
+    blanket `changed` it invalidated its own inputs and QML spun a binding loop.
+  - **Gem is on the island too, behind `gem_in_island`** (preferences, default on — Thomas).
+    52px inside the pill on the left, `gemLeft` 4 / `gemGap` 6 over a cell that carries ~12px of
+    its own margin; the waveform used to be centred in the whole pill and ran 30px under her, so it
+    now starts after her column and the Gem theme narrows to 14 bars / 10px fade (from 20 / 22).
+    Compact pill 230 → 238px. Off restores the pre-Gem island **exactly**, which `overlay_check`
+    proves by re-deriving the original formulas rather than trusting the branch. Her x/y are
+    rounded to whole pixels (an odd pill width would land a nearest-neighbour sprite on a half
+    pixel), CI-guarded. The phase ladder moved out of QML into `QmlGem` now two windows drive one
+    player, and gained `error` (which outranks a pending reply) plus dictation's
+    `transcribing`/`transforming` → `working` and `pasted` → `done`. **No Gem on the peek** — a
+    `search` clip for it is commissioned.
+  - **Owed — live on the box:** the tray ring against a real mic, the taskbar icon, and Gem
+    miming a real turn on both surfaces. Headless cannot show them.
+  - **Open (Thomas):** whether Gem stays on the island at all — "more professional" without her.
+    The switch already carries either answer; only its **default** would change.
 - **Settled (2026-07-21) — mic cues.** Barge-in detection is the **same species as the wake-word
   watch** — "always-on mic", not a capture window. `status.json`'s `mic` message means a capture
   window is open; wake-watch and barge-in deliberately emit none. No mic cue while Gemma speaks.
@@ -430,6 +479,21 @@ it is the unfinished half of D29/D30/D33.
   handed to the subprocess in an env var, so nothing the model wrote is parsed as PowerShell. Off
   Windows, or with the Search service off, it answers "not available" instead of raising — so CI
   needs no live index. Selfcheck covers the sanitiser directly plus both dispatch paths.
+- **Works now (2026-07-28) — `search_email`, the fourth Tier-1 tool** (ROADMAP #11, second slice;
+  closes #11). "The email from Sarah about the lease" → one restriction against the **desktop
+  Outlook inbox** over MAPI, back as up to eight headers, `sender · date · subject`. All five
+  params (`sender`, `subject`, `query`, `since`, `before`) are optional and AND-ed; the store does
+  the filtering (`Items.Restrict` with a DASL query, sorted newest-first before restricting, and
+  the loop breaks at eight) so a mailbox is never enumerated. Bodies are *searched* — that is what
+  `query` is for — but only headers are returned; free text goes word-by-word over subject OR body
+  so "lease renewal" still finds "renewal of the lease". Local desktop store only: no Graph, no
+  cloud, no credentials (spec/50).
+  **Not verified live — Outlook is installed on this box but has NO mail profile**, so every call
+  here degrades to "no mail profile". The DASL property names and date literals are therefore
+  written-not-proven; first run against a real mailbox is the test. Before any COM call the backend
+  checks the profile registry keys, because asking Outlook for a mailbox with no profile can raise
+  a modal *create-a-profile* dialog — a hang with no way to answer it behind a voice assistant. A
+  false "no profile" is the failure mode to watch if an older Outlook (pre-16.0) ever turns up.
 - **The tool ledger (spec/30 rule 4).** Growth is tracked, not gated: nothing waits on a clock, but
   no tool is assumed good until it has misfired-free invocations in real use behind it. Evidence is
   `logs/audit.jsonl` (rule 2 already logs every call's outcome); this table is the human read of it,
@@ -440,6 +504,7 @@ it is the unfinished half of D29/D30/D33.
   | `system_status` | 1 | 2026-07-27 (D31) | **not yet** — no live tool turn on the box |
   | `read_clipboard` | 1 | 2026-07-27 (D31) | **not yet** — same |
   | `find_document` | 1 | 2026-07-28 | **not yet** — backend verified live against real documents, but never through a brain turn |
+  | `search_email` | 1 | 2026-07-28 | **no** — cannot be: no Outlook mail profile on this box, so the retrieval path has never run at all |
 
   *Update the right-hand column when a tool has been invoked by the brain, in a real turn, several
   times without misfiring — that is the column the rule exists for.*
@@ -447,9 +512,10 @@ it is the unfinished half of D29/D30/D33.
   plus the announce earcon) and Tier 3 (propose-then-tap confirmation, D26, on the Teleprompter). No
   raw shell below Tier 3 (spec/30 rule 1).
 - **In flight:** —
-- **Next:** `search_email` (Outlook), the second half of ROADMAP #11 — same pattern, model composes
-  the query. Then live-verify a tool turn end to end (Claude asks `system_status`, then answers),
-  and Tier 2 backends when a tool is genuinely wanted.
+- **Next:** live-verify a tool turn end to end (Claude asks `system_status`, then answers) — no tool
+  has yet been driven by a brain, which is what the ledger's right-hand column is waiting on. Then
+  `search_email` against a real mailbox the first time a mail profile exists. Tier 2 backends when
+  a tool is genuinely wanted.
 
 ## Specs — spec & decision docs
 

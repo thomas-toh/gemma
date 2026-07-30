@@ -363,10 +363,13 @@ Window {
         property color bg: Theme.surfaceSunk      // the card "well" variant passes surfaceDeep (pure black)
         property int fontPx: Theme.fontBase
         property bool mono: false                 // model-id pickers set true; words (language) stay sans
+        // Nothing to choose (no options yet, or still fetching) → the whole control greys out and is
+        // inert, instead of opening to a placeholder item. One rule, every dropdown (Thomas 2026-07-28).
+        readonly property bool active: enabled && options.length > 0
         signal picked(string value)
         implicitWidth: 230
         implicitHeight: 38
-        opacity: enabled ? 1 : 0.55
+        opacity: active ? 1 : 0.55
         Rectangle {
             id: trigger
             anchors.fill: parent
@@ -377,13 +380,13 @@ Window {
                                       : (th.hovered ? Theme.uiEdgeHover
                                                     : Theme.hairlineStrong)
             Behavior on border.color { ColorAnimation { duration: root.t } }
-            HoverHandler { id: th; enabled: dd.enabled }
+            HoverHandler { id: th; enabled: dd.active }
             Text {
                 anchors.left: parent.left; anchors.leftMargin: 11
                 anchors.right: chev.left; anchors.rightMargin: 8
                 anchors.verticalCenter: parent.verticalCenter
                 text: dd.value === "" ? "—" : dd.value
-                color: dd.enabled ? Theme.uiText : Theme.uiTextFaint
+                color: dd.active ? Theme.uiText : Theme.uiTextFaint
                 font.family: dd.mono ? Theme.fontMono : fontFamily
                 font.pixelSize: dd.fontPx
                 elide: Text.ElideRight
@@ -398,7 +401,7 @@ Window {
             }
             MouseArea {
                 anchors.fill: parent
-                enabled: dd.enabled
+                enabled: dd.active
                 cursorShape: Qt.PointingHandCursor
                 onClicked: menu.opened ? menu.close() : menu.open()
             }
@@ -416,8 +419,7 @@ Window {
             }
             contentItem: Item {
                 implicitWidth: menu.availableWidth
-                implicitHeight: dd.options.length === 0 ? 34
-                              : Math.min(list.contentHeight, Theme.dropdownRows * 37)
+                implicitHeight: Math.min(list.contentHeight, Theme.dropdownRows * 37)
                 ListView {
                     id: list
                     anchors.fill: parent
@@ -458,14 +460,6 @@ Window {
                             onClicked: { dd.picked(modelData); menu.close() }
                         }
                     }
-                }
-                Text {
-                    visible: dd.options.length === 0
-                    anchors.centerIn: parent
-                    text: "Nothing to choose yet"
-                    color: Theme.uiTextFaint
-                    font.family: fontFamily
-                    font.pixelSize: Theme.fontBase
                 }
             }
         }
@@ -1186,29 +1180,28 @@ Window {
             }
             // ── Gem: the mascot as the honest mic indicator (spec/50 rule 4), at the far LEFT of
             //    the top bar (the only mark on the page now — the brand Mark + "Gemma" were removed).
-            //    It plays the `arriving` entrance when the window opens, then rests at `idle`, and
-            //    shows `listening` ONLY while the mic is actually capturing — never inferred. Limited
-            //    to mic on/off (Thomas). Body flipped light for the dark shell by the image://gem
-            //    provider (gem.py); the native purple/orange accents are kept. ──
+            //    She shows `listening` ONLY while the mic is actually capturing — never inferred —
+            //    and otherwise mimes the turn: `working` while the brain composes, `speaking` for
+            //    as long as the island's typewriter is laying the answer down, `done` once it has
+            //    landed, `idle` between turns. The kit owns the animation: `gemPlayer` (gem.py)
+            //    runs the kit's own script — the idle fidgets, the enters, the exits and the holds
+            //    — and hands QML one URL to bind, so nothing here counts frames. ──
             Row {
                 id: gemRow
                 anchors.left: parent.left; anchors.leftMargin: 20
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 10
                 readonly property bool capturing: overlay.state === "listening"
-                property string gemState: "idle"
-                property int frame: 0
-                // Replay the entrance each time the window opens; reduced motion skips to rest.
-                function settle() {
-                    frame = 0;
-                    gemState = reducedMotion ? (capturing ? "listening" : "idle") : "arriving";
-                }
+                // 2× the kit's 26px cell. Integer scales only (kit rule): a fractional factor makes
+                // some pixel-cells wider than their neighbours. The next rung up, 3×, is 78px —
+                // taller than this bar, and it needed the cell cropped to fit. The whole cell fits
+                // here, so no crop: the guitar and the phone get their full run of the margin.
                 Image {
                     anchors.verticalCenter: parent.verticalCenter
-                    width: 40; height: 40                      // 2× the 20px cell — an integer scale (kit rule)
-                    sourceSize: Qt.size(40, 40)
+                    width: 52; height: 52
+                    sourceSize: Qt.size(52, 52)
                     smooth: false                              // nearest-neighbour: keep the cells crisp
-                    source: "image://gem/" + gemRow.gemState + "/" + gemRow.frame
+                    source: gemPlayer.source
                 }
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
@@ -1217,32 +1210,9 @@ Window {
                     font.family: fontFamily; font.pixelSize: Theme.fontSmall
                     font.weight: Font.DemiBold
                 }
-                Timer {
-                    interval: Math.round(1000 / 9)             // the kit's 9 fps beat
-                    repeat: true
-                    running: !reducedMotion
-                    onTriggered: {
-                        gemRow.frame += 1;
-                        // `arriving` is a one-shot: once its frames run out, settle to the resting state.
-                        if (gemRow.gemState === "arriving"
-                                && gemRow.frame >= (gemFrames.arriving || 16)) {
-                            gemRow.gemState = gemRow.capturing ? "listening" : "idle";
-                            gemRow.frame = 0;
-                        }
-                    }
-                }
-                // The mic starting or stopping flips the loop — unless the entrance is still playing.
-                onCapturingChanged: {
-                    if (gemState !== "arriving") {
-                        gemState = capturing ? "listening" : "idle";
-                        frame = 0;
-                    }
-                }
-                Component.onCompleted: settle()
-                Connections {
-                    target: root
-                    function onVisibleChanged() { if (root.visible) gemRow.settle(); }
-                }
+                // Neither the state nor the clock is bound here: `gemPlayer` follows the turn
+                // itself (gem.py) and the island shows the same player, so two windows writing
+                // one property would fight. This row just renders it.
             }
             Rectangle {
                 anchors.bottom: parent.bottom

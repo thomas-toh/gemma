@@ -43,6 +43,8 @@ from PySide6.QtQml import QQmlApplicationEngine  # noqa: E402
 
 from teleprompter.decode import targets  # noqa: E402
 from teleprompter.model import OverlayModel  # noqa: E402
+from teleprompter.settings_model import SettingsModel  # noqa: E402
+from teleprompter import gem  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 # Long enough to pass maxLines, so growth AND scroll are both exercised.
@@ -78,6 +80,14 @@ def main() -> int:
     engine.rootContext().setContextProperty("fontFamily", "Archivo")
     engine.rootContext().setContextProperty("reducedMotion", False)
     engine.rootContext().setContextProperty("targets", targets())
+    # The island draws Gem, so it needs the same player + provider the app wires, and `cfg` for
+    # the "Show Gem in the island" switch. Held in locals for the check's lifetime: a context
+    # property does not own the Python object.
+    engine.addImageProvider("gem", gem.GemImageProvider())
+    gem_player = gem.QmlGem(model=model)
+    cfg = SettingsModel()
+    engine.rootContext().setContextProperty("gemPlayer", gem_player)
+    engine.rootContext().setContextProperty("cfg", cfg)
     engine.load(QUrl.fromLocalFile(str(HERE / "Overlay.qml")))
     assert engine.rootObjects(), "Overlay.qml failed to load"
     win = engine.rootObjects()[0]
@@ -494,11 +504,77 @@ def main() -> int:
     assert not win.property("pasted") and win.property("hidden") and not win.property("showing"), \
         "the island never hid itself after the paste confirmation"
 
+    classic = check_gem_switch(app, win, cfg, model)
+
     print(f"selfcheck OK: entrance binds to state, status word wipes and rotates, dictation runs "
-          f"transcribing->transforming->pasted->hide, and across "
+          f"transcribing->transforming->pasted->hide, across "
           f"{revealed} revealed words at up to {peak_lines} lines (scrolled "
-          f"{win.property('scrolled')}) no text ever rendered outside the island")
+          f"{win.property('scrolled')}) no text ever rendered outside the island, and "
+          f"Gem off restores the pre-Gem island exactly ({classic})")
     return 0
+
+
+def check_gem_switch(app, win, cfg, model) -> str:
+    """"Show Gem in the island" OFF must restore the island EXACTLY, not approximately.
+
+    Gem costs the pill a 76px left column and cuts the wave from 20 samples to 14, so "you can
+    turn her off" is a claim about geometry that would rot the first time one of those numbers
+    moved. This recomputes the pre-Gem formulas from the island's own constants and demands the
+    live values match — so the classic theme cannot drift while nobody is looking.
+    """
+    def g(name):
+        return win.property(name)
+
+    was = cfg.values.get("gem_in_island", True)
+    try:
+        model.apply({"type": "state", "state": "listening"})
+        _pump(app, 120)
+
+        cfg.set("gem_in_island", False)
+        _pump(app, 160)
+        assert g("gemOn") is False, "the switch did not reach the island"
+        pad, flare, gutter = g("padSide"), g("flare"), g("latencyGutter")
+        # ...the originals, written out rather than referenced, so a change to the live
+        # expression cannot quietly redefine what "the same as before" means.
+        assert g("waveCount") == 20, f"classic wave is 20 samples, got {g('waveCount')}"
+        assert g("leftInset") == pad, f"classic inset is padSide, got {g('leftInset')}"
+        assert g("compactW") == round(g("waveWidth")) + 20, \
+            f"classic compact pill must hug the wave: {g('compactW')}"
+        assert abs(g("textW") - (g("openW") - 2 * pad - gutter)) < 0.01, \
+            f"classic text column changed: {g('textW')}"
+        gem_item = win.findChild(QObject, "gem")
+        assert gem_item is not None and gem_item.property("visible") is False, \
+            "Gem is still drawn with the switch off"
+        classic_w = int(g("islandW"))
+
+        cfg.set("gem_in_island", True)
+        _pump(app, 160)
+        assert g("gemOn") is True
+        assert g("waveCount") == 14, f"Gem's wave is cut to 14, got {g('waveCount')}"
+        assert g("leftInset") == g("gemCol"), "Gem's column must own the left inset"
+        # she sits inside her own column, and the wave starts after it — the overlap that left
+        # no gap between them was exactly this going wrong.
+        assert g("gemLeft") + g("gemPx") <= g("gemCol"), "Gem's cell overflows her column"
+        bars = win.findChild(QObject, "bars")
+        assert bars is not None
+        wave_x = float(bars.property("x")) - float(g("islandX"))
+        assert wave_x >= flare + g("gemCol") - 0.5, \
+            f"the wave starts inside Gem's column ({wave_x} < {flare + g('gemCol')})"
+        assert gem_item.property("visible") is True
+        # Whole pixels. `islandX` is a real, so an odd pill width would put her on a half pixel
+        # and blur every cell edge — the sprite must be snapped whatever the width works out to.
+        for state, mic in (("thinking", 0.0), ("listening", 0.5)):
+            model.apply({"type": "state", "state": state})
+            if mic: model.apply({"type": "mic", "level": mic})
+            _pump(app, 140)
+            gx, gy = float(gem_item.property("x")), float(gem_item.property("y"))
+            assert gx == int(gx) and gy == int(gy),                 f"Gem is on a half pixel in {state}: {gx},{gy} (islandW {g('islandW')})"
+        # ...ending on `listening`, so the width quoted below is the COMPACT pill in both themes.
+        gem_w = int(g("islandW"))
+        return f"classic {classic_w}px vs Gem {gem_w}px compact"
+    finally:
+        cfg.set("gem_in_island", was)
+        _pump(app, 120)
 
 
 if __name__ == "__main__":

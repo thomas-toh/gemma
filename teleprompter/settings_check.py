@@ -68,6 +68,81 @@ def check_icon_font() -> None:
     print(f"  icon font: {ttf.name} -> {fams[0]}; no raw glyph paths")
 
 
+def check_gem_turn(player, overlay, settle) -> None:
+    """Gem in the top bar mimes the turn. Walked end to end because the mapping is the sort of
+    thing that looks right in a diff and is wrong on screen — and because two of its rules exist
+    only to survive orderings a still frame never shows:
+
+      * with TTS off (D23, the default) the daemon NEVER publishes `speaking`, so Gem's
+        `speaking` has to be driven by the reply, not by the feed's state word;
+      * the island's typewriter and the daemon's stream finish at different times, in either
+        order, and Gem must not flicker out of `speaking` in the gap.
+    """
+    def phase() -> str:
+        settle()
+        return player.gemState
+
+    overlay.apply({"type": "state", "state": "idle"})
+    overlay.revealing = False
+    assert phase() == "idle", phase()
+    overlay.apply({"type": "state", "state": "listening"})
+    assert phase() == "listening", "the mic is open — spec/50 rule 4, never inferred"
+    overlay.apply({"type": "state", "state": "thinking"})
+    assert phase() == "working", "composing an answer draws the laptop (Thomas)"
+    overlay.apply({"type": "transcript", "text": "when is my meeting", "final": True})
+    assert phase() == "working", "the prompt showing is not yet an answer"
+
+    overlay.apply({"type": "response", "delta": "Half past "})
+    overlay.revealing = True
+    assert phase() == "speaking", "the island is laying the answer down"
+    overlay.apply({"type": "response", "delta": "two.", "done": True})
+    assert phase() == "speaking", \
+        "the daemon finished but the typewriter has not — Gem follows the SCREEN"
+    overlay.revealing = False
+    assert phase() == "done", "the answer has landed"
+
+    # ...and the other order: a short answer the reveal catches up with mid-stream.
+    overlay.feed_lost()
+    overlay.apply({"type": "state", "state": "thinking"})
+    overlay.apply({"type": "response", "delta": "Half"})
+    overlay.revealing = True
+    assert phase() == "speaking", phase()
+    overlay.revealing = False
+    assert phase() == "speaking", \
+        "the reveal caught up before the daemon did — Gem must not drop out of speaking"
+    overlay.apply({"type": "response", "delta": " past two.", "done": True})
+    assert phase() == "done", phase()
+
+    # A new capture clears the turn (D24 clearsTurn), which must return her to the mic.
+    overlay.apply({"type": "state", "state": "listening"})
+    assert phase() == "listening", phase()
+
+    # DICTATION (Thomas): the transcribe and tidy passes are the machine chewing, so they draw the
+    # same laptop as composing; the paste landing gets the same sparkle as a finished answer. All
+    # three fell through to `idle` before — Gem resting while the island said "Transcribing…".
+    overlay.feed_lost()
+    for state in ("transcribing", "transforming"):
+        overlay.apply({"type": "state", "state": state})
+        assert phase() == "working", f"{state} should draw the laptop, got {phase()}"
+    overlay.apply({"type": "state", "state": "pasted"})
+    assert phase() == "done", f"a landed paste should sparkle, got {phase()}"
+
+    # A FAULT gets the error sprite (`fail`, settling onto `held`). This had no branch at all for
+    # a while, so an error fell through to `idle` — Gem sat there resting while the island showed
+    # a failure. It outranks the reply, exactly as `isError` does in Overlay.qml.
+    overlay.feed_lost()
+    overlay.apply({"type": "state", "state": "thinking"})
+    overlay.apply({"type": "response", "delta": "Half past two."})
+    overlay.apply({"type": "response", "delta": "", "done": True})
+    overlay.revealing = False
+    assert phase() == "done", phase()
+    overlay.apply({"type": "error", "message": "I could not reach the model.", "kind": "network"})
+    assert phase() == "error", f"a fault must outrank the reply, got {phase()}"
+    # ...and the mic still wins over a fault (spec/50 rule 4 is binding).
+    overlay.apply({"type": "state", "state": "listening"})
+    assert phase() == "listening", f"an open mic must outrank a stale fault, got {phase()}"
+
+
 def check_recorder(engine, app) -> None:
     """Instantiate a KeyRecorder in isolation, feed it Ctrl+Alt+1, release, and confirm it
     commits 'ctrl+alt+1' — then that a bare key is rejected. Standalone rather than found in the
@@ -161,10 +236,11 @@ def check() -> None:
     engine.rootContext().setContextProperty("overlay", overlay)
     engine.rootContext().setContextProperty("fontFamily", "Arial")
     engine.rootContext().setContextProperty("reducedMotion", False)
-    # Gem in the top bar (Track P): the same provider + frame-count property the real host wires,
-    # so the window's Gem row renders here instead of throwing an unknown-source / undefined warning.
+    # Gem in the top bar (Track P): the same provider + player the real host wires, so the
+    # window's Gem row renders here instead of throwing an unknown-source / undefined warning.
     engine.addImageProvider("gem", gem.GemImageProvider())
-    engine.rootContext().setContextProperty("gemFrames", gem.frame_counts())
+    gem_player = gem.QmlGem(model=overlay)
+    engine.rootContext().setContextProperty("gemPlayer", gem_player)
 
     warnings: list[str] = []
     engine.warnings.connect(lambda ws: warnings.extend(w.toString() for w in ws))
@@ -253,6 +329,8 @@ def check() -> None:
     # and commits the validated string. Done here because its logic (modifier accretion, the
     # commit-on-release) has no non-Qt half to unit-test.
     check_recorder(engine, app)
+
+    check_gem_turn(gem_player, overlay, settle)
 
     assert not warnings, (
         f"{len(warnings)} QML warning(s) — a binding is throwing:\n  "
