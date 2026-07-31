@@ -43,27 +43,19 @@ log = logging.getLogger("gemma.teleprompter")
 
 FONTS_DIR = Path(__file__).resolve().parent / "fonts"
 
-# The design's face is **Archivo**, bundled beside this package and registered at startup —
+# The design's face is **Inter**, bundled beside this package and registered at startup —
 # so it needs no system install and travels to the Mac unchanged (D10). (Inter → Hanken Grotesk
-# → Archivo over 2026-07-24/25, Thomas's call.) The rest of the chain only matters if the
+# → Archivo over 2026-07-24/25, then back to Inter on 2026-07-31 — Thomas's call each time.)
+# The rest of the chain only matters if the
 # bundled file goes missing: QML's font.family takes a single name and Qt substitutes silently (on a
 # stock Windows box an absent family lands on Tahoma), so we walk the chain here and say out
 # loud which one won.
-FONT_STACK = ["Archivo", "Segoe UI Variable Text", "Segoe UI", "Helvetica Neue", "Arial"]
+FONT_STACK = ["Inter", "Segoe UI Variable Text", "Segoe UI", "Helvetica Neue", "Arial"]
 
 
-# 0.015 em at the 16px body size. Kept here (Python) rather than Theme.qml because it rides the
-# application font, which is a QFont set before any QML loads — not a per-element token.
-TRACKING_PX = 16 * 0.015
-
-
-def apply_tracking(app) -> None:
-    """Add TRACKING_PX of absolute letter spacing to the application font, which every QML Text
-    inherits unless it sets its own. The checks call this too, so their metrics match the app's."""
-    from PySide6.QtGui import QFont
-    f = app.font()
-    f.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, TRACKING_PX)
-    app.setFont(f)
+# (There was a global +0.015 em tracking here, applied to the application font so every QML Text
+# inherited it. Removed 2026-07-31, Thomas — it rode the previous face and Inter is spaced well
+# enough without it. Per-element letterSpacing, like CodeLabel's -0.2, is untouched.)
 
 
 def load_bundled_fonts() -> None:
@@ -356,13 +348,6 @@ def main() -> int:
     # default at least antialiases everywhere; the softness it trades for that is the lesser
     # evil. Revisit per-surface only if a single crisp surface is worth the split.
 
-    # A hair of positive tracking on ALL text (Thomas, 2026-07-25). QML Text inherits the
-    # application font's letterSpacing, so one place does it everywhere — the settings window
-    # and the island alike — rather than 24 per-element lines. Absolute pixels, not a percentage:
-    # TRACKING_PX = 0.015 em at the 16px body size; across 14–18px that is 0.013–0.017 em, an
-    # imperceptible spread, so a flat value honours "0.015em generally" without scaling machinery.
-    # An element that sets its own letterSpacing (the WIDE display names, the brand) still overrides.
-    apply_tracking(app)
     load_bundled_fonts()                   # must follow QApplication, precede pick_font()
 
     model = OverlayModel(show_latency=args.latency)

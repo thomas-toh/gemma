@@ -7,7 +7,7 @@ which is what this folder does. Copyright lines below are the ones embedded in e
 
 | File | Project | Copyright | Licence |
 |---|---|---|---|
-| `Archivo-Variable.ttf` | [Archivo](https://github.com/Omnibus-Type/Archivo) (Omnibus-Type) | Copyright 2020 The Archivo Project Authors | SIL OFL 1.1 — [`OFL.txt`](OFL.txt) |
+| `Inter-Variable.ttf` | [Inter](https://github.com/rsms/inter) (Rasmus Andersson) | Copyright 2020 The Inter Project Authors | SIL OFL 1.1 — [`OFL.txt`](OFL.txt) |
 | `InstrumentSerif-Regular.ttf`<br>`InstrumentSerif-Italic.ttf` | [Instrument Serif](https://github.com/Instrument/instrument-serif) (Instrument) | Copyright 2022 The Instrument Serif Project Authors | SIL OFL 1.1 — [`OFL.txt`](OFL.txt) |
 | `MartianMono-Variable.ttf` | [Martian Mono](https://github.com/evilmartians/mono) (Evil Martians) | Copyright 2020 The Martian Mono Project Authors | SIL OFL 1.1 — [`OFL.txt`](OFL.txt) |
 | `MaterialSymbolsOutlined.ttf` | [Material Symbols](https://github.com/google/material-design-icons) (Google) | Copyright 2026 Google LLC | Apache 2.0 — [`LICENSE-Apache-2.0.txt`](LICENSE-Apache-2.0.txt) |

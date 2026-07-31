@@ -33,8 +33,9 @@ QtObject {
     readonly property int  fontSizePrompt: 16        // peek prompt (context) — one step under the reply (D27)
     readonly property int  fontSizeSmall: 12         // quiet controls: peek more/less toggle, generating cue (D27)
     // 600, not the mockup's 500: a grotesque UI face at 500 reads too light against the black
-    // island, and Qt renders a touch thinner than a browser. Archivo (the app face since 2026-07-25;
-    // Inter → Hanken → Archivo) is variable, so 550 also works if 600 is a shade heavy.
+    // island, and Qt renders a touch thinner than a browser. Inter (the app face again since
+    // 2026-07-31; Inter → Hanken → Archivo → Inter) is variable, so 550 also works if 600 is a
+    // shade heavy.
     readonly property int  fontWeight: Font.DemiBold // 600
     readonly property real lineHeight: 1.3
     readonly property real lineHeightTight: 1.15     // wrapped quiet context (peek prompt) — D27

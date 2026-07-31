@@ -41,7 +41,7 @@ and build status belongs in STATE, not here.)*
 - **Adapter-aware** — never a flat global form. Knobs group by adapter, and only the active
   adapter's knobs apply (effort/thinking are Claude-only; a local B2 has temperature instead).
 - **Bundled assets** — the window ships its own faces in `teleprompter/fonts/`, registered at
-  startup (no system-font or icon-pack dependency): Archivo (UI), Martian Mono (machine values),
+  startup (no system-font or icon-pack dependency): Inter (UI), Martian Mono (machine values),
   Instrument Serif (reserved, gated), and **Material Symbols Outlined** for the icons — drawn as
   font glyphs, not hand-authored paths (D29), and subset to only the glyphs the window uses.
 - **Dropdowns come in exactly two classes** — a dropdown shows either **words** (provider names,
@@ -79,6 +79,17 @@ types / defaults / validation:
   a slice of the parked multi-provider **routing** config (spec/20 reserved; STATE Parked): each
   role routes to one enabled provider. Now: hardcoded (dictation = Groq, assistant = local);
   the setting lands with the config source.
+- **A role may name its own MODEL (2026-07-30).** Model hangs off the *provider* card, so two roles
+  naming one provider were forced to share a model — which silently put dictation cleanup on the
+  assistant's large model, the opposite of what cleanup wants. A role's setting may now declare a
+  companion key in the schema (`"modelKey"`), holding a model id that **overrides the card's**;
+  empty or absent means the card's model, which is the pre-existing behaviour exactly. Today only
+  `cleanup_dictation` declares one (`cleanup_dictation_model`), rendered as the **Model** row on its
+  card and filled from the same fetched list the provider cards use. The router reads the linkage
+  *from the schema*, never a hardcoded key, so giving another role an override is a schema edit
+  alone. This is deliberately narrow and does **not** pre-empt spec/20's Layer 2 (several *named
+  instances* per provider), which subsumes it: one provider and one API key can now serve a large
+  model to the assistant and a small one to cleanup, but the provider still holds exactly one card.
 - **Triggers:** ask-hotkey and dictation-hotkey bindings (D14 / D16) — combo strings
   (`ctrl+alt+1` / `ctrl+alt+2` today; parsed by `bridge/hotkeys.py`, env
   `GEMMA_HOTKEY_ASK` / `GEMMA_HOTKEY_DICTATE` until this file's config source exists) ·

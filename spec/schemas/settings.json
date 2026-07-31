@@ -92,8 +92,13 @@
     },
     "cleanup_dictation": {
       "type": "provider", "default": "", "pane": "models",
-      "label": "Tidy dictation", "toggledBy": "cleanup_dictation_on", "built": true,
-      "$comment": "S-06/D15. Resolved by the router (D33) as the `cleanup_dictation` role; unset falls back to CLEANUP_PROVIDER."
+      "label": "Tidy dictation", "toggledBy": "cleanup_dictation_on", "modelKey": "cleanup_dictation_model", "built": true,
+      "$comment": "S-06/D15. Resolved by the router (D33) as the `cleanup_dictation` role; unset falls back to CLEANUP_PROVIDER. `modelKey` names the companion setting holding a per-ROLE model override (see there)."
+    },
+    "cleanup_dictation_model": {
+      "type": "string", "default": "", "pane": null,
+      "label": "Model", "built": true,
+      "$comment": "Per-role model override, drawn on the Tidy dictation card and linked from it by `modelKey`. Empty = use whatever model the provider's own card names, which is the pre-existing behaviour. It exists because model hangs off the PROVIDER card, so two roles naming one provider are otherwise forced to share a model — cleanup wants a small fast model while the assistant wants a large one. Narrow by design: it does NOT pre-empt spec/20's Layer 2 (several named instances per provider), which subsumes it."
     },
     "cleanup_prompts_on": {
       "type": "bool", "default": true, "pane": null,

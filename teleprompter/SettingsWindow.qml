@@ -421,8 +421,15 @@ Window {
                 border.color: Theme.hairlineStrong
             }
             contentItem: Item {
+                id: menuBody
                 implicitWidth: menu.availableWidth
                 implicitHeight: Math.min(list.contentHeight, Theme.dropdownRows * 37)
+                // Does the list actually overflow its cap? Stated directly against the cap rather
+                // than left to the scrollbar's AsNeeded: the popup is exactly as tall as its
+                // content until the cap bites, so content and viewport are EQUAL in the common
+                // case and a full-length thumb was drawing over every short menu. One rule, read
+                // twice — it hides the bar, and it keeps a row's text clear of it when it shows.
+                readonly property bool scrolls: list.contentHeight > Theme.dropdownRows * 37
                 ListView {
                     id: list
                     anchors.fill: parent
@@ -432,10 +439,14 @@ Window {
                     spacing: 1
                     boundsBehavior: Flickable.StopAtBounds
                     currentIndex: dd.options.indexOf(dd.value)
-                    ScrollBar.vertical: ThemedScrollBar {}
+                    ScrollBar.vertical: ThemedScrollBar {
+                        policy: menuBody.scrolls ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff
+                    }
                     delegate: Rectangle {
                         required property string modelData
-                        width: list.width
+                        // Narrow the row when the bar is up, so the thumb sits BESIDE the options
+                        // rather than over them; full width when there is no bar.
+                        width: list.width - (menuBody.scrolls ? Theme.scrollThickness + 6 : 0)
                         height: 36
                         radius: 6
                         color: oh.hovered ? Theme.uiSelected : "transparent"
@@ -572,7 +583,7 @@ Window {
 
     // ── data-page building blocks (D29 re-skin) ───────────────────────────────
 
-    // The display face for headings and names — bold Archivo, normal case (Thomas, 2026-07-26:
+    // The display face for headings and names — bold Inter, normal case (Thomas, 2026-07-26:
     // the wide all-caps read as a sports app). Used for the door headers, the Config band titles
     // and the model-card names; never body copy.
     component Display: Text {
@@ -1107,6 +1118,31 @@ Window {
                     options: cfg.addedProviders
                     enabled: cc.m.built
                     onPicked: function (v) { cfg.set(cc.key, v) }
+                }
+            }
+            // Per-role model (schema `modelKey`). Only for a role that declares one, and only once
+            // an engine is picked — there is nothing to list before that. Empty value renders as
+            // the card's own model via the placeholder, because empty MEANS "whatever the provider
+            // card says"; picking here is what overrides it.
+            Column {
+                width: parent.width; spacing: 5
+                readonly property string mk: cc.m.modelKey !== undefined ? cc.m.modelKey : ""
+                readonly property string pid: cfg.values[cc.key] ? cfg.values[cc.key] : ""
+                visible: mk !== "" && pid !== ""
+                height: visible ? implicitHeight : 0
+                onPidChanged: if (pid !== "") cfg.refreshModels(pid)
+                Text { text: "Model"; color: Theme.uiTextFaint; font.family: fontFamily
+                       font.pixelSize: Theme.fontCardLabel; font.weight: Font.DemiBold }
+                Dropdown {
+                    width: parent.width; implicitHeight: 34
+                    bg: Theme.surfaceDeep; mono: true
+                    value: cfg.values[parent.mk] ? cfg.values[parent.mk]
+                         : (cfg.models[parent.pid] !== undefined && cfg.models[parent.pid].model
+                            ? cfg.models[parent.pid].model : "")
+                    options: cfg.modelOptions[parent.pid] !== undefined
+                             ? cfg.modelOptions[parent.pid] : []
+                    enabled: cc.m.built
+                    onPicked: function (v) { cfg.set(parent.mk, v) }
                 }
             }
             Column {

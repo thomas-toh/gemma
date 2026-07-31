@@ -39,6 +39,9 @@ def resolve(role: str) -> dict | None:
     """The provider + dials the user configured for `role`, or None if unconfigured — no provider
     named, the named provider never added, its card switched off, or no model chosen. The caller
     applies its own default on None. Shape: {provider, model, effort, thinking, endpoint, temperature}.
+
+    A role may also name its OWN model (schema `modelKey`), which wins over the provider card's —
+    so one provider and one key can serve the assistant a large model and cleanup a small one.
     """
     key = _ROLE_KEY.get(role)
     if key is None:
@@ -49,9 +52,16 @@ def resolve(role: str) -> dict | None:
     m = (settings.get("models") or {}).get(pid)
     if not isinstance(m, dict) or not m.get("on") or not m.get("model"):
         return None
+    # A role MAY name its own model, overriding the provider card's. Model otherwise hangs off the
+    # CARD, so two roles naming one provider are forced to share it — which silently put dictation
+    # cleanup on the assistant's 70B. Which setting holds the override is declared in the schema
+    # (`modelKey`), not hardcoded here, so giving another role one is a schema edit. Empty or absent
+    # = the card's model, i.e. exactly the previous behaviour.
+    model_key = (settings.spec(key) or {}).get("modelKey")
+    override = str(settings.get(model_key) or "").strip() if model_key else ""
     return {
         "provider": pid,
-        "model": m["model"],
+        "model": override or m["model"],
         "effort": m.get("effort"),
         "thinking": m.get("thinking"),
         "endpoint": m.get("endpoint"),
@@ -120,6 +130,24 @@ def _selfcheck() -> None:
         settings.set("cleanup_dictation", "groq")
         assert resolve("cleanup_dictation")["provider"] == "groq"
         assert resolve("assistant") is None, "roles do not bleed into each other"
+
+        # A role may name its OWN model, beating the provider card's — the point being one provider
+        # and ONE key serving the assistant a large model and cleanup a small one, which the
+        # card-holds-the-model shape could not express (it silently put cleanup on the 70B).
+        settings.set("models", {"groq": {"on": True, "model": "llama-3.3-70b-versatile"}})
+        settings.set("primary", "groq")
+        assert resolve("cleanup_dictation")["model"] == "llama-3.3-70b-versatile", \
+            "no override -> the card's model, i.e. the old behaviour"
+        settings.set("cleanup_dictation_model", "llama-3.1-8b-instant")
+        assert resolve("cleanup_dictation")["model"] == "llama-3.1-8b-instant", "the role's own model wins"
+        assert resolve("assistant")["model"] == "llama-3.3-70b-versatile", \
+            "one role's override must NOT leak to another on the same provider"
+        assert signature("cleanup_dictation") != signature("assistant"), \
+            "one provider, two models -> two signatures, so both brains get built"
+        settings.set("cleanup_dictation_model", "   ")
+        assert resolve("cleanup_dictation")["model"] == "llama-3.3-70b-versatile", \
+            "a blank override is not a model — fall back to the card"
+        settings.set("cleanup_dictation_model", "")
 
         # A changed pick changes the signature (so the orchestrator rebuilds), an identical one
         # does not (so it keeps the client).

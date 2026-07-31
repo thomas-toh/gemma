@@ -221,8 +221,6 @@ def check() -> None:
             assert p.get("credential"), f"{pid}: a keyed provider needs a credential name"
 
     app = QApplication.instance() or QApplication(sys.argv)
-    from teleprompter.__main__ import apply_tracking      # match the app's global letter spacing
-    apply_tracking(app)
     check_icon_font()
     engine = QQmlApplicationEngine()
     engine.addImportPath(str(HERE.parent))          # so `import teleprompter` finds Theme

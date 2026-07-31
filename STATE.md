@@ -245,8 +245,9 @@ it is the unfinished half of D29/D30/D33.
   disables it; the daemon is an always-up server, the overlay a reconnecting client) with a
   `--fake` driver that drives the whole overlay with **no audio, mic or models**. It retains the
   current turn and replays it to a client that reconnects mid-turn (P-02). PySide6 is a **core**
-  dependency (D23). Fonts are bundled and registered at run time — Inter · Archivo · Martian Mono,
-  with Instrument Serif bundled but deployed nowhere — so there is no system install and the Mac
+  dependency (D23). Fonts are bundled and registered at run time — **Inter** (the UI face; Archivo
+  was swapped back out on 2026-07-31, Thomas) · Martian Mono · Material Symbols, with Instrument
+  Serif bundled but deployed nowhere — so there is no system install and the Mac
   gets the same faces (D10). Guarded by `teleprompter.overlay_check` (headless, software RHI),
   `decode --selfcheck`, `settings_check` and `teleprompter.gem`, all CI-wired.
 - **The locked design** lives in spec/40 §Visual output: the island fused to the top screen edge,

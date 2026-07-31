@@ -70,14 +70,12 @@ def main() -> int:
     assert fonts, "no bundled font found — line metrics would be meaningless"
     for f in fonts:
         assert QFontDatabase.addApplicationFont(str(f)) != -1, f"bundled font {f.name} did not load"
-    from teleprompter.__main__ import apply_tracking      # match the app's global letter spacing
-    apply_tracking(app)
 
     model = OverlayModel()
     engine = QQmlApplicationEngine()
     engine.addImportPath(str(HERE.parent))
     engine.rootContext().setContextProperty("overlay", model)
-    engine.rootContext().setContextProperty("fontFamily", "Archivo")
+    engine.rootContext().setContextProperty("fontFamily", "Inter")
     engine.rootContext().setContextProperty("reducedMotion", False)
     engine.rootContext().setContextProperty("targets", targets())
     # The island draws Gem, so it needs the same player + provider the app wires, and `cfg` for
