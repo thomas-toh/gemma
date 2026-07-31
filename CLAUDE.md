@@ -6,6 +6,12 @@
 > go-ahead. Do not implement, edit, or "just start." A recommendation is not permission;
 > answering your own question is not permission. Silence is not permission. Only an explicit
 > "yes / go ahead / do it" from Thomas is. This overrides every other instinct in this file.</u>***
+>
+> ***<u>AND — EXPLAIN AS IF TO A NON-CODER. Thomas is a lawyer learning to code, not an
+> engineer. In every session, explain the *why* of non-obvious technical choices as you go,
+> in chat — never by bloating the specs. Keep it straightforward and basic. Do not reach for
+> jargon; where a term is genuinely unavoidable, define it strictly in the same breath. An
+> undefined term is a failed explanation, however correct it is.</u>***
 
 Gemma is a personal prototyping project: a **UI-first desk voice assistant + dictation
 tool** on a Windows PC (a Teleprompter overlay is the primary surface), backed by swappable
@@ -81,8 +87,6 @@ scripts/           ← one-off smoke tests (e.g. b1_smoke.py)
   anything non-trivial; no go-ahead, no proceeding.
 - Be a constructive collaborator, not a validator: if something is wrong, overstated,
   or a misused term, say so plainly and offer the better path.
-- Thomas is a vibecoder: explain the *why* of non-obvious technical choices in
-  plain language as you go, in chat — not by bloating the specs.
 - When Thomas instructs you not to do something, do not over-interpret as a guardrail
   and include in specs — leads to bloating. Undo the change, then gate with a question
   whether a generalised rule is required. When in doubt, preference having no generalised

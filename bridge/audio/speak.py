@@ -162,6 +162,20 @@ _KOKORO_BASE = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/mo
 _KOKORO_FILES = {"kokoro-v1.0.onnx": _KOKORO_BASE + "/kokoro-v1.0.onnx",
                  "voices-v1.0.bin": _KOKORO_BASE + "/voices-v1.0.bin"}
 _kokoro = None
+_kokoro_lock = threading.Lock()    # D39: see listen._ensure_whisper — since warm-up moved to
+                                   # a background thread, two callers can race this lazy init.
+
+
+def _ensure_kokoro():
+    """The TTS model, built exactly once, whichever thread gets here first."""
+    global _kokoro
+    with _kokoro_lock:
+        if _kokoro is None:
+            from kokoro_onnx import Kokoro
+            model, voices = _kokoro_model_paths()
+            log.info("loading Kokoro TTS...")
+            _kokoro = Kokoro(str(model), str(voices))
+        return _kokoro
 
 
 def _kokoro_model_paths() -> tuple[Path, Path]:
@@ -212,21 +226,16 @@ def synth(text: str, voice: str = VOICE, speed: float = 1.0):
     `voice` may be a single name or a blend, e.g. 'af_heart:60,af_nicole:40' —
     Kokoro voices are style vectors, so a weighted mix is itself a voice."""
     import numpy as np
-    global _kokoro
-    if _kokoro is None:
-        from kokoro_onnx import Kokoro
-        model, voices = _kokoro_model_paths()
-        log.info("loading Kokoro TTS...")
-        _kokoro = Kokoro(str(model), str(voices))
+    kokoro = _ensure_kokoro()
     weights = _voice_weights(voice)
-    style = (sum(_kokoro.get_voice_style(n) * w for n, w in weights)
+    style = (sum(kokoro.get_voice_style(n) * w for n, w in weights)
              if len(weights) > 1 else weights[0][0])
     lang = _voice_lang(weights)
     t0 = time.perf_counter()
     gap = np.zeros(SAMPLE_RATE_OUT * SENTENCE_GAP_MS // 1000, dtype=np.float32)
     pieces: list = []
     for sentence in _sentence_chunks(text):
-        samples, rate = _kokoro.create(sentence, voice=style, speed=speed, lang=lang)
+        samples, rate = kokoro.create(sentence, voice=style, speed=speed, lang=lang)
         if rate != SAMPLE_RATE_OUT:  # never happens with Kokoro v1; loud if a swap breaks it
             log.warning("TTS rate %d != schema outbound %d", rate, SAMPLE_RATE_OUT)
         if pieces:

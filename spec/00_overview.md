@@ -1,6 +1,6 @@
 # Spec 00 — System overview & status
 
-**Last reconciled: 2026-07-30** · Build progress: [STATE.md](../STATE.md) · Decisions record: [docs/02](../docs/02_architecture/02_system_architecture.md)
+**Last reconciled: 2026-07-31** · Build progress: [STATE.md](../STATE.md) · Decisions record: [docs/02](../docs/02_architecture/02_system_architecture.md)
 
 ## The system in one paragraph
 
@@ -846,4 +846,96 @@ a resample, which the tool loop has already had since D31.
 Guarded: `bridge.brains.compat` — the tools-offered refinement in both shapes, and the kinds it must
 NOT swallow (a 5xx, an auth failure, a dropped connection, a bad model id). Verified live against
 groq: the kind now maps, and `logs/audit.jsonl` carries the first real `search_email` invocation.
+
+**D38 (2026-07-31): connectors — the user decides which tools exist at all.** Every tool Gemma has
+reaches something personal: your documents, your mailbox, your clipboard. The only gate until now
+was the **tier** (spec/30 rule 3), and a tier is about DANGER, not consent — Tier 1 means "safe to
+run unattended", which is not the same as *wanted*. Some people want dictation and an answer and
+nothing that touches their files at all (Thomas). So consent becomes a second, independent gate:
+**tier says whether Gemma MAY, the connector says whether you WANT it to.** Both must pass.
+
+- **The connector is the unit, not the tool.** Each tool declares a `connector` in
+  `spec/schemas/tools.json`; the settings page draws one card per connector. "Email" is a thing a
+  person understands and `search_email` is not, and keying the gate on the declared connector means
+  a new tool joins an existing card with no UI work — granularity can tighten later without a
+  schema break. The starting map: **System** (`system_status`) · **Files** (`find_document`) ·
+  **Email** (`search_email`) · **Clipboard** (`read_clipboard`) · **Web** (no backend yet) ·
+  **Apps & media** (the Tier-2 starters, unbuilt).
+- **One filter, already the only door.** `tools.tool_specs()` is the single place a tool reaches the
+  brain, so consent is one more condition beside the tier — plus a refusal backstop in `execute()`,
+  because a tool the user switched off must be dead even if something else calls it.
+- **Default off for anything personal** — Files, Email and Clipboard off, System on. The precedent
+  is D23: `tts` and `listen_for_me` are capabilities that stay off until asked for. A fresh install
+  dictates and answers and reaches nothing of yours. The cost is accepted: a new user asking "find
+  my CV" is told file search is off rather than getting results. **Owed at packaging (Thomas):** a
+  first-run permissions round — "Gemma would like to search your files and your mail" — so the
+  choice is made once, deliberately, instead of being discovered in a settings page. The pattern is
+  VoiceInk asking to install Parakeet on first run.
+- **Consent is stated twice: before and during.** A card lists the tools it enables and what each
+  reaches, so switching one on is consent to something specific rather than to a category. And the
+  island **names the tool while it runs**, the way Claude Code does — because people do not read
+  settings pages (Thomas), and today a tool turn looks identical to a plain one. That is spec/40's
+  reserved tool-activity indicator (D11) finally getting a renderer, plus a new Contract P message.
+  A design pass is owed on both surfaces.
+- **A disabled tool must be SAID, not silently missing.** Hiding a tool means the brain does not
+  know files are searchable, so asked to find one it may improvise instead of answering "file search
+  is turned off" — the same **can't rendered as didn't** failure D36 found in `search_email`. One
+  line in the system prompt names what is disabled, so the refusal is accurate.
+- **MCP is designed-for, not built.** The pane is called Connectors so it can hold MCP servers
+  later, but MCP is deliberately out of scope here: an MCP tool arrives at RUNTIME carrying no
+  declared tier, which drives straight through spec/30 rule 1 (no raw shell below Tier 3 — and an
+  MCP server can expose exactly that). It needs its own decision and its own D-number. The slot
+  renders dimmed, like any other `built: false`.
+- **No restart, and none was built.** Settings are re-read fresh every turn (D28), so a connector
+  toggle applies on the next utterance with no watcher and no relaunch. Auto-restart was considered
+  and dropped as a facility for a problem this architecture does not have (Thomas raised it); it
+  returns only if MCP lands, since a server is a process that binds at startup.
+
+Build status and the item-by-item checklist: STATE, Track T.
+
+**D39 (2026-07-31): one app — tie the two processes' lifetimes; do NOT merge them.** Starting
+Gemma is one command (`run.py`); *stopping* it was two — close the overlay, then find the console
+and Ctrl-C the daemon. The obvious fix, carried in STATE for weeks, was a **true single-process
+merge** (Qt on the main thread, `orchestrator.run` on a background thread). That is **considered and
+rejected.** The complaint is about *lifetime* — what dies when — and lifetime is a launcher concern,
+not an architecture one. Merging would have paid for it with the three things D13 bought.
+
+- **The tie, and its exception.** Whichever process exits **cleanly** (code 0) stops the other; a
+  process that **crashes** (nonzero) leaves the other running. So tray > Quit and Ctrl-C in the
+  console are each one door out of the whole app, while a crash still behaves exactly as D13/D19
+  specify — the overlay outliving a dead daemon is the *point*, since it is the only thing left that
+  could report the death. Exit codes carry this; no message, no protocol.
+- **Nothing is amended.** This was expected to amend D13/D19's two-process isolation rationale and
+  D10's two-seam limit. Under this shape it amends none of them: two processes stay, crash isolation
+  stays, the restart-one dev loop stays, and **spec/50 rule 12 is untouched** — no new upstream verb.
+- **Why not a `quit` verb.** The overlay could have messaged the daemon over Contract P's upstream
+  channel. Rejected on rule 12: that channel may only **stop work already in flight**, and the socket
+  is localhost-only but *unauthenticated*, which rule 12 accepts only because the worst a stranger can
+  do is cancel a turn. A `quit` verb raises that ceiling to "any local process can kill Gemma" — a
+  bigger nuisance for no gain the launcher does not already give. The cost of the launcher route,
+  accepted: two hand-started terminals stay untied, which for dev is the behaviour you want anyway.
+- **Cold start was the other half of the same complaint** and is fixed here (measured spread: **3.8 s
+  to 45.9 s**, all of it with the doors shut). Warm-up is no longer one serial block; it is split by
+  **when a model is first needed**. `serve()`'s idle loop calls the wake model every block and
+  `_capture` needs the VAD, so those two load before serving. Whisper is not wanted until a capture
+  *ends* and Kokoro not until the brain has *answered*, so both moved to a background thread and the
+  **hotkeys now register without waiting for them**. Three consequences, each deliberate:
+  - **A lock is mandatory, not tidiness.** `transcribe` and `synth` lazy-init module globals; with
+    warm-up now concurrent with a live hotkey, an early keypress and the warm-up thread could both
+    see `None` and each build a CUDA model. The lock makes the late arrival wait for the load it
+    would have waited for anyway.
+  - **Kokoro is no longer preloaded.** `tts` is off by default (D23), so most starts were loading a
+    speech model and discarding its audio. Lazy is also the only correct answer when `tts` is toggled
+    on mid-session, since settings are re-read every turn (D28).
+  - **The model loads from disk first** (`local_files_only`), falling back to a networked load if it
+    genuinely isn't cached. Every start had been asking huggingface.co for the revision of a model
+    already present — an internet dependency at launch.
+- **Superseded here:** the old ordering comment in `run()` ("after warm-up, so a press during the
+  22 s model load cannot queue a turn"). That tradeoff is gone: the doors open early on purpose, and
+  the lock — not a closed door — is what keeps an early press safe.
+- **Still not done, and still parked:** the Windows Job-Object lifetime tie (launcher C2), so a
+  SIGKILL of the launcher cannot orphan children; and a windowless daemon at packaging, which is what
+  finally removes the console as a thing you can look at and wonder about.
+
+Build status: STATE, Config & routing / Track G.
 

@@ -42,6 +42,9 @@ jobs:
       - run: python -m bridge.brains.router
       - run: python -m bridge.orchestrator --selfcheck
       - run: python -m bridge.broadcaster --selfcheck
+      # D39 lifetime tie: a CLEAN exit of either process stops the other (tray Quit, Ctrl-C);
+      # a CRASH of either spares the survivor (D13/D19 isolation). Policy only — no subprocesses.
+      - run: python run.py --selfcheck
       # Parsing + the tap/hold machine only; RegisterHotKey itself is proven live on the box.
       - run: python -m bridge.hotkeys --selfcheck
       # Dictation delivery (spec/60): the UTF-16 encoder + a clipboard round-trip when the session

@@ -8,7 +8,7 @@ start, update it in the same commit as the work · when a step closes, collapse 
 entry to one or two lines — durable knowledge moves out (behaviour → spec · run
 instructions → README · findings → NOTES.md · decisions → a D-number in spec/00).
 
-Last updated: 2026-07-28
+Last updated: 2026-07-31
 
 ## Handoff — start here (2026-07-28)
 
@@ -32,17 +32,59 @@ quality it stood for is real and now has its own section — **Config & routing*
 5. **Mac parity (D10)** — last: the full-loop Mac test + macOS hotkeys (Carbon
    `RegisterEventHotKey`).
 
+**Queued next (2026-07-31, Thomas) — three checklists.** All three are *design-first*; none should
+start as code.
+
+- [ ] **The absent settings — wants its own design session, probably its own tab.** Four settings
+  are specced in spec/70 §3 but surfaced nowhere: **STT model · wake phrase · TTS voice ·
+  word-replacement table**. Thomas: likely a **tab of their own** rather than more rows on an
+  existing pane. Owed by that session: which tab (and whether Speech is the grouping) · types,
+  defaults and validation for each · the word-replacement **table editor**, which is a repeating
+  from→to grid, not a row control, and so has no precedent in the window yet · whether STT model is
+  per-mode (D12 says dictation is the stricter test) or one process-wide value, since the code holds
+  one constant today. Note the window's other named gaps live above (AddCard dashed border, roster
+  reorder) and are *not* part of this.
+- [ ] **Router v2 (Layer 2) + its dependent design.** Several **named instances per provider**: one
+  API key, several models, so a user exposes Opus 5 and Sonnet 5 but never Fable. Roles then target
+  an *instance*, which makes the per-role `modelKey` override (2026-07-30, spec/70 §3) redundant —
+  it folds in and should be removed, not kept alongside. Dependent design owed in the same session:
+  the **schema migration** for existing provider cards (this is the risky part — a botched migration
+  eats a profile, and one was already lost on 2026-07-31) · per-task-type routing and its classifier
+  (short → Groq, long → Haiku) · a **`local_only`** policy, which is also what decides whether a
+  retrieval tool's hits may reach a cloud brain (spec/30 §Retrieval). Existing detail: the "Owed —
+  router Layer 2" entry below, and spec/20:140.
+- [x] **DONE 2026-07-31 (D39) — one app: lifetimes tied, processes NOT merged.** The single-process
+  merge was considered and **rejected** — the complaint was about what dies when, and that is a
+  launcher concern. `run.py`: a **clean** exit of either child (code 0) stops the other, so tray Quit
+  and Ctrl-C are each one door out; a **crash** (nonzero) spares the survivor, so D13/D19 isolation is
+  untouched and a dead daemon still has a live overlay to be reported by. Expected to amend D13/D19
+  and D10; **amends nothing** in the end, and **spec/50 rule 12 stays untouched** — a `quit` upstream
+  verb was rejected because that channel may only stop work in flight and is unauthenticated, so the
+  verb would let any local process kill Gemma. Cost accepted: two hand-started terminals stay untied.
+  Guarded by `python run.py --selfcheck` (all four clean/crash × daemon/overlay cases), CI-wired.
+  - [x] **Cold start, fixed in the same work.** Warm-up is no longer one serial block — it is split by
+    **when a model is first needed**. Wake + VAD load before serving (`serve()` predicts every block,
+    `_capture` needs the VAD); **whisper and Kokoro moved to a background thread**, so the **hotkeys
+    now register without waiting** for them. (b) **Kokoro is no longer preloaded** — `tts` is off by
+    default (D23), so most starts were loading a speech model to discard its audio; lazy is also the
+    only correct answer when it's toggled on mid-session. (c) **`local_files_only` with a network
+    fallback**, killing the per-start huggingface.co revision call for a model already on disk. The
+    **lock** in `listen.py`/`speak.py` is what makes this safe: warm-up now runs concurrently with a
+    live hotkey, so without it an early press and the warm thread each build a CUDA model.
+    ⚠ **Not yet measured on the box** — the 3.8–45.9 s spread was the *before*; the after wants a
+    real start with a stopwatch, and an early keypress during warm-up wants trying once.
+
 **Parked, not in the sequence:**
 - **Local B2 brain (Ollama)** — deferred. M2 "it's local" and the *local* cleanup-engine option
   (S-06) both wait on it. B2's adapter already exists (D30) and speaks to any OpenAI-compatible
   endpoint, and the router (D33) can already point a role at one — so this is now "stand a local
   server up and pick it", not new adapter work.
-- **Launcher / packaging** — tray autostart, launcher option **C2** (Job Object lifetime tie),
-  daemon-death made visible in the tray, and the **true single-process merge** (one thing to
-  launch, one crash to restart everything). Wants its own D-number; it amends D13/D19's isolation
-  rationale and D10's two-seam limit. *A dev launcher `run.py` starts both procs from one command;
-  two procs stay deliberate for dev — restart only the component you changed. The merge belongs
-  with packaging, not the dev launcher.*
+- **Launcher / packaging** — tray autostart, launcher option **C2** (Job Object lifetime tie, so a
+  SIGKILL of `run.py` cannot orphan children), daemon-death made visible in the tray, and a
+  **windowless daemon** at packaging, which is what finally removes the console as a thing to look
+  at. *(The **single-process merge** is no longer on this list — D39 considered and rejected it; the
+  lifetime complaint it existed to solve is fixed by the launcher tie, and two processes stay
+  deliberate for dev: restart only the component you changed.)*
 - **Rename `bridge/` → `daemon/`** (S-07). The package is named for the cancelled headset it
   bridged to the brains (D18); it is now just the daemon. Prose is already de-headseted; the
   rename itself is churn (imports · `pyproject` · `checks.yml` · README · spec/00's legend) and
@@ -161,6 +203,12 @@ it is the unfinished half of D29/D30/D33.
   wake model, VAD, whisper and Kokoro are all blocking C calls, so an async `serve()` would starve
   the loop unless every one moved to an executor. Cross-platform per D10. Run instructions:
   `README.md` · GPU setup, benchmarks, quirks: `NOTES.md`.
+- **Works now — startup (D39, 2026-07-31).** `run()` warms in two tiers: wake + VAD before serving,
+  whisper + Kokoro on a background thread, so the **hotkeys register early**. The lazy inits in
+  `listen.py`/`speak.py` are lock-guarded — that is what makes an early keypress safe now that
+  warm-up is concurrent. Kokoro is not preloaded (`tts` off by default) and whisper loads
+  `local_files_only` first. Lifetime: `run.py` ties a clean exit of either process to the other, and
+  spares the survivor on a crash. **Owed: measure the new start on the box** (before was 3.8–45.9 s).
 - **Works now — the two doors (D20).** `bridge/hotkeys.py`: a combo-string parser (`ctrl+alt+1`
   ask · `ctrl+alt+2` dictate; env `GEMMA_HOTKEY_ASK`/`_DICTATE` until the settings window surfaces
   them — a modifier-less binding is rejected, it would be swallowed everywhere you type) → Win32
@@ -454,17 +502,38 @@ it is the unfinished half of D29/D30/D33.
     the speaker is issuing it, not inside a sentence doing something else · never emit an empty
     marker and never drop words to make a list fit. All four are now committed cases, so they
     cannot regress silently.
-  - **Verification status — read this before trusting it.** The 5 original cases passed on
-    **groq/llama-3.3-70b-versatile** (the configured `cleanup_dictation` model). The 4 promoted
-    cases and the re-run after the three fixes were done on **openai/gpt-4o-mini** instead —
-    Groq's daily token quota was exhausted — where **8 of 9 pass**. The failure is the
-    ordinal-ambiguity case ("one buy two apples two get milk"), which 70B handles and 4o-mini does
-    not: it reads the inner "two" as a separator and drops "apples". So that one rule is
-    **model-dependent**, and the full 9 have never run green on one model in one pass. Owed: re-run
-    `--check-format` on the configured model when the quota resets.
-  - Also seen on 4o-mini and NOT covered by the assertions: the two verbatim-mention cases keep
-    their prose but drop the word "list" ("...to enumerate items"). Cleanup word-fidelity, not
-    D37's formatting contract — same family as the untested-against-live-speech note above.
+  - **⚠ BROKEN AS CONFIGURED — measured 2026-07-31, `--check-format`, 3 of 9 FAIL on
+    `groq/llama-3.1-8b-instant`,** which is what `cleanup_dictation_model` points at today. The
+    counting rules are **model-dependent**: they hold on 70B and slide off small models (8B and
+    `gpt-4o-mini` fail the same way). Failing cases, all of them word-losing, not merely
+    mis-formatted:
+    ① `"...one buy two apples two get milk..."` → `1. Buy / 2. Get milk` (**"apples" dropped**) ·
+    ② `"I need to do three things one call the bank two send the email three go home"` → a numbered
+    list, when it contains **no command at all** · ③ `"list one is the priority list two can wait"`
+    → `1. is the priority list 2. can wait` (**"list one" swallowed**). ② and ③ are the exact
+    defects the three prompt rules closed on 70B, re-opened by the model change.
+    **The mention cases still pass on 8B**, so the headline failure ("add a numbered list to the
+    contract") is safe — it is the *counting* half that needs a bigger model.
+    Scoreboard: 70B **5/5** (original cases only) · `gpt-4o-mini` **8/9** · 8B **6/9**. The full 9
+    have never run green on any one model in one pass.
+  - [ ] **FIX — owed, wants its own session.** Options, in the order recommended:
+    - [ ] **Deterministic pre-pass** (the real fix, and the documented upgrade path — the
+      `ponytail:` note above `DICTATION_CLEANUP` names exactly this trigger, now met by
+      measurement). Detect `enumerate list` / `itemize list` / `end list` and the ordinal
+      separators **in Python**, mark the spans, and hand cleanup text it cannot misread. Detection
+      then stops depending on model capability, and 8B stays fine for the tidying it is good at.
+      Note this is where `bridge/replace.py` still does **not** belong — a swap table cannot
+      express a span (confirmed 2026-07-30).
+    - [ ] **Stopgap while that is built — Thomas's call, NOT taken:** point
+      `cleanup_dictation_model` back at `llama-3.3-70b-versatile`. Correct today, ~8× the tokens
+      (which exhausted the Groq daily quota on 2026-07-29). Left on 8B pending his decision, so
+      **dictation currently mangles counted speech**.
+    - [ ] Re-run `--check-format` on whatever model is chosen; promote any new failure into
+      `_FORMAT_CASES` as the earlier four were.
+  - Also seen on BOTH small models and NOT covered by the assertions: a verbatim-mention case keeps
+    its prose but drops a word — 8B returned `"the statute requires us to list items"`, losing
+    "enumerate". Cleanup word-fidelity, not D37's formatting contract — same family as the
+    untested-against-live-speech note above.
   - **Still owed: a real keypress + voice**, same gap as the rest of Track D.
 - **Owed — the live keypress test.** The whole dictate path (D1 + D2) has been verified against
   recorded WAVs and selfchecks, but never once by Thomas pressing the key and speaking. Every
@@ -582,11 +651,60 @@ it is the unfinished half of D29/D30/D33.
   - **Note:** the Groq free tier's daily token budget (100k) was exhausted measuring this, by the
     measurement runs themselves. Tool specs are ~2k tokens a round, so a tool turn is not cheap on
     a small daily cap.
+- **Designed, not built (D38, 2026-07-31) — connectors: the user decides which tools exist.**
+  Consent becomes a second gate beside the tier — tier says whether Gemma MAY, the connector says
+  whether the user WANTS it to. Decision and rationale in spec/00 D38; the gate in spec/30
+  § Connectors; the pane in spec/70. **Checklist, in build order:**
+
+  *Back end*
+  1. [ ] `spec/schemas/tools.json` — add `connector` to all eight tools. Map: `system_status`→System ·
+     `read_clipboard`→Clipboard · `find_document`→Files · `search_email`→Email · the four Tier-2
+     starters→Apps & media. Edit as TEXT (the file is hand-formatted; a `json.dump` round-trip
+     explodes the diff).
+  2. [ ] `spec/schemas/settings.json` — the `connectors` pane + one entry per connector, `built`
+     false for Web and Apps & media. Personal-data connectors default **off**, System **on**.
+  3. [ ] `bridge/tools.py` — `tool_specs()` gains the connector condition beside `MAX_TIER`;
+     `execute()` refuses a disconnected tool (the allowlist is the defence, not the filter).
+  4. [ ] One line into the system prompt naming what is DISABLED, so the brain says "file search is
+     off" instead of improvising — the D36 can't-vs-didn't lesson, by construction.
+  5. [ ] `bridge.tools --selfcheck`: a connector off removes exactly its tools and nothing else;
+     `execute()` refuses one anyway; tier and connector are independently sufficient to exclude.
+
+  *Front end*
+  6. [ ] Connectors pane in `SettingsWindow.qml` — cards, not rows (Model selection is the
+     precedent), each naming what it reaches and which tools it enables.
+  7. [ ] `settings_check` green, including its QML-warning gate; update the pinned group list if the
+     pane changes it.
+
+  *Tool activity — the "during" half of consent*
+  8. [ ] Contract P message so the island can NAME the tool as it runs (Claude Code's pattern;
+     spec/40 reserved this as D11's tool-activity indicator and nothing renders it today).
+  9. [ ] Design pass owed on BOTH surfaces — the cards and the running indicator (Thomas).
+
+  *Owed, not in this build*
+  - [ ] **First-run permissions round at packaging** — ask for what it wants up front rather than
+    leaving it to be discovered in a pane (the VoiceInk/Parakeet pattern). Thomas.
+  - [ ] **MCP** — deliberately out of scope: a runtime tool carries no tier, which drives through
+    spec/30 rule 1. Its own decision and D-number; the pane holds a dimmed slot meanwhile.
 - **In flight:** —
-- **Next:** live-verify a tool turn end to end (Claude asks `system_status`, then answers) — no tool
-  has yet been driven by a brain, which is what the ledger's right-hand column is waiting on. Then
-  `search_email` against a real mailbox the first time a mail profile exists. Tier 2 backends when
-  a tool is genuinely wanted.
+- **Next:** ① D38's checklist above, back end first — it is the gate every later tool inherits.
+  ② live-verify a tool turn end to end (Claude asks `system_status`, then answers): `search_email`
+  has now been driven by a brain (D36) but the ledger's column is otherwise still empty.
+  ③ `search_email` against a complete mailbox — see the retrieval note below. Tier 2 backends when a
+  tool is genuinely wanted.
+- **Blocked, not broken — `search_email` retrieval (2026-07-31).** Repeated live searches return
+  nothing, and the cause is **not** the tool: it queries `\\<account>\Inbox` correctly and returns
+  hits for terms that are present (verified against "Amazon"). Classic Outlook has downloaded only
+  **286 messages, covering 2026-07 and 2011–2012**, with a 14-year hole in between and
+  `Terminated in error` five times in its sync log — so the months being searched are not on the
+  machine. Two independent engines agree (MAPI `AdvancedSearch` and the Windows Search index both
+  find no "camden" mail, though the index does find the Camden .docx files in Downloads).
+  **Also found:** Windows Search DOES index Outlook mail (`System.Kind='email'`), so a ranked local
+  backend is available through `find_document`'s existing ADO machinery — better than DASL `LIKE`,
+  which ANDs every word of a free-text query and is brittle. Options on the table (Thomas):
+  finish the sync · switch the backend to the Windows index and widen past the Inbox · or the
+  OAuth route (Graph `Mail.ReadBasic` reads headers only and cannot send — scoped in chat, not yet
+  a decision). Whichever wins, the AND-across-words and Inbox-only limits are real and outlive it.
 
 ## Specs — spec & decision docs
 

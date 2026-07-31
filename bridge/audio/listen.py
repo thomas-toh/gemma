@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import threading
 import time
 
 from bridge.audio.wake import (
@@ -128,6 +129,9 @@ class SileroVAD:
 
 
 _whisper = None
+_whisper_lock = threading.Lock()   # D39: run() warms this on a background thread while the
+                                   # hotkeys are already live, so two threads can race the
+                                   # lazy init below and build two CUDA models.
 
 
 def _add_cuda_dll_dirs() -> None:
@@ -151,10 +155,47 @@ def _add_cuda_dll_dirs() -> None:
 
 
 def _load_whisper(device: str, compute_type: str):
+    """Load the model, preferring the copy already on disk (D39). faster-whisper otherwise
+    asks huggingface.co for the current revision on EVERY start — an internet dependency at
+    launch for a model we already have, and dead weight in the cold-start measurement. We
+    fall back to a networked load rather than hard-failing, because `local_files_only` is
+    also how a genuinely-absent model reports itself, and a fresh machine must still work."""
     from faster_whisper import WhisperModel
-    log.info("loading faster-whisper %r on %s (first run downloads it)...",
-             WHISPER_MODEL, device)
-    return WhisperModel(WHISPER_MODEL, device=device, compute_type=compute_type)
+    log.info("loading faster-whisper %r on %s...", WHISPER_MODEL, device)
+    try:
+        return WhisperModel(WHISPER_MODEL, device=device, compute_type=compute_type,
+                            local_files_only=True)
+    except Exception as e:                       # not cached yet, or the cache is unusable
+        log.info("%r not in the local cache (%s) — downloading it (first run only)...",
+                 WHISPER_MODEL, type(e).__name__)
+        return WhisperModel(WHISPER_MODEL, device=device, compute_type=compute_type)
+
+
+def _ensure_whisper():
+    """The model, built exactly once. The lock is load-bearing since D39: run() warms this
+    on a background thread while the hotkeys are already live, so a real capture can reach
+    here mid-warm-up. Unlocked, both callers would see None and each build a CUDA model —
+    two copies of the weights on the GPU. The late arrival blocks on the load instead, which
+    is the wait it would have had anyway."""
+    global _whisper
+    with _whisper_lock:
+        if _whisper is None:
+            import ctranslate2
+            if ctranslate2.get_cuda_device_count() > 0:
+                _add_cuda_dll_dirs()
+                _whisper = _load_whisper("cuda", "float16")
+            else:
+                _whisper = _load_whisper("cpu", "int8")
+        return _whisper
+
+
+def _fallback_to_cpu():
+    """GPU inference failed at run time — rebuild on CPU. ponytail: two threads failing
+    together rebuild twice; harmless (CPU load, right answer either way), fix if it shows."""
+    global _whisper
+    with _whisper_lock:
+        _whisper = _load_whisper("cpu", "int8")
+        return _whisper
 
 
 def _run(model, audio_f32) -> str:
@@ -170,22 +211,15 @@ def transcribe(audio_f32) -> str:
 
     'GPU where present' means present *and loadable*: a CUDA device with missing runtime
     libs (cuBLAS/cuDNN) only fails at inference, so we fall back to CPU on first use."""
-    global _whisper
-    if _whisper is None:
-        import ctranslate2
-        if ctranslate2.get_cuda_device_count() > 0:
-            _add_cuda_dll_dirs()
-            _whisper = _load_whisper("cuda", "float16")
-        else:
-            _whisper = _load_whisper("cpu", "int8")
+    model = _ensure_whisper()
     try:
         t0 = time.perf_counter()
-        text = _run(_whisper, audio_f32)
+        text = _run(model, audio_f32)
     except RuntimeError as e:
         log.warning("GPU transcribe failed (%s) -- falling back to CPU", e)
-        _whisper = _load_whisper("cpu", "int8")
+        model = _fallback_to_cpu()
         t0 = time.perf_counter()
-        text = _run(_whisper, audio_f32)
+        text = _run(model, audio_f32)
     log.info("STT %.0f ms", (time.perf_counter() - t0) * 1000)   # real transcription latency
     return text
 

@@ -2,17 +2,17 @@
 
     python run.py
 
-One window, both logs interleaved, one Ctrl-C stops both. They stay separate PROCESSES on
-purpose (spec/00 D19): the overlay is a dumb subscriber that reconnects, so if one dies the
-other keeps running and you restart just the changed one in its own tab. That restart-one
-independence is the whole reason two procs beats a merge *for dev* — a true single-process
-merge would force a full-app restart on every change.
+One window, both logs interleaved, and **one quit stops both** (spec/00 D39): whichever
+child exits CLEANLY takes the other with it, so tray > Quit and Ctrl-C in the console are
+each a single door out of the whole app.
 
-ponytail: launcher, not a real merge. Owed for the SHIPPED app (STATE, parked) — fuse into
-one process (Qt on the main thread, orchestrator.run on a background thread) so a user gets
-one thing to launch and one crash restarts everything, which is what a user actually wants.
-Also unowned here: a Windows Job-Object lifetime tie (launcher C2) — kill the launcher hard
-and these children can orphan; Ctrl-C and normal exit are handled, a SIGKILL of run.py is not.
+A CRASH is the exception and stays isolated (spec/00 D13/D19): a child that dies with a
+nonzero code leaves the other running, so you restart just the one that broke — and so a
+dead daemon still has a live overlay to be reported by. That restart-one independence is
+why two processes beat a merge, which D39 considered and rejected.
+
+ponytail: still no Windows Job-Object lifetime tie (launcher C2) — SIGKILL run.py and these
+children can orphan; Ctrl-C and normal exit are handled. Add it when orphans are seen.
 """
 from __future__ import annotations
 
@@ -26,16 +26,32 @@ CHILDREN = {
 }
 
 
+def stop_others(exits: dict[str, int | None]) -> bool:
+    """Should the survivors be stopped? True once some child has exited CLEANLY (code 0),
+    which is what a deliberate quit looks like — tray > Quit, or Ctrl-C in the console.
+
+    A crash (nonzero) is False: the survivor keeps running (D13/D19 crash isolation), and a
+    child still running (None) decides nothing either way."""
+    return any(code == 0 for code in exits.values())
+
+
 def main() -> int:
     procs = {name: subprocess.Popen(cmd) for name, cmd in CHILDREN.items()}
     reported: set[str] = set()
     try:
         while any(p.poll() is None for p in procs.values()):
-            for name, p in procs.items():
-                if p.poll() is not None and name not in reported:
-                    reported.add(name)
-                    print(f"[run] {name} stopped (exit {p.returncode}); the other keeps "
-                          f"running — restart it alone with: {' '.join(CHILDREN[name])}")
+            exits = {name: p.poll() for name, p in procs.items()}
+            for name, code in exits.items():
+                if code is None or name in reported:
+                    continue
+                reported.add(name)
+                if code == 0:
+                    print(f"[run] {name} quit — stopping the other too.")
+                else:
+                    print(f"[run] {name} CRASHED (exit {code}); the other keeps running — "
+                          f"restart it alone with: {' '.join(CHILDREN[name])}")
+            if stop_others(exits):
+                break
             time.sleep(0.3)
     except KeyboardInterrupt:
         pass
@@ -51,5 +67,25 @@ def main() -> int:
     return 0
 
 
+def _selfcheck() -> None:
+    """The D39 tie, all four cases. The policy is the only non-trivial part of this file;
+    spawning real processes to test it would test subprocess, not the rule."""
+    # Nothing has exited yet -> nobody is stopped.
+    assert not stop_others({"daemon": None, "overlay": None})
+    # A clean exit of EITHER side stops the other. These are the two doors out.
+    assert stop_others({"daemon": 0, "overlay": None}), "Ctrl-C in the console must stop the overlay"
+    assert stop_others({"daemon": None, "overlay": 0}), "tray Quit must stop the daemon"
+    # A crash of either side must NOT — the survivor keeps running (D13/D19).
+    assert not stop_others({"daemon": 1, "overlay": None}), "a daemon crash must spare the overlay"
+    assert not stop_others({"daemon": None, "overlay": 1}), "an overlay crash must spare the daemon"
+    assert not stop_others({"daemon": 3221225477, "overlay": None}), "a hard crash is still a crash"
+    # Mixed: one crashed earlier, then the other was quit cleanly -> stop.
+    assert stop_others({"daemon": 1, "overlay": 0})
+    print("run.py selfcheck OK — clean exit ties, crash isolates (D39)")
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    if "--selfcheck" in sys.argv:
+        _selfcheck()
+    else:
+        sys.exit(main())
