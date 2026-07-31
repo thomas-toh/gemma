@@ -94,6 +94,9 @@ scripts/           ← one-off smoke tests (e.g. b1_smoke.py)
 - Keep a running task list on multi-step work.
 - Review gate on git: show me the diff and the proposed commit message and get my
   explicit OK before any `git commit`; never `git push` without explicit approval.
+- While working through a task, maintain a log of "modified files" for that task. Then, 
+  for presentation completion of multi-step work: state at the end a "Changed files" 
+  section, list all files which were modified since the last commit by that session.
 
 ## Current state
 

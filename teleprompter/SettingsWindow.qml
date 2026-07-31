@@ -414,6 +414,11 @@ Window {
             y: parent.height + 6
             width: Math.max(parent.width, 216)
             padding: 5
+            // A press on the trigger must NOT auto-dismiss: the default policy closed the menu
+            // before the click reached the MouseArea below, which then saw a shut menu and
+            // reopened it. With both flags set, Popup closes only on a press outside the menu
+            // AND outside its parent (the trigger) — so the trigger's own toggle does the work.
+            closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside | Popup.CloseOnPressOutsideParent
             background: Rectangle {
                 radius: 10
                 color: Theme.surfacePop
