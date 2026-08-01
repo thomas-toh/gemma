@@ -5,9 +5,9 @@ schemas and tiers (hard rule 3); this module never hardcodes a tool definition. 
 guarantees, both binding:
 
 - **The brain only ever sees a tool this platform actually IMPLEMENTS** (spec/30 rule 3): a tool
-  with no backend, or above the enabled tier, is filtered out of the list handed to the adapter,
-  so the model cannot even name it. `execute()` re-checks anyway — the allowlist is the defence,
-  not the model (spec/50 rule 1).
+  with no backend, above the enabled tier, or whose connector the user has switched off is
+  filtered out of the list handed to the adapter, so the model cannot even name it. `execute()`
+  re-checks anyway — the allowlist is the defence, not the model (spec/50 rule 1).
 - **Every invocation is audited** (spec/30 rule 2 / spec/50 rule 2 / CLAUDE.md hard rule 4):
   run, refused or errored, one JSONL line lands in `logs/audit.jsonl` — the same `logs/` folder a
   user deletes to purge everything (spec/50 rule 3), so no separate purge action.
@@ -15,6 +15,11 @@ guarantees, both binding:
 Tiers (spec/30): 1 = read-only (no gate) · 2 = reversible (earcon announce) · 3 = destructive
 (propose-then-tap confirmation, D26). Only Tier 1 has backends today, and the Tier-3 gate renders
 on the Teleprompter (a separate surface), so `MAX_TIER` holds the ceiling at 1.
+
+Connectors (D38) are the SECOND, independent gate: a tier answers "may Gemma do this without
+asking?" — danger, the designer's judgement — while a connector answers "does this user want
+Gemma reaching that at all?" — consent, theirs. A tool passes both or is not offered. Turning a
+connector on can never raise a tier.
 
     python -m bridge.tools --selfcheck     # offline: filtering, dispatch, refusal, audit
 """
@@ -34,6 +39,7 @@ from typing import Callable
 from bridge.brains.base import ToolCall
 from bridge.config import load_schemas
 from bridge import log as _log
+from bridge import settings
 
 log = logging.getLogger("gemma.tools")
 
@@ -357,13 +363,65 @@ def _entry(name: str) -> dict | None:
     return next((t for t in _registry() if t.get("name") == name), None)
 
 
+def _connectors() -> dict[str, bool]:
+    """`{connector id: is it switched on}`, read FRESH from the user's settings (D38). Derived
+    from the schema's `connector_*` entries rather than a list here, so adding a connector is a
+    JSON edit (hard rule 3). Settings are re-read every turn, which is why a toggle applies to
+    the next utterance with no restart and no watcher."""
+    now = settings.load()
+    return {s["connector"]: bool(now.get(key))
+            for key, s in settings.schema()["settings"].items() if "connector" in s}
+
+
+def _connected(entry: dict, on: dict[str, bool]) -> bool:
+    """Has the user consented to this tool's connector? A tool naming a connector that has no
+    setting is treated as OFF, not on: an unrecognised id must fail closed, or a typo in the
+    registry would quietly hand the brain a tool nobody agreed to."""
+    return on.get(entry.get("connector"), False)
+
+
+def label_of(name: str) -> str:
+    """A tool said in a sentence a person would use, from the registry's `label` — or the bare
+    tool name if it has none. What the island shows while the tool runs and what the connector
+    card lists (D38); one wording, read from the schema by both (hard rule 3)."""
+    return (_entry(name) or {}).get("label", "") or name
+
+
+def implemented(entry: dict) -> bool:
+    """Could this tool run AT ALL on this machine — is there a backend, and is it within the tier
+    ceiling? Deliberately the designer's half of the question only; whether the user WANTS it is
+    the connector's, asked separately. The settings window calls this so a connector card can show
+    which of its tools are real today rather than promising what the tier still forbids."""
+    return entry.get("name") in _BACKENDS and entry.get("tier", 99) <= MAX_TIER
+
+
 def tool_specs() -> list[dict]:
-    """The tools handed to the brain this turn: only those with a backend on this platform and
-    within the enabled tier (spec/30 rule 3 — the model never receives a tool it cannot call)."""
-    return [
-        t for t in _registry()
-        if t.get("name") in _BACKENDS and t.get("tier", 99) <= MAX_TIER
-    ]
+    """The tools handed to the brain this turn: only those with a backend on this platform,
+    within the enabled tier, AND whose connector the user has switched on (spec/30 rule 3 — the
+    model never receives a tool it cannot call). Tier and connector are independent: either one
+    alone is enough to withhold a tool."""
+    on = _connectors()
+    return [t for t in _registry() if implemented(t) and _connected(t, on)]
+
+
+def disabled_note() -> str:
+    """One sentence for the system prompt naming what the user has switched OFF, or "" if
+    nothing is (D38). Without it a hidden tool is simply absent, and a model asked to find a file
+    improvises instead of saying it cannot — the can't-rendered-as-didn't failure D36 found in
+    `search_email`, which is a lie about what happened, not merely an unhelpful answer.
+
+    Only connectors that would OTHERWISE be usable are named — a connector with no implemented,
+    in-tier tool behind it is left unmentioned, because telling the brain "Web is off" implies
+    switching it on would work. Labels come from the schema, so this text follows the pane."""
+    on = _connectors()
+    live = {t["connector"] for t in _registry() if implemented(t)}
+    off = [s["label"] for s in settings.schema()["settings"].values()
+           if s.get("connector") in live and not on.get(s["connector"])]
+    if not off:
+        return ""
+    return (f" Switched off in this user's settings, so you have no way to reach them: "
+            f"{', '.join(off)}. If one of those is what a request needs, say plainly that it is "
+            f"switched off in Gemma's settings — never imply you looked and found nothing.")
 
 
 def execute(call: ToolCall, *, session: str = "", transcript: str = "") -> tuple[str, str]:
@@ -382,6 +440,12 @@ def execute(call: ToolCall, *, session: str = "", transcript: str = "") -> tuple
     elif entry.get("tier", 99) > MAX_TIER:
         content = f"Tool {name!r} needs a confirmation step that is not built yet."
         outcome = f"refused:tier_{entry.get('tier')}"
+    elif not _connected(entry, _connectors()):
+        # The consent gate, checked again here and not only in the filter (D38): a tool the user
+        # switched off must be dead even if something else calls it — history from before the
+        # toggle, a resampled round, a future caller that skips tool_specs().
+        content = f"Tool {name!r} is switched off in this user's settings."
+        outcome = f"refused:connector_{entry.get('connector')}"
     else:
         try:
             content, outcome = backend(args), "ok"
@@ -417,8 +481,8 @@ def _audit(session, transcript, tool, args, outcome, duration_ms) -> None:
 
 
 def _selfcheck() -> None:
-    # No network, no real audio: the logic worth guarding is the tool FILTER (a tool the model
-    # must not see), dispatch, the refusal backstop, and that every path audits.
+    # No network, no real audio: the logic worth guarding is the two GATES (a tool the model must
+    # not see), dispatch, the refusal backstop, and that every path audits.
     from pathlib import Path
     import tempfile
 
@@ -426,16 +490,48 @@ def _selfcheck() -> None:
 
     reg = _registry()
     assert reg, "spec/schemas/tools.json must carry the starter tools"
+    assert all(t.get("connector") for t in reg), "every tool declares a connector (D38)"
 
-    # The filter is the security boundary: the brain must be offered ONLY implemented, in-tier
-    # tools. Every Tier-2/3 starter tool (open_app, set_timer, …) must be absent, because a tool
-    # the model cannot see is a tool it cannot call (spec/30 rule 3).
+    # Both gates read the USER's settings, so pointing them at an empty file is what makes this
+    # check deterministic — otherwise it would pass or fail with whatever is toggled on this box.
+    # No try/finally: this runs as a one-shot script, so a leaked env var in a process that is
+    # either about to print OK or about to die on a traceback buys nothing.
+    settings_dir = tempfile.TemporaryDirectory()
+    os.environ["GEMMA_SETTINGS"] = str(Path(settings_dir.name) / "settings.json")
+    keys = [k for k, s in settings.schema()["settings"].items() if "connector" in s]
+    assert keys, "the connectors pane must declare its settings (schemas/settings.json)"
+
+    # A fresh install: System only. Files, Email and Clipboard are consent, not danger, and stay
+    # off until they are asked for (D38) — so Gemma answers and dictates and reaches nothing.
+    assert {t["name"] for t in tool_specs()} == {"system_status"}, tool_specs()
+
+    # Every connector on. The four Tier-1 tools appear — and not one Tier-2 tool does, which is
+    # the point: consent cannot raise a tier, so the two gates are genuinely independent.
+    for k in keys:
+        settings.set(k, True)
     offered = {t["name"] for t in tool_specs()}
     assert offered == {"system_status", "read_clipboard", "find_document", "search_email"}, offered
     for t in reg:
         if t["tier"] > MAX_TIER:
             assert t["name"] not in offered, f"{t['name']}: tier {t['tier']} must not be offered"
     assert all("tier" in t for t in tool_specs()), "specs carry the tier for the loop to read"
+    # ...and with everything on there is nothing to warn the brain about.
+    assert disabled_note() == "", disabled_note()
+
+    # The connector alone is also sufficient to exclude: switching Files off removes exactly
+    # find_document and leaves every other tool where it was.
+    settings.set("connector_files", False)
+    assert {t["name"] for t in tool_specs()} == offered - {"find_document"}, tool_specs()
+
+    # ...and the brain is TOLD, in prose. A hidden tool is merely absent, which reads as "no such
+    # capability exists" and gets improvised around — the can't-rendered-as-didn't failure of D36.
+    # Only connectors with a usable tool behind them are named: saying "Web is off" would imply
+    # switching it on would work, and there is no web tool at all.
+    note = disabled_note()
+    assert "Files" in note and "switched off" in note, note
+    for absent in ("Web", "Apps & media", "MCP"):
+        assert absent not in note, f"a connector with no live tool must not be named: {note}"
+    settings.set("connector_files", True)
 
     # find_document's trust boundary: the model's words end up inside a SQL string literal, so
     # everything that could close it or steer the query is dropped, and a bad date never lands.
@@ -511,17 +607,29 @@ def _selfcheck() -> None:
         content, outcome = execute(ToolCall("8", "search_email", {}))
         assert outcome == "ok" and content.strip(), (content, outcome)
 
-        # Every one of those eight calls left exactly one audit line, with the required fields.
+        # A tool whose connector the user switched off is REFUSED even when called directly, not
+        # merely hidden (D38): the filter is convenience, the allowlist is the defence. This is
+        # the path a stale round or a caller that skips tool_specs() would take.
+        settings.set("connector_clipboard", False)
+        content, outcome = execute(ToolCall("9", "read_clipboard", {}))
+        assert outcome == "refused:connector_clipboard", (content, outcome)
+        assert "switched off" in content, content
+        settings.set("connector_clipboard", True)
+
+        # Every one of those nine calls left exactly one audit line, with the required fields —
+        # a refused call is audited exactly as a run one is (spec/30 rule 2).
         lines = AUDIT_FILE.read_text(encoding="utf-8").splitlines()
-        assert len(lines) == 8, f"every call must audit once, got {len(lines)}"
+        assert len(lines) == 9, f"every call must audit once, got {len(lines)}"
         rec = json.loads(lines[0])
         assert set(rec) == {"ts", "session", "transcript_snippet", "tool", "args",
                             "outcome", "duration_ms"}, sorted(rec)
         assert rec["tool"] == "no_such_tool" and rec["session"] == "s"
         assert rec["transcript_snippet"] == "hi", "the triggering transcript is recorded"
 
-    print(f"tools selfcheck OK: {len(offered)} Tier-{MAX_TIER} tools offered "
-          f"({', '.join(sorted(offered))}), unknown/out-of-tier refused, every call audited")
+    os.environ.pop("GEMMA_SETTINGS", None)
+    print(f"tools selfcheck OK: {len(offered)} Tier-{MAX_TIER} tools offered with every "
+          f"connector on ({', '.join(sorted(offered))}); tier, connector and the allowlist each "
+          f"refuse on their own, and every call is audited")
 
 
 if __name__ == "__main__":

@@ -134,24 +134,49 @@ _whisper_lock = threading.Lock()   # D39: run() warms this on a background threa
                                    # lazy init below and build two CUDA models.
 
 
-def _add_cuda_dll_dirs() -> None:
-    """Windows: the pip `nvidia-*-cu12` packages drop cuBLAS/cuDNN/cudart DLLs inside the
-    `nvidia` package dir, which is NOT on the DLL search path, so ctranslate2 can't find
-    them. Add them. No-op off Windows or if the packages aren't installed (then transcribe
-    falls back to CPU). GPU also needs `nvidia-cuda-runtime-cu12` (cudart) — see pyproject
-    `[gpu-cuda]` extra."""
+_cuda_dlls: list = []          # holds the loaded modules; see _load_cuda_dlls
+
+
+def _load_cuda_dlls() -> None:
+    """Windows: make the pip `nvidia-*-cu12` CUDA libraries reachable by ctranslate2.
+
+    The packages drop cuBLAS/cuDNN/cudart inside the `nvidia` package dir, which is not on the
+    DLL search path. `add_dll_directory` alone is NOT enough and was the bug (measured
+    2026-08-01): `ctypes` honours it, but ctranslate2 resolves cuBLAS by a route that does not,
+    so every transcribe raised "Library cublas64_12.dll is not found or cannot be loaded" and
+    fell back to CPU — silently costing ~700 ms on each one, on a box with a working GPU.
+
+    So we also PRELOAD each DLL by absolute path. Windows keys loaded modules by base name, so
+    ctranslate2's later `LoadLibrary("cublas64_12.dll")` finds the copy already in the process
+    and never searches at all. Load order follows the dependency chain; the modules are kept in
+    `_cuda_dlls` because nothing else holds a reference.
+
+    No-op off Windows, or when the packages aren't installed — then transcribe uses CPU, which
+    is the documented fallback, not a failure. See pyproject's `[gpu-cuda]` extra."""
     import os
-    if not hasattr(os, "add_dll_directory"):        # non-Windows: nothing to do
+    if not hasattr(os, "add_dll_directory") or _cuda_dlls:   # non-Windows, or already done
         return
+    import ctypes
     import glob
     import importlib.util
     spec = importlib.util.find_spec("nvidia")
     if spec is None or not spec.submodule_search_locations:
         return
     base = spec.submodule_search_locations[0]
-    for d in glob.glob(os.path.join(base, "*", "bin")):
-        if os.path.isdir(d):
-            os.add_dll_directory(d)
+    bins = [d for d in glob.glob(os.path.join(base, "*", "bin")) if os.path.isdir(d)]
+    for d in bins:
+        os.add_dll_directory(d)                  # kept: other loaders DO honour it
+    order = ("cudart64", "cublasLt64", "cublas64", "cudnn")
+    dlls = [p for d in bins for p in glob.glob(os.path.join(d, "*.dll"))]
+    dlls.sort(key=lambda p: next((i for i, k in enumerate(order)
+                                  if os.path.basename(p).startswith(k)), len(order)))
+    for p in dlls:
+        try:
+            _cuda_dlls.append(ctypes.WinDLL(p))
+        except OSError:
+            pass          # a lib we don't need, or one whose own deps are absent — CPU still works
+    if _cuda_dlls:
+        log.info("preloaded %d CUDA libraries for ctranslate2", len(_cuda_dlls))
 
 
 def _load_whisper(device: str, compute_type: str):
@@ -182,7 +207,7 @@ def _ensure_whisper():
         if _whisper is None:
             import ctranslate2
             if ctranslate2.get_cuda_device_count() > 0:
-                _add_cuda_dll_dirs()
+                _load_cuda_dlls()
                 _whisper = _load_whisper("cuda", "float16")
             else:
                 _whisper = _load_whisper("cpu", "int8")
@@ -311,6 +336,19 @@ def _selfcheck() -> None:
     while not eos.update(True):
         n += 1
     assert n + 1 == DICTATION_MAX_CHUNKS, (n + 1, DICTATION_MAX_CHUNKS)
+
+    # 4) CUDA preload (no GPU needed): must be safe to call anywhere, and must not re-load on a
+    # second call — `transcribe` may reach it again on the CPU-fallback path, and reloading the
+    # same 17 libraries per turn would be a slow no-op nobody would notice.
+    _load_cuda_dlls()
+    n_first = len(_cuda_dlls)
+    _load_cuda_dlls()
+    assert len(_cuda_dlls) == n_first, "preloading CUDA twice must not reload the libraries"
+    if n_first:
+        names = {__import__("os").path.basename(getattr(d, "_name", "")).lower()
+                 for d in _cuda_dlls}
+        assert any(n.startswith("cublas64") for n in names), \
+            f"cuBLAS must be among the preloaded libraries, got {sorted(names)}"
 
     print(f"selfcheck OK: end-of-speech after {SILENCE_CHUNKS} silent chunks "
           f"(~{SILENCE_CHUNKS * VAD_CHUNK_MS} ms), give-up at {NOSPEECH_CHUNKS} "

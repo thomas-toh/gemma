@@ -939,3 +939,81 @@ not an architecture one. Merging would have paid for it with the three things D1
 
 Build status: STATE, Config & routing / Track G.
 
+**D40 (2026-08-01): the settings window reads as part of the system, not as an app with a look.**
+D29 built a window with a design of its own — a coded `SEC.0n` band list, card rosters in
+horizontally-scrolling bands, a three-way segmented nav in a top bar, a cool-neutral field and
+Martian Mono on every machine value. It is coherent, and it is unmistakably *designed*. Gemma is a
+desk utility that lives beside Explorer and Settings; the brief is now that it should be taken for
+part of the machine (Thomas). The reference is a settings pane you have already used a hundred
+times, and matching it is the point rather than a failure of nerve.
+
+- **A left sidebar, generated from the schema.** One nav item per pane, grouped under quiet
+  headings, with the search field at the top. This replaces a top-bar toggle that fitted three
+  sections and had no room for a fourth — there are now five and the four absent settings
+  (spec/70 §3) still to come. `panes` already describes this; the sidebar reads it.
+- **Tables replace the card rosters, amending D29.** Seven connectors in a scrolling band showed
+  three and a bit; a table shows all seven and is what an OS uses to list connected things. The
+  same applies to the model roster. What a card carried — name, sub-line, tool list, state —
+  becomes columns. A tool list of more than one item is one line per tool, not a dot-separated
+  run, because a connector *gaining* tools is the expected case (D38) and dots stop scanning at
+  about three.
+- **The row is the atom.** Label, description under it, control right, hairline between, all
+  vertically centred so a row with a description and one without read as the same horizontal
+  line. A description takes the SIZE of the label it belongs to — weight and colour separate
+  them, not scale.
+- **Type: four sizes** — 18 title · 16 section · 16 body · 14 floor, replacing 18/16/14. It was
+  first cut a step smaller (17/15/14/12) on the reasoning that Qt's `pixelSize` and CSS's
+  `font-size` agree on Inter, which they do; side by side on the real display the window still
+  read smaller than the page it was measured against, so the screen won the argument. Section and
+  body are deliberately the same size: weight and spacing separate a heading, not scale. These
+  tokens were already the settings window's alone, so nothing on the island moves.
+- **The field turns warm, reversing 2026-07-26.** That call was made against an olive that read
+  as warm espresso, and cool-neutral is a large part of why the window reads as designed. The
+  greys it is now measured against are warm.
+- **Mono is withdrawn.** Model ids read as machine values because of what they are — hyphens,
+  digits, no capitals — and Windows sets neither filenames nor shortcuts in a second typeface.
+  `Theme.fontMono` stays declared for a caller that earns it; nothing references it. The dropdown
+  loses its `mono` variant with it, so there is one class and no size for a call site to pick.
+- **The icon font is bundled WHOLE, not subset** (Thomas, 2026-08-01). The old 14-glyph subset was
+  the binding constraint on this design — no search, no mic, no iOS chevron, and nothing meaning
+  "files" or "mail", so the first cut shipped a hand-drawn mic and no nav icons at all. The full
+  file costs ~10 MB and removes the class of problem: an icon is one line in `ico` and nothing
+  else. **Its codepoints are the Material Symbols mapping, which differs from the older Material
+  Icons one the subset used** (`check` E5CA not E668, `close` E14C not E5CD, `edit` E150 not
+  F097) — every existing glyph had to be re-mapped when the file was swapped, not just the new
+  ones, or known-good icons would have silently become different pictures.
+- **Effort stays DOTS** (D29's `EffortDots`, recovered rather than rewritten). A word-segmented
+  control was tried and rejected: the five steps are a magnitude, and a cluster that grows says
+  that where five words do not. It shares one cell size with the theme picker, so both sit in the
+  same tight square package.
+- **Red splits in two.** `pulse` stays the fault colour, keeping "red never means the mic can hear
+  you"; `danger` becomes a real red for the two destructive *actions* (close hover, Remove),
+  because a muted berry on a solid button reads as disabled.
+- **Destructive actions ask.** Remove sits bottom-left of its sheet, away from Done, and opens a
+  confirmation naming what it will remove.
+- **Primary becomes two controls, because it was one control doing two jobs.** A per-row toggle
+  labelled "Primary" can be switched on for three providers at once, which is not what a primary
+  *is*. The roster's toggle is now **Active** (deactivating a model is a real thing to want) and
+  the default model moves into the per-model sheet as a **button** that takes the title from
+  whoever holds it, with the roster showing a badge. Exactly one holder, by construction.
+- **Gem moves to the sidebar's bottom-right corner**, standing on the window's own edge, with the
+  mic-status glyph balancing her at bottom-left. The glyph replaces the "Mic closed" text and
+  inherits its rule (spec/50 rule 4): it whitens and fills with the level only on real capture,
+  never inferred, and it is not a button — it reports, it does not act. Placing her needed the
+  kit's own ink bounds: a 26×26 cell carries ~6 empty cells around her, so a frame placed flush
+  against an edge floats away from it. Those bounds are measured from the kit, never nudged.
+
+The **search field** ships **disabled and dimmed** — nothing searches yet, and a box that takes
+typing and does nothing with it is the same species of lie as an indicator that lights while the
+mic is shut; dimmed is this window's own idiom for "decided, not built". What it should search is
+folded into the absent-settings design session (spec/70 §3).
+
+**Speech** and **Dictation** appear in the sidebar but are **not clickable** — the four absent
+settings own their own design session (spec/70 §3), and a nav item is how the window shows where
+they are going without pretending they exist. Not in this decision at all: an **About** page, which
+is new content with no settings behind it. Blueprint:
+`sandbox/settings-claude-style-mockup.html` (gitignored; `?copy` edits its prose in place,
+`?sheet=` and `?mic=` reach the states a screenshot cannot).
+
+Build status: STATE, Config & routing.
+

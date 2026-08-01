@@ -96,6 +96,12 @@ class Session:
     # a per-provider constructor.
     max_tokens: int | None = None
     temperature: float | None = None
+    # False = this call must NOT reason before answering; None = leave the provider's default
+    # alone. Stated as a provider-agnostic INTENT, never as a wire parameter: each provider
+    # spells "don't think" differently (on the OpenAI wire it is a value of the effort scale,
+    # Anthropic uses a separate block), so translating it is the adapter's job. An adapter with
+    # no way to say it sends nothing and the model may think — a degradation, not an error.
+    thinking: bool | None = None
     # ponytail: `prefs` (spec/20) deferred until something reads it.
 
 
@@ -199,6 +205,12 @@ async def transform(
         system=TRANSFORM_SYSTEM,
         max_tokens=max_tokens,
         temperature=temperature,
+        # A transform NEVER reasons — an invariant of the verb, like temperature=0 above, not a
+        # user setting. "Rewrite this, never answer it" leaves nothing to deliberate about, and
+        # reasoning here is pure cost in a path that sits between speaking and pasting: measured
+        # 2026-08-01 on qwen3:8b, one dictation-length cleanup took 6.54 s thinking against
+        # 0.44 s without, and on the harder cases it looped to 71k tokens and never answered.
+        thinking=False,
     )
     utterance = f'{instructions}\n\nText to transform:\n"""\n{text}\n"""'
 
@@ -246,6 +258,10 @@ def _selfcheck() -> None:
     assert fb.tools == [], "transform must pass no tools"
     assert fb.seen.system == TRANSFORM_SYSTEM, "transform must use the guardrail, not the persona"
     assert fb.seen.temperature == 0.0, "cleanup must be able to run deterministic"
+    assert fb.seen.thinking is False, \
+        "a transform must never reason — an invariant of the verb, on every provider"
+    assert Session(id="t").thinking is None, \
+        "a plain session leaves the provider's own default alone"
     assert fb.seen.history == [], "transform carries no conversation history"
     assert "Capitalise and punctuate." in fb.utterance and "hello world" in fb.utterance
 

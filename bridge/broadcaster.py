@@ -98,6 +98,10 @@ def m_mic(level: float) -> dict:
     return {"type": "mic", "level": level}
 
 
+def m_tool(name: str, label: str = "", done: bool = False) -> dict:
+    return {"type": "tool", "name": name, "label": label, "done": done}
+
+
 def m_latency(metric: str, ms: float) -> dict:
     return {"type": "latency", "metric": metric, "ms": ms}
 
@@ -398,6 +402,8 @@ def _selfcheck() -> None:
         m_transcript("hello world"), m_transcript("partial", final=False),
         m_response(delta="hi "), m_response(done=True),
         m_mic(0.0), m_mic(1.0),
+        m_tool("search_email", "Search your inbox for a message"),
+        m_tool("search_email", done=True),
         m_latency("feedback", 1200), m_latency("first_word", 3400),
         m_error("boom", "auth"), m_error("no kind given"),
     ]

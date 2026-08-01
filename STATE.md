@@ -35,10 +35,52 @@ quality it stood for is real and now has its own section — **Config & routing*
 **Queued next (2026-07-31, Thomas) — three checklists.** All three are *design-first*; none should
 start as code.
 
+**Dictation latency — a day of measurement, 2026-08-01. Four bugs found, all fixed, nothing yet
+committed to spec.** The complaint was "local cleanup is slower than Groq". It was, by ~10×, for
+reasons that had nothing to do with the model:
+
+- **STT ran on the CPU, not the 5080** (~950 ms → **~35 ms**). `_add_cuda_dll_dirs()` called
+  `os.add_dll_directory()`, which **ctypes honours and ctranslate2 does not** — so the directory was
+  right, the DLL was loadable, and every transcribe still failed with `cublas64_12.dll is not found`
+  and fell back to CPU, 16 times in the log before anyone noticed. Reordering the calls does not
+  help (tested both ways). Fix: **preload each CUDA DLL by absolute path** — Windows keys loaded
+  modules by base name, so ctranslate2's later `LoadLibrary` finds the copy already in the process.
+  Now `_load_cuda_dlls()` in `listen.py`, guarded by an idempotency check that runs without a GPU.
+- **`localhost` cost ~2 s per connection** (→ **0.2 ms**). It resolves to IPv6 `::1` first and every
+  local runner binds IPv4, so the wasted attempt was paid on *every* call, not just failures.
+  Rewritten to `127.0.0.1` in `base_url()` — deliberately in the URL builder, not only the
+  catalogue default, so it repairs endpoints already stored in a profile and ones typed by hand.
+  The three local cards now default to `127.0.0.1` too.
+- **A dead local runner took 9.66 s to report itself** (→ ~2 s). The SDK retried a refused loopback
+  socket twice. Local providers now get `max_retries=0` and a 2 s **connect** budget; the 600 s
+  read timeout is untouched, because a local model may legitimately think for a long time once it
+  HAS answered. Cloud providers keep their retries — their faults really are transient.
+- **Thinking models reasoned during cleanup** (6.5 s → **0.44 s**, and one case looped to **71,391
+  tokens** and never answered). `transform` now sets `Session.thinking = False` — an invariant of
+  the verb, beside `temperature=0`, not a user setting: a constrained rewrite has nothing to
+  deliberate about. Each adapter translates it; on the OpenAI wire "off" is a *value* of the effort
+  scale (`reasoning_effort: "none"`), gated on the card listing `none`, because a rejected value
+  costs the whole turn. Ollama's card now declares it — `think:false` and `chat_template_kwargs`
+  are both ignored on `/v1` (tested, v0.32.5), so this is the only reachable route.
+- **Owed:** none of this is in spec yet, and the `transform`-never-thinks invariant belongs in
+  spec/20 beside the other Session overrides.
+
+- [ ] **A deleted model is reported as `unknown`** (found 2026-08-01). Delete a model from Ollama and
+  Gemma finds out only when it calls, then flattens Ollama's precise `404 · model 'x' not found`
+  into the generic `unknown` bucket — so dictation silently pastes raw transcripts and the assistant
+  says "something went wrong on my end". Same **can't-rendered-as-didn't** failure D36 fixed for
+  tool calls. The settings window doesn't catch it either: the picker fetches the live list but
+  nothing compares the *stored* selection against it. Fix is small but touches spec/20's closed set
+  of error kinds, so it wants a decision: ① map `NotFoundError`/404 to its own kind in `compat.py`
+  (by type and status, never message prose — B-02) · ② a user-facing line in the orchestrator's
+  message map · ③ optionally, flag a stored model missing from the fetched list in the settings UI.
+
 - [ ] **The absent settings — wants its own design session, probably its own tab.** Four settings
   are specced in spec/70 §3 but surfaced nowhere: **STT model · wake phrase · TTS voice ·
   word-replacement table**. Thomas: likely a **tab of their own** rather than more rows on an
-  existing pane. Owed by that session: which tab (and whether Speech is the grouping) · types,
+  existing pane. **Also owed by this session (2026-08-01): the sidebar SEARCH** — it ships disabled
+  under D40 and what it should search (labels only, or help text too, or connector/tool names) is
+  a design question. Owed by that session: which tab (and whether Speech is the grouping) · types,
   defaults and validation for each · the word-replacement **table editor**, which is a repeating
   from→to grid, not a row control, and so has no precedent in the window yet · whether STT model is
   per-mode (D12 says dictation is the stricter test) or one process-wide value, since the code holds
@@ -79,6 +121,34 @@ start as code.
   (S-06) both wait on it. B2's adapter already exists (D30) and speaks to any OpenAI-compatible
   endpoint, and the router (D33) can already point a role at one — so this is now "stand a local
   server up and pick it", not new adapter work.
+  **Stood up 2026-08-01.** Ollama v0.32.5 on the 5080, reached through B2 with no adapter work —
+  `qwen3:8b` · `qwen3:14b` · `qwen3.5:9b` pulled and measured (scoreboard in Track D). VRAM at the
+  4096 default: 5.58 / 9.65 / 5.64 GB — it scales with `num_ctx`, so a 128 k context costs ~11 GB
+  for nothing. **Context cannot be set through `/v1`** (`num_ctx` ignored in both shapes; native
+  `/api/chat` honours it but *reloads the model*, ~3.4 s), so it is a load-time property, not a
+  per-call knob — and the `"context": true` capability on the three local cards is **read by
+  nothing** and arguably unimplementable as declared. Ollama needs **GGUF**; an ONNX build is the
+  wrong artefact (it targets ONNX Runtime GenAI, a *library*, while B2 needs an HTTP endpoint).
+  Model eviction is `OLLAMA_KEEP_ALIVE`, default 5 min — an intermittent dictation habit pays a
+  cold start (8–12 s) each time.
+  - [ ] **Headless Ollama — designed, not built** (Thomas: no tray clutter). The tray comes from
+    `ollama app.exe`; `ollama.exe serve` is the server and has no GUI. So: disable its autostart
+    (Task Manager > Startup, a user action), and have Gemma spawn `ollama.exe serve` with
+    `CREATE_NO_WINDOW` when a role resolves to a local runner and nothing is listening.
+    **"Start if absent, never stop"** — deliberately one-way: no supervision, no restart logic, no
+    orphan handling, and Gemma never owns a third-party process's lifetime (D39 declined that for
+    its own two). Belongs in D39's warm-up thread so the server is up before the first dictation.
+    Undecided: whether it is always-on or behind a setting. If `ollama.exe` is absent, do nothing —
+    D1 already pastes the raw transcript when cleanup is unreachable.
+  - [ ] **Untested: `reasoning_effort: "none"` against a NON-thinking model on Ollama.** Documented
+    at the endpoint rather than per model, so it should be a no-op, but a rejected value costs the
+    whole turn. One pull of any non-thinking model settles it.
+  - **Models NOT worth pulling for cleanup:** anything with a thinking mode (the off-switch is
+    provider-specific and may be unreachable through `/v1` — Qwen cost a day), so **Gemma 4**,
+    **GPT-OSS** (requires effort *levels*, ignores booleans) and **DeepSeek-R1** are all deferred.
+    Untried and worth it: `llama3.1:8b` locally (the model that scores 6/6 on Groq, ~4.9 GB),
+    `gemma3:12b` (no thinking at all), `phi4-mini:3.8b` (a cheap punt — if 3.8b suffices, VRAM stops
+    mattering). **Qwen3.6 is out**: smallest is 27b ≈ 17 GB, over the card.
 - **Launcher / packaging** — tray autostart, launcher option **C2** (Job Object lifetime tie, so a
   SIGKILL of `run.py` cannot orphan children), daemon-death made visible in the tray, and a
   **windowless daemon** at packaging, which is what finally removes the console as a thing to look
@@ -92,6 +162,38 @@ start as code.
   either way — it is "Gemma", not "bridge".
 
 **Owed designs — pick up by mood:**
+- **Commands vs auto-detection for spoken lists** (Thomas, 2026-07-31; **gates the D37 pre-pass**).
+  VoiceInk uses no list commands — the model renders a list from ordinary speech. **The tell is in
+  our own suite:** case ⑧ (`"I need to do three things one call the bank two send the email three go
+  home"`) is scored a FAILURE only because the command contract says so; a speaker saying that
+  almost certainly wants a list. And case ③'s ambiguity disappears, because nothing has to identify
+  a separator. Against: it deliberately loosens the CLEANUP-NOT-REWRITING rule tightened 2026-07-28
+  (*"keep the speaker's own structure"*), and detection quality becomes model quality. Wants a
+  settings toggle either way, and a conscious reversal rather than a quiet reinterpretation.
+  Failure shapes differ usefully: today's failures **delete words silently**; auto-detection's
+  failure is **unwanted structure**, which is visible the moment you look at the paste.
+- **The dictation cleanup test suite, in TWO TIERS** (Thomas, 2026-07-31). What exists covers list
+  formatting and one fidelity sample; the contract in `DICTATION_CLEANUP` names the rest — fillers ·
+  self-corrections · spoken punctuation **and its false-positive guard** ("a period of rest") ·
+  spelled-out acronyms · layout cues incl. **sign-offs** ("best regards", untested by anything) ·
+  word fidelity · never answering a dictated question. Machinery is not new: `_FORMAT_CASES` already
+  has the shape `(said, want, unwanted, why)` and `_format_verdict()` now scores it.
+  **Two non-obvious parts:** ① **word fidelity cannot be a substring assertion** — compare the
+  output's word multiset against the input's, allow deletions, flag **insertions**; that is what
+  caught `llama-3.1-8b` scoring 6/6 while deleting "wanted to say". ② **size fights cost** — each
+  case is a live call carrying the full prompt (~2k tokens), so a 40-case suite is ~80k tokens per
+  model, roughly Groq's entire free daily tier. Hence two tiers: a **short smoke set** behind a
+  user-facing button, the **full suite** as a maintainer command. A local model makes the full tier
+  free to run.
+- **Model presentation — publish MEASUREMENTS, never recommendations** (Thomas, 2026-07-31). A
+  curated "recommended" badge is a treadmill: re-earned at every release, and a stale recommendation
+  misleads worse than silence. A **measurement** does not rot — "8/9 on 2026-08-01" stays true, and
+  anything untested reads **"untested"**, which every new release gets at zero maintenance cost.
+  Pair with a **"Test for cleanup" button** beside the model picker, reusing the D30 reachability-Test
+  pattern, so a user generates evidence for the model *they* care about — their key, their tokens.
+  **Do NOT disallow models** — the evidence is far too thin to block someone's paid model, a
+  blocklist rots, and it breaks D30's rule that reachability is schema truth. What needs curating is
+  small: the per-role **default**, one per provider, which is also what keeps the picker optional.
 - **"Listen to me" / the always-open mic.** Reviving any always-open-mic mode must answer spec/50
   rule 4 truthfully. Thomas' view: a config-time warning that the mic is always on may do the same
   job as a live indicator. Pushback on record: consent to a *capability* is not the same as
@@ -150,8 +252,39 @@ recorded in spec/00 §D25 and `spec/schemas/targets.json`).
 
 ## Config & routing — the settings window + the router
 
-Spans Track B (the router) and Track P (the window). Deliberately **not** a new component letter;
-it is the unfinished half of D29/D30/D33.
+- **BUILT (D40, 2026-08-01) — the settings window re-cut as a system-native surface.** Decision
+  and what it amends: spec/00 D40. Designed against `sandbox/settings-claude-style-mockup.html`
+  (gitignored; `?copy` edits its prose in place, `?sheet=add|add2|edit|confirm` and
+  `?mic=0.7|live` reach the states a screenshot cannot). Built through ~10 rounds of Thomas's
+  design review; every offline check green throughout.
+  - **`Theme.qml`:** the warm field (reversing the cool-neutral set of 2026-07-26), the four-size
+    scale **18/16/16/14**, `controlHeight`, and `danger` split from `pulse` so a destructive
+    button is a real red while faults stay berry. The island is untouched — these tokens were
+    already the window's alone.
+  - **`SettingsWindow.qml` rewritten.** Sidebar generated from `panes` (+ Speech and Dictation as
+    unclickable `soon` items); header row carrying the page title, its one action and Windows'
+    own caption buttons; Models and Connectors as TABLES, retiring D29's card rosters; the three
+    sheets (Add a model, per-model settings, confirm-before-remove). Mono is gone; dropdowns are
+    one class with an explicit left/right orientation.
+  - **The icon font is bundled WHOLE** (Thomas supplied it) — the 14-glyph subset was the binding
+    constraint. Codepoints re-mapped across the board: the full Symbols font maps the same names
+    differently from the old Material Icons subset, so a straight swap would have silently
+    changed known-good icons.
+  - **A palette rule came out of it, recorded in Theme.qml.** Three separate "flash on hover"
+    reports had one cause: a `ColorAnimation` interpolates ALPHA too, so animating a translucent
+    token against an opaque one makes the control briefly see-through on the way. `uiEdgeHover`
+    and `uiTrackOff` are now the composited OPAQUE values (identical at rest), and the button's
+    hover is an opaque step off `surfaceLift`. The rgba tokens that remain are safe because they
+    animate against `transparent`, where fading up from nothing is the point.
+  - **Guarded:** `settings_check` walks every pane from the schema and still fails on any QML
+    warning; the D38 cross-schema guards are intact; `bridge.orchestrator --selfcheck` now
+    asserts the persona actually NAMES a switched-off connector (the wiring, not just the
+    sentence — verified to fail when detached).
+  - **Owed:** the **Add a model** sheet and the **remove confirmation** have never been looked at
+    — `settings_check` only proves they do not throw. And the **tool-activity indicator** still
+    has no renderer: Contract P's `tool` message and `overlay.tool` exist and are guarded, but
+    nothing on the island draws it (this is the surviving half of D38's item 9; the connector
+    cards half was absorbed into D40's table).
 
 - **Built — the settings window (D29):** a schema-driven QML window off `spec/schemas/settings.json`
   (defaults, `built` flags and the provider catalogue all live there, so a knob is a JSON edit).
@@ -502,33 +635,50 @@ it is the unfinished half of D29/D30/D33.
     the speaker is issuing it, not inside a sentence doing something else · never emit an empty
     marker and never drop words to make a list fit. All four are now committed cases, so they
     cannot regress silently.
-  - **⚠ BROKEN AS CONFIGURED — measured 2026-07-31, `--check-format`, 3 of 9 FAIL on
-    `groq/llama-3.1-8b-instant`,** which is what `cleanup_dictation_model` points at today. The
-    counting rules are **model-dependent**: they hold on 70B and slide off small models (8B and
-    `gpt-4o-mini` fail the same way). Failing cases, all of them word-losing, not merely
-    mis-formatted:
-    ① `"...one buy two apples two get milk..."` → `1. Buy / 2. Get milk` (**"apples" dropped**) ·
-    ② `"I need to do three things one call the bank two send the email three go home"` → a numbered
-    list, when it contains **no command at all** · ③ `"list one is the priority list two can wait"`
-    → `1. is the priority list 2. can wait` (**"list one" swallowed**). ② and ③ are the exact
-    defects the three prompt rules closed on 70B, re-opened by the model change.
-    **The mention cases still pass on 8B**, so the headline failure ("add a numbered list to the
-    contract") is safe — it is the *counting* half that needs a bigger model.
-    Scoreboard: 70B **5/5** (original cases only) · `gpt-4o-mini` **8/9** · 8B **6/9**. The full 9
-    have never run green on any one model in one pass.
+  - **THE OLD SCOREBOARD WAS MEASURED WITH A BENT YARDSTICK — VOID.** Every figure recorded before
+    2026-08-01 (70B 5/5 · `gpt-4o-mini` 8/9 · 8B 6/9) came from a `_check_format` that compared
+    `want` **case-sensitively** against the raw output while comparing `unwanted` case-INsensitively
+    against a lowercased one. The `want` entries are lowercase in the data, so a model that
+    CAPITALISED a wanted phrase was marked failed — and the prompt *requires* capitalisation. The
+    suite was penalising correct behaviour, and worse, **rewarding models that left everything
+    lowercase**, which is one of qwen3:8b's actual defects. Fixed 2026-08-01: the comparison is now
+    the pure `_format_verdict()`, case-insensitive on both sides, guarded in the offline selfcheck
+    (extracted precisely so it could be — inline, it needed a live model and so was never tested).
+    Do not quote the old numbers against the new.
+  - **Scoreboard, re-measured 2026-08-01 with the corrected scoring.** Local runs repeated ×3 and
+    identical every time (temperature 0 is genuinely deterministic). Format = the 9 `_FORMAT_CASES`;
+    fidelity = 6 checks on one realistic dictation, plus a word-level diff.
+
+    | model | format | fidelity | words dropped | warm |
+    |-------|--------|----------|---------------|------|
+    | `groq/llama-3.3-70b-versatile` | **9/9** | **6/6** | none | ~0.24 s |
+    | `ollama/qwen3:8b` | **9/9** | 5/6 (`you know`) | none | ~0.44 s |
+    | `ollama/qwen3.5:9b` | 8/9 (case 3) | 5/6 (`you know`) | none | ~0.45 s |
+    | `ollama/qwen3:14b` | 7/9 (cases 3, 6) | **6/6** | none | ~0.61 s |
+    | `groq/llama-3.1-8b-instant` | 6/9 (3, 8, 9) | 6/6 | **`wanted to say`, `and think`** | ~0.15 s |
+
+    **`llama-3.3-70b` is the only model clean on both halves.** `llama-3.1-8b` scores 6/6 on every
+    surface check *while deleting a clause* — caught only by the word diff, which is the whole
+    argument for that check. No model INSERTED a word; the shared `{clause, not, one}` deletion is
+    the licensed residue of the self-correction.
+  - **Case 3 fails on every model but 70B and is probably unfixable.**
+    `"enumerate list one buy two apples two get milk end list"` — two identical `"two"` tokens, one
+    a separator and one content. No rule resolves it; a Python pre-pass faces the same ambiguity
+    (first-match and last-match are each wrong about half the time). It is a *protocol* problem:
+    the fix is separators distinct from content ("number one", "next"), which is a spec/60 change.
+  - **Benchmark one model at a time, fully resident.** A combined run cycling five models over 16 GB
+    produced a different score for qwen3.5:9b (7/9, failing case 2) than three isolated runs did
+    (8/9 every time). Partial CPU offload under memory pressure changes the numerics.
   - [ ] **FIX — owed, wants its own session.** Options, in the order recommended:
-    - [ ] **Deterministic pre-pass** (the real fix, and the documented upgrade path — the
-      `ponytail:` note above `DICTATION_CLEANUP` names exactly this trigger, now met by
-      measurement). Detect `enumerate list` / `itemize list` / `end list` and the ordinal
-      separators **in Python**, mark the spans, and hand cleanup text it cannot misread. Detection
-      then stops depending on model capability, and 8B stays fine for the tidying it is good at.
-      Note this is where `bridge/replace.py` still does **not** belong — a swap table cannot
-      express a span (confirmed 2026-07-30).
-    - [ ] **Stopgap while that is built — Thomas's call, NOT taken:** point
-      `cleanup_dictation_model` back at `llama-3.3-70b-versatile`. Correct today, ~8× the tokens
-      (which exhausted the Groq daily quota on 2026-07-29). Left on 8B pending his decision, so
-      **dictation currently mangles counted speech**.
-    - [ ] Re-run `--check-format` on whatever model is chosen; promote any new failure into
+    - [ ] **FIRST, AND IT GATES THE REST — drop the commands entirely?** See the parked design
+      question (auto-detection vs commands). With no commands there are no phrases to detect and
+      no separators to strip, and case 3's ambiguity disappears with them.
+    - [ ] **Deterministic pre-pass** — *only if the commands stay*. Detect `enumerate list` /
+      `itemize list` / `end list` and the ordinal separators **in Python**, mark the spans, hand
+      cleanup text it cannot misread. **Fixes 2 of the 3 failure kinds, not 3** — the false
+      positives vanish by construction, case 3 survives (above). Note `bridge/replace.py` still
+      does **not** belong here — a swap table cannot express a span (confirmed 2026-07-30).
+    - [ ] Re-run the suite on whatever model is chosen; promote any new failure into
       `_FORMAT_CASES` as the earlier four were.
   - Also seen on BOTH small models and NOT covered by the assertions: a verbatim-mention case keeps
     its prose but drops a word — 8B returned `"the statute requires us to list items"`, losing
@@ -651,47 +801,61 @@ it is the unfinished half of D29/D30/D33.
   - **Note:** the Groq free tier's daily token budget (100k) was exhausted measuring this, by the
     measurement runs themselves. Tool specs are ~2k tokens a round, so a tool turn is not cheap on
     a small daily cap.
-- **Designed, not built (D38, 2026-07-31) — connectors: the user decides which tools exist.**
-  Consent becomes a second gate beside the tier — tier says whether Gemma MAY, the connector says
-  whether the user WANTS it to. Decision and rationale in spec/00 D38; the gate in spec/30
-  § Connectors; the pane in spec/70. **Checklist, in build order:**
-
-  *Back end*
-  1. [ ] `spec/schemas/tools.json` — add `connector` to all eight tools. Map: `system_status`→System ·
-     `read_clipboard`→Clipboard · `find_document`→Files · `search_email`→Email · the four Tier-2
-     starters→Apps & media. Edit as TEXT (the file is hand-formatted; a `json.dump` round-trip
-     explodes the diff).
-  2. [ ] `spec/schemas/settings.json` — the `connectors` pane + one entry per connector, `built`
-     false for Web and Apps & media. Personal-data connectors default **off**, System **on**.
-  3. [ ] `bridge/tools.py` — `tool_specs()` gains the connector condition beside `MAX_TIER`;
-     `execute()` refuses a disconnected tool (the allowlist is the defence, not the filter).
-  4. [ ] One line into the system prompt naming what is DISABLED, so the brain says "file search is
-     off" instead of improvising — the D36 can't-vs-didn't lesson, by construction.
-  5. [ ] `bridge.tools --selfcheck`: a connector off removes exactly its tools and nothing else;
-     `execute()` refuses one anyway; tier and connector are independently sufficient to exclude.
-
-  *Front end*
-  6. [ ] Connectors pane in `SettingsWindow.qml` — cards, not rows (Model selection is the
-     precedent), each naming what it reaches and which tools it enables.
-  7. [ ] `settings_check` green, including its QML-warning gate; update the pinned group list if the
-     pane changes it.
-
-  *Tool activity — the "during" half of consent*
-  8. [ ] Contract P message so the island can NAME the tool as it runs (Claude Code's pattern;
-     spec/40 reserved this as D11's tool-activity indicator and nothing renders it today).
-  9. [ ] Design pass owed on BOTH surfaces — the cards and the running indicator (Thomas).
+- **Built (D38, 2026-07-31) — connectors: the user decides which tools exist.** Consent is now a
+  second gate beside the tier — tier says whether Gemma MAY, the connector says whether the user
+  WANTS it to, and a tool passes both or is neither offered nor run. Decision and rationale in
+  spec/00 D38; the gate in spec/30 § Connectors; the pane in spec/70. **Items 1–8 of the checklist
+  are done; item 9 (the design pass) is Thomas's and is the only one open.**
+  - **The two schemas.** Every tool declares a `connector` (`system` · `clipboard` · `files` ·
+    `email` · `apps_media`) and a `label` — the tool said in a sentence a person would use, which
+    both the card and the island's indicator read, so there is one wording and no copy of it in
+    code. `settings.json` gained a `connectors` pane and one `connector_*` bool each; **System is
+    the only one defaulting on**, asserted as a rule in `settings_check` rather than trusted per
+    entry, so a new personal connector cannot quietly ship on. Web, Apps & media and a dimmed
+    **MCP** slot are `built: false`. `tools.json` → v0.3.0, `settings.json` → v0.3.0.
+  - **The gate is two lines and a backstop.** `tool_specs()` filters on the connector beside
+    `MAX_TIER`; `execute()` re-checks, so a switched-off tool is dead even if a stale round or a
+    caller that skips the filter reaches it. An unrecognised connector id fails **closed**. The
+    connector map is derived from the schema, so adding one is a JSON edit.
+  - **A disabled connector is SAID, not silently missing.** `tools.disabled_note()` appends one
+    sentence to the persona naming what is off ("…never imply you looked and found nothing") —
+    the D36 can't-rendered-as-didn't failure, prevented by construction. It names only connectors
+    with a usable tool behind them: "Web is off" would imply switching it on would work.
+  - **The pane is a third top-bar section** (Models | Connectors | Config), a card roster on the
+    Models precedent — each card states what it reaches and lists the tools it enables, ticked
+    where they can actually run. Rendered and eyeballed offscreen; **not yet seen on the box.**
+  - **Contract P gained `tool`** (`status.json` → v0.6.0): `{name, label, done}`, published as a
+    call starts and again as it returns — around every outcome, refusals included, so the
+    indicator can never outlive the work. Reduced by `decode`, exposed as `overlay.tool`.
+    **Nothing renders it yet**, deliberately: that is item 9.
+  - Guarded: `bridge.tools --selfcheck` (fresh install offers System only · all-on offers the four
+    Tier-1 and no Tier-2, proving the gates independent · a connector alone excludes · `execute()`
+    refuses one anyway · the note names the right connectors), plus `settings_check` (every tool's
+    connector has a setting, or it would be withheld forever with no warning) and `decode`
+    (the label is cleared by its own `done`). The tools check now points `GEMMA_SETTINGS` at a
+    temp file, so it no longer passes or fails with whatever is toggled on this box. Verified to
+    FAIL with the gate reverted.
+  - **Owed (item 9) — the design pass on BOTH surfaces, Thomas.** The cards as built are
+    functional, not designed: fixed 322px height (the Models card's) leaves visible dead space on
+    the short ones, and the tool list is a tick plus a line of text. The running indicator has no
+    treatment at all — and the island's status-word slot is already taken by "Thinking…" during a
+    tool round, which is the 7b dead-air problem in another costume.
 
   *Owed, not in this build*
   - [ ] **First-run permissions round at packaging** — ask for what it wants up front rather than
     leaving it to be discovered in a pane (the VoiceInk/Parakeet pattern). Thomas.
   - [ ] **MCP** — deliberately out of scope: a runtime tool carries no tier, which drives through
     spec/30 rule 1. Its own decision and D-number; the pane holds a dimmed slot meanwhile.
+  - [ ] **The `disabled_note()` wiring is unguarded.** `tools.py` proves the sentence is right;
+    nothing proves `_turn` still attaches it, because `_turn` has no offline harness (it wants a
+    fake brain, broadcaster and router). Same shape as D37's prompt-side check.
 - **In flight:** —
-- **Next:** ① D38's checklist above, back end first — it is the gate every later tool inherits.
-  ② live-verify a tool turn end to end (Claude asks `system_status`, then answers): `search_email`
-  has now been driven by a brain (D36) but the ledger's column is otherwise still empty.
-  ③ `search_email` against a complete mailbox — see the retrieval note below. Tier 2 backends when a
-  tool is genuinely wanted.
+- **Next:** ① D38's design pass (item 9) — the connector cards and the tool-activity indicator;
+  Thomas's, and the indicator is what makes the `tool` message visible at all. ② live-verify a tool
+  turn end to end (Claude asks `system_status`, then answers) **with a connector switched off too**,
+  so the "file search is off" answer is seen rather than assumed: `search_email` has been driven by
+  a brain (D36) but the ledger's column is otherwise still empty. ③ `search_email` against a
+  complete mailbox — see the retrieval note below. Tier 2 backends when a tool is genuinely wanted.
 - **Blocked, not broken — `search_email` retrieval (2026-07-31).** Repeated live searches return
   nothing, and the cause is **not** the tool: it queries `\\<account>\Inbox` correctly and returns
   hits for terms that are present (verified against "Amazon"). Classic Outlook has downloaded only
@@ -713,8 +877,10 @@ it is the unfinished half of D29/D30/D33.
   expanded view / peek) · **D28** (earcon vocabulary cut to three WAVs; `tts` and `Pings` as
   separate toggles) · **D29** (the settings window) · **D30** (B2 = any OpenAI-compatible endpoint;
   reachability as schema truth) · **D31** (the Tier-1 tool executor and the brain's tool loop) ·
-  **D32** (Gem the mascot, first surfaces) · **D33** (the per-role router v1). Schemas current:
-  `status.json` v0.4.0 · `settings.json` v0.2.0 · `earcons.json` v0.4.0 · `targets.json` v1.0.0.
+  **D32** (Gem the mascot, first surfaces) · **D33** (the per-role router v1) · **D34** (the model
+  + token footer) · **D35** (sprite kit v3) · **D36** (a rejected tool call retries) · **D37**
+  (spoken formatting commands) · **D38** (connectors). Schemas current: `status.json` v0.6.0 ·
+  `settings.json` v0.3.0 · `tools.json` v0.3.0 · `earcons.json` v0.4.0 · `targets.json` v1.0.0.
 - **Reconciled 2026-07-28** (a sweep against what had actually shipped): **spec/00 D32** corrected
   on two points the tray had outgrown — the theme source is `SystemUsesLightTheme` (the taskbar),
   not the app setting, and idle no longer rests on a single frame; both carry an inline amendment

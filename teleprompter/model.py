@@ -108,6 +108,14 @@ class OverlayModel(QObject):
         return self._s.mic
 
     @Property(str, notify=changed)
+    def tool(self) -> str:
+        """The Contract-T tool running right now, named for a person, or "" between calls (D38).
+        NOTHING RENDERS THIS YET — the island's treatment of it is the design pass owed on the
+        tool-activity indicator (STATE, Track T). The seam is here so that pass is a QML change
+        and nothing else."""
+        return self._s.tool
+
+    @Property(str, notify=changed)
     def error(self) -> str:
         return self._s.error
 

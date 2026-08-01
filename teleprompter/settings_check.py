@@ -32,7 +32,7 @@ try:
 except (AttributeError, OSError):
     pass
 
-from PySide6.QtCore import QUrl                                          # noqa: E402
+from PySide6.QtCore import QObject, QUrl                                 # noqa: E402
 from PySide6.QtQml import QQmlApplicationEngine                          # noqa: E402
 from PySide6.QtWidgets import QApplication                               # noqa: E402
 
@@ -213,6 +213,29 @@ def check() -> None:
     # The rule that matters is narrower: nothing that removes a safety gate starts removed.
     assert schema["settings"]["skip_permissions"]["default"] is False, (
         "a permission bypass must never default on")
+    # Connectors (D38). The card is generated from both schemas at once, so the failure to guard
+    # against is a mismatch BETWEEN them: a tool naming a connector no setting declares fails
+    # closed in bridge/tools.py, which is safe but invisible — the tool would simply never be
+    # offered and no warning would say why.
+    from bridge.config import load_schemas
+    declared = {s["connector"] for s in schema["settings"].values() if "connector" in s}
+    assert declared, "the connectors pane declares nothing (schemas/settings.json)"
+    for t in load_schemas()["tools"]["tools"]:
+        assert t.get("connector") in declared, (
+            f"{t['name']}: connector {t.get('connector')!r} has no setting — the tool would be "
+            f"silently withheld from the brain forever")
+        assert t.get("label"), f"{t['name']}: no label, so its connector card lists a blank line"
+    for key, s in schema["settings"].items():
+        if "connector" not in s:
+            continue
+        assert s["type"] == "bool" and s["pane"] == "connectors", key
+        assert s.get("help"), f"{key}: a connector card with no 'Reaches' text is consent to nothing"
+        # D38's default posture, stated as a rule rather than trusted per entry: consent to
+        # anything personal is asked for, never assumed. System is the one exception — the time
+        # and the battery are not personal data.
+        assert s["default"] is (key == "connector_system"), (
+            f"{key}: only the System connector may default on (D38)")
+
     for pid, p in schema["providers"].items():
         assert p.get("name"), f"{pid}: a provider with no name renders blank"
         assert isinstance(p.get("capabilities", {}), dict), pid
@@ -256,11 +279,16 @@ def check() -> None:
     # Empty: Model selection before any provider is added. This is the first-run screen and
     # the one most likely to break, because every card binding is evaluated against nothing.
     assert cfg.models == {}, "the check must start from an empty profile"
-    # Both sections, so every binding in each view is evaluated — the content Loader only
-    # builds the active one, so a throw in Config hides until Config is shown.
-    for section in ("models", "config"):
-        win.setProperty("section", section)
+    # Every section, so every binding in each view is evaluated — a throw in Connectors or
+    # Config would otherwise hide until that section is shown.
+    # Every pane the schema declares — the sidebar and this property share one vocabulary since
+    # D40, so a pane added to the JSON is walked here without touching this list.
+    for pane in pane_ids:
+        win.setProperty("section", pane)
         settle()
+    # A Repeater over an empty list throws nothing and draws nothing, so the pane being EMPTY is
+    # exactly the failure the warning gate cannot see. One card per declared connector.
+    assert len(cfg.rowsFor("connectors")) == len(declared), cfg.rowsFor("connectors")
 
     win.setProperty("section", "models")
     cfg.addProvider("anthropic")                   # one provider: no Primary pill yet
@@ -300,8 +328,18 @@ def check() -> None:
     # What is NOT covered is the interaction itself; that needs a real mouse.)
     assert set(cfg.keys) == set(cfg.catalog), "every provider needs a credential state"
     assert all(v in ("stored", "none", "unavailable") for v in cfg.keys.values()), cfg.keys
+    # The page must go inert while a modal is up, or it scrolls out from under the sheet when the
+    # wheel turns (Thomas, 2026-07-31). Asserted as a PROPERTY rather than by driving a synthetic
+    # wheel event: this harness delivers only one wheel per run, so an event-based version of this
+    # check passed with the fix removed — it could not tell "blocked" from "never arrived".
+    scroller = win.findChild(QObject, "scroller")
+    assert scroller is not None, "no Flickable named 'scroller' — the scroll lock cannot be checked"
+    assert scroller.property("enabled") is False, (
+        "the page is still live behind an open sheet — bind the scroll area's `enabled` to "
+        "`root.modalOpen`, and OR every modal into that one property")
     win.setProperty("manageOpen", False)
     settle()
+    assert scroller.property("enabled") is True, "the page stayed inert after the sheet closed"
 
     # Toggling through the model card's own controls, which is where most bindings live.
     cfg.setModel("anthropic", "on", False)

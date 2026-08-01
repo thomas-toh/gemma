@@ -64,6 +64,18 @@ def cell() -> int:
     return _data()["cell"]
 
 
+@lru_cache(maxsize=1)
+def _ink_pad() -> dict[str, int]:
+    """The empty cell rows/columns around the ink in the RESTING frame — the one every static
+    surface draws. A cell is ink if its character is one of the palette's indices."""
+    rows = frames("idle", base("idle"))[0]
+    ink = set(ISLAND)
+    lit = [i for i, r in enumerate(rows) if any(c in ink for c in r)]
+    cols = [i for r in rows for i, c in enumerate(r) if c in ink]
+    return {"top": lit[0], "bottom": len(rows) - 1 - lit[-1],
+            "left": min(cols), "right": len(rows[0]) - 1 - max(cols)}
+
+
 def states() -> list[str]:
     return list(_data()["states"])
 
@@ -359,6 +371,19 @@ class QmlGem(QObject):
     @Property(str, notify=changed)
     def source(self) -> str:
         return f"image://gem/{self._p.state}/{self._p.clip}/{self._p.index}"
+
+    # How many empty CELL rows/columns the resting frame carries around Gem's ink. A caller that
+    # puts her against an edge needs these: the cell is 26×26 and her ink occupies rather less, so
+    # an image placed flush floats away from the edge by the difference. Constant — read off the
+    # kit rather than measured by eye, so Design re-exporting cannot silently move her (D40).
+    # In display pixels: pad * (drawn size / cell).
+    @Property(int, constant=True)
+    def padBottom(self) -> int:
+        return _ink_pad()["bottom"]
+
+    @Property(int, constant=True)
+    def padRight(self) -> int:
+        return _ink_pad()["right"]
 
     def _get_state(self) -> str:
         return self._want

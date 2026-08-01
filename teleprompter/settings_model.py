@@ -107,6 +107,22 @@ class SettingsModel(QObject):
                 return p.get("groups", [])
         return []
 
+    @Slot(str, result="QVariant")
+    def toolsFor(self, connector: str) -> list:
+        """The tools a connector enables, as `[{label, ready}]` in registry order (D38).
+
+        Read from `spec/schemas/tools.json`, never restated here (hard rule 3), so a tool joins a
+        card by declaring the connector and nothing in this window changes. `ready` is false for a
+        tool that could not run even with the connector on — no backend on this platform, or above
+        `MAX_TIER` — because a card that promises what the tier still forbids is the same lie the
+        gate exists to prevent. Consent has to be to something specific, which is why the card
+        lists the tools rather than the category."""
+        from bridge.config import load_schemas
+        from bridge.tools import implemented
+
+        return [{"label": t.get("label", t["name"]), "ready": implemented(t)}
+                for t in load_schemas()["tools"]["tools"] if t.get("connector") == connector]
+
     # --- providers ----------------------------------------------------------------
 
     @Property("QVariant", notify=changed)
@@ -120,6 +136,14 @@ class SettingsModel(QObject):
         """The provider ids in play — what a role (dictation cleanup, prompt cleanup) can be
         pointed at. Empty until a model is added."""
         return list(self.models.keys())
+
+    @Property("QVariant", constant=True)
+    def providerNames(self) -> dict:
+        """Provider id -> the name to SHOW (`openai` -> `OpenAI`), from the catalogue's `name`.
+
+        Settings store ids, which are lowercase wire names; a picker that prints them raw reads
+        like a config file. Constant because the catalogue is (hard rule 3: it is the schema)."""
+        return {pid: p.get("name", pid) for pid, p in self.catalog.items()}
 
     @Slot(str, result="QVariant")
     def providersFor(self, where: str) -> list:

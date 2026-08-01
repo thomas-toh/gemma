@@ -1,6 +1,6 @@
 {
   "$comment": "Gemma user settings — EXECUTABLE TRUTH (CLAUDE.md hard rule 3). bridge/settings.py derives its DEFAULTS from `settings` here, and teleprompter/SettingsWindow.qml renders its panes from the same file, so a knob is added by editing THIS and nothing else. Never restate a default or a label in code.",
-  "version": "0.2.0",
+  "version": "0.3.0",
 
   "panes": [
     {
@@ -11,11 +11,13 @@
         { "id": "preferences", "label": "Preferences" }
       ]
     },
-    { "id": "models",   "label": "Model selection" },
-    { "id": "triggers", "label": "Triggers" }
+    { "id": "models",     "label": "Model selection" },
+    { "id": "connectors", "label": "Connectors" },
+    { "id": "triggers",   "label": "Triggers" }
   ],
 
   "$comment_settings": "One entry per knob. `built: false` renders the row dimmed and its control disabled — the setting is decided but its consumer does not exist yet. `pane: null` means no UI row at all (the value is still read by the daemon). `help` is shown only where the consequence cannot be inferred from the label.",
+  "$comment_connectors": "D38 — the consent gate, one `connector_*` entry per connector at the end of `settings`. `connector` holds the id that schemas/tools.json matches, so a card lists the tools it enables by READING the registry rather than restating them (hard rule 3); `help` is what that connector reaches, shown on the card because switching one on must be consent to something specific rather than to a category. Anything reading personal data is OFF by default (the D23 precedent: a capability stays off until it is asked for) — System is on because the time and the battery are not personal data. Key order is display order. Adding a connector is one entry here plus a `connector` on the tools that belong to it; no UI work.",
   "settings": {
     "profile_name": {
       "type": "text", "default": "", "pane": "general", "group": "profile",
@@ -138,6 +140,52 @@
       "help": "Certain tasks require permission. These can be skipped, but you bear all consequences for any action taken while permissions are skipped.",
       "built": false,
       "$comment": "Supersedes D20's narrower `auto_apply`: skips EVERY gate including the Tier-3 confirmation. That converts a spec/50 + CLAUDE.md rule-4 design constant into a preference and needs its own decision record before the executor lands (M1). Placeholder disclaimer."
+    },
+
+    "connector_system": {
+      "type": "bool", "default": true, "pane": "connectors",
+      "label": "System", "connector": "system",
+      "help": "The time and date, the battery, and the title of whichever window is in front.",
+      "built": true
+    },
+    "connector_files": {
+      "type": "bool", "default": false, "pane": "connectors",
+      "label": "Files", "connector": "files",
+      "help": "The names and contents of files Windows has already indexed on this PC, so Gemma can tell you where one is. Nothing is opened or read back to you.",
+      "built": true
+    },
+    "connector_email": {
+      "type": "bool", "default": false, "pane": "connectors",
+      "label": "Email", "connector": "email",
+      "help": "The sender, date and subject of mail in your desktop Outlook inbox. Message text is searched but never returned, and nothing is opened, replied to or sent.",
+      "built": true
+    },
+    "connector_clipboard": {
+      "type": "bool", "default": false, "pane": "connectors",
+      "label": "Clipboard", "connector": "clipboard",
+      "help": "Whatever you last copied, read on request.",
+      "built": true
+    },
+    "connector_web": {
+      "type": "bool", "default": false, "pane": "connectors",
+      "label": "Web", "connector": "web",
+      "help": "Pages and search results from the internet.",
+      "built": false,
+      "$comment": "Dimmed: no tool declares this connector yet — there is no web backend (STATE, Track T)."
+    },
+    "connector_apps_media": {
+      "type": "bool", "default": false, "pane": "connectors",
+      "label": "Apps & media", "connector": "apps_media",
+      "help": "Opening an app, bringing a window to the front, the media keys, and timers.",
+      "built": false,
+      "$comment": "Dimmed: its four tools are Tier 2, and MAX_TIER holds at 1 until the announce earcon exists. Turning a connector on cannot raise a tier — the two gates are independent."
+    },
+    "connector_mcp": {
+      "type": "bool", "default": false, "pane": "connectors",
+      "label": "MCP servers", "connector": "mcp",
+      "help": "Tools supplied by an MCP server you connect.",
+      "built": false,
+      "$comment": "D38 holds this slot dimmed deliberately. An MCP tool arrives at RUNTIME carrying no declared tier, so it cannot pass the gate spec/30 rule 1 depends on; admitting one needs its own decision and D-number."
     }
   },
 
@@ -191,17 +239,20 @@
       "adapter": true, "models": [], "capabilities": {}
     },
     "ollama": {
-      "name": "Ollama", "where": "local", "auth": "endpoint", "endpoint": "localhost:11434",
+      "name": "Ollama", "where": "local", "auth": "endpoint", "endpoint": "127.0.0.1:11434",
       "wire": "openai",
-      "adapter": true, "models": [], "capabilities": { "temperature": true, "context": true }
+      "$comment": "`effort` includes `none` because Ollama's OpenAI-compatible endpoint documents that value and treats it as thinking-OFF — one field carrying a switch AND a dial. It is the only way to reach the thinking toggle from here: Ollama's native `think` field and `chat_template_kwargs` are both ignored on /v1 (tested 2026-08-01, v0.32.5). A thinking model left to reason costs ~6.5 s on a dictation cleanup against ~0.45 s without, so `transform` always asks for `none`. Endpoint is 127.0.0.1, never `localhost`: the wasted IPv6 attempt costs ~2 s per connection on Windows.",
+      "adapter": true, "models": [],
+      "capabilities": { "temperature": true, "context": true, "thinking": true,
+                        "effort": ["none", "low", "medium", "high", "max"] }
     },
     "lmstudio": {
-      "name": "LM Studio", "where": "local", "auth": "endpoint", "endpoint": "localhost:1234",
+      "name": "LM Studio", "where": "local", "auth": "endpoint", "endpoint": "127.0.0.1:1234",
       "wire": "openai",
       "adapter": true, "models": [], "capabilities": { "temperature": true, "context": true }
     },
     "llamacpp": {
-      "name": "llama.cpp", "where": "local", "auth": "endpoint", "endpoint": "localhost:8080",
+      "name": "llama.cpp", "where": "local", "auth": "endpoint", "endpoint": "127.0.0.1:8080",
       "wire": "openai",
       "adapter": true, "models": [], "capabilities": { "temperature": true, "context": true }
     }

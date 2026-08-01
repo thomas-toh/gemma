@@ -1,6 +1,6 @@
 # Spec 40 — Interaction model
 
-**Last reconciled: 2026-07-30** · Build progress: [STATE.md](../STATE.md) (Tracks G · P) · Earcon ids: [schemas/earcons.json](schemas/earcons.json)
+**Last reconciled: 2026-07-31** · Build progress: [STATE.md](../STATE.md) (Tracks G · P) · Earcon ids: [schemas/earcons.json](schemas/earcons.json)
 
 ## State machine (orchestrator: `bridge/orchestrator.py`)
 
@@ -77,9 +77,14 @@ It pastes at the caret and shows no reply, so `transcribing` / `transforming` / 
   spoken one-line summary of what will happen follows, confirmed by saying "confirm". The keypress
   gate is what makes Tier 3 executable in the default (screen-only, mic-closed) product — a
   spoken-only gate could not run there.
-- Tool progress (M1, planned — D11): during `ACTING`, silence by default — the overlay's
-  tool-activity icon is the always-on visual, and the turn ends on `success`/`failure`. Spoken
-  step narration ("Fetching X…") is a config flag, **default off**.
+- Tool progress (D11/D38): during `ACTING`, silence by default — the overlay's tool-activity
+  indicator is the always-on visual, and the turn ends on `success`/`failure`. Spoken step
+  narration ("Fetching X…") is a config flag, **default off**. The indicator's **feed** exists:
+  Contract P's `tool` message carries the running tool's human label, sent as the call starts
+  and again as it returns (spec/30 § Connectors). It **names** the tool rather than merely
+  flagging one, because that is the "during" half of connector consent — you agreed to a
+  capability in a settings page, and this is what says when it is being used. *Its rendering on
+  the island is a design pass owed (STATE, Track T).*
 
 > The ≤2-sentence speak/hold split above is an **M0 heuristic**. **M0.5 "It speaks well"
 > (spec/00) replaces it** with a model-tagged output contract — the brain marks what to

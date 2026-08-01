@@ -1,6 +1,8 @@
-// Keyboard-shortcut recorder (D29). At rest it shows the shortcut; hover invites "Record"; a
-// click captures live keystrokes (Ctrl → "ctrl", Ctrl+Alt → "ctrl+alt", …) and commits the
-// combo on release. The recorded string is validated against the daemon's own parser
+// Keyboard-shortcut recorder (D29). At rest it shows the shortcut; a click captures live
+// keystrokes (Ctrl → "ctrl", Ctrl+Alt → "ctrl+alt", …) and commits the combo on release. While
+// listening the field is EMPTY until a key is held — the lit border is what says it is
+// listening (D40). `start()` claims active focus, which is what makes the abandon-on-click-away
+// below work: losing focus restores the old value. The recorded string is validated against the daemon's own parser
 // (cfg.validateBinding) before it is kept, so the window never stores a binding hotkeys.py
 // will refuse — a bare key, an unknown key, or two non-modifiers are rejected here.
 //
@@ -61,8 +63,21 @@ Rectangle {
         }
     }
 
-    implicitWidth: 190
-    implicitHeight: 38
+    // "ctrl+alt+1" as a person writes it. The stored value stays the daemon's format — this is
+    // display only, and the parser never sees it.
+    function pretty(combo) {
+        if (combo === "")
+            return ""
+        return combo.split("+").map(function (p) {
+            return p.length ? p[0].toUpperCase() + p.slice(1) : p
+        }).join(" + ")
+    }
+
+    // Fixed width, so the box does not resize with the shortcut: the UI face's figures are
+    // proportional, so "…+ 1" and "…+ 2" came out different widths and read as a mistake. Wide
+    // enough for "Ctrl + Shift + Alt + F12".
+    implicitWidth: 168
+    implicitHeight: Theme.controlHeight
     radius: Theme.radiusControl
     color: Theme.surfaceSunk
     border.width: 1
@@ -78,15 +93,17 @@ Rectangle {
         width: parent.width - 22
         horizontalAlignment: Text.AlignHCenter
         elide: Text.ElideRight
+        // Recording with nothing held shows NOTHING (Thomas) — the lit border already says the
+        // box is listening, and a prompt sitting in the field is one more thing to read. No
+        // hover swap to "Record" either: clicking the box is the affordance.
         text: rec.recording
-                ? (rec.combo() === "" ? "Press a shortcut…" : rec.combo())
-              : rh.hovered ? "Record"
-              : (rec.value === "" ? "Not set" : rec.value)
+                ? rec.pretty(rec.combo())
+              : (rec.value === "" ? "Not set" : rec.pretty(rec.value))
         color: rec.recording ? (rec.invalid ? Theme.danger : Theme.lamp)
-             : rh.hovered ? Theme.uiText
              : (rec.value === "" ? Theme.uiTextFaint : Theme.uiText)
-        font.family: (rec.recording && rec.combo() !== "") || (!rec.recording && rec.value !== "")
-                     ? "Consolas" : fontFamily
+        // One face throughout (D40): a shortcut is not machine text, and Windows does not set
+        // its own shortcuts in a second typeface.
+        font.family: fontFamily
         font.pixelSize: Theme.fontBase
     }
 

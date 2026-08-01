@@ -1,6 +1,6 @@
 # Spec 70 — Settings & configuration
 
-**Last reconciled: 2026-07-30** · Build progress: [STATE.md](../STATE.md) · Decisions: [spec/00](00_overview.md)
+**Last reconciled: 2026-07-31** · Build progress: [STATE.md](../STATE.md) · Decisions: [spec/00](00_overview.md)
 
 > The **window is built** (D29, 2026-07-27) and renders from `spec/schemas/settings.json` — the
 > executable truth for panes, defaults and the provider catalogue (hard rule 3). §2's architecture
@@ -90,11 +90,25 @@ types / defaults / validation:
   alone. This is deliberately narrow and does **not** pre-empt spec/20's Layer 2 (several *named
   instances* per provider), which subsumes it: one provider and one API key can now serve a large
   model to the assistant and a small one to cleanup, but the provider still holds exactly one card.
+  **Changing the role's provider clears its `modelKey` (2026-07-31).** A model id is only meaningful
+  to the provider that serves it, so carrying the old pick across a provider change would leave the
+  role pointing at a model that does not exist there (OpenAI · `claude-fable-5`). Cleared means
+  empty, which already means "the card's model" — the honest fallback, not a hole.
 - **Triggers:** ask-hotkey and dictation-hotkey bindings (D14 / D16) — combo strings
   (`ctrl+alt+1` / `ctrl+alt+2` today; parsed by `bridge/hotkeys.py`, env
   `GEMMA_HOTKEY_ASK` / `GEMMA_HOTKEY_DICTATE` until this file's config source exists) ·
   **`auto_end`** (default off): end a keyed turn on VAD silence as well, so one tap is
   enough instead of two (`--auto-end`; spec/40 §Triggers).
+- **Connectors (D38, 2026-07-31) — the consent pane.** A pane of its own, drawn as **cards** like
+  Model selection rather than rows, because a connector is more than a toggle: each states what it
+  reaches, lists the tools it enables, and may carry its own credential (Email will need an OAuth
+  "Connect", not a checkbox). Turning one off means its tools are never offered to the brain and are
+  refused if called anyway — the gate is Contract T's (spec/30 § Connectors); this page is only its
+  face. **Anything reading personal data is off by default** (Files · Email · Clipboard; System on),
+  so a fresh install dictates and answers while reaching nothing of yours. Ids, labels and defaults
+  live in `spec/schemas/settings.json` and the tool→connector mapping in `spec/schemas/tools.json`
+  (hard rule 3) — never restated here. **Owed at packaging:** a first-run permissions round asking
+  for what it wants up front, rather than leaving the choice to be discovered in this pane.
 - **Transport (Contract P):** the status-feed host/port live in `spec/schemas/status.json`
   `transport` (loaded by both the daemon and the overlay, P-01); the port has an env override
   `GEMMA_STATUS_PORT` (both sides honour it) until this config source exists.

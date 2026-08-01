@@ -37,6 +37,12 @@ from .providers import base_url, card, credential_for
 # so a local runner (Ollama / LM Studio / llama.cpp) gets this rather than None.
 LOCAL_PLACEHOLDER_KEY = "not-needed"
 
+# Local-runner connection budget (see _client_once). A loopback server answers at once or is not
+# there; 2 s is already generous. The read budget stays long — a local model may think for a
+# while once it HAS answered — and matches the SDK's own default rather than httpx's 5 s.
+LOCAL_CONNECT_S = 2.0
+LOCAL_TIMEOUT_S = 600.0
+
 
 def _error_kind(exc: Exception, offered_tools: bool = False) -> str:
     """Map an SDK exception to a shared Contract B Error kind (spec/20) by its TYPE and status
@@ -139,14 +145,30 @@ class CompatBrain:
         httpx's 5 s default — which would kill exactly the slow-first-token turns this exists to
         speed up. B1 records the same trap; it is a property of the SDK generator, not of either
         provider.
+
+        A LOCAL runner gets no retries and a short CONNECT timeout (measured 2026-07-31). The
+        SDK's two retries exist for transient cloud faults; a refused loopback socket is not
+        transient — the server is simply not running, and it will not be running 1.4 s later
+        either. Windows makes it worse by dropping rather than refusing, so each attempt waits
+        out a timeout: dictation cleanup took **9.66 s** to discover a dead Ollama and fall back
+        to pasting the raw transcript, all of it inside the paste path. Only the connect phase is
+        shortened; the read timeout is untouched, because a local model may legitimately think
+        for a long time once it HAS answered the socket.
         """
+        import httpx
         import openai
 
         if self._client is None:
+            kwargs: dict[str, Any] = {}
+            http_kwargs: dict[str, Any] = {"verify": ssl_context()}
+            if self.local:
+                kwargs["max_retries"] = 0
+                http_kwargs["timeout"] = httpx.Timeout(LOCAL_TIMEOUT_S, connect=LOCAL_CONNECT_S)
             self._client = openai.AsyncOpenAI(
                 api_key=self._api_key,
                 base_url=self.base_url,
-                http_client=openai.DefaultAsyncHttpxClient(verify=ssl_context()),
+                http_client=openai.DefaultAsyncHttpxClient(**http_kwargs),
+                **kwargs,
             )
         return self._client
 
@@ -172,7 +194,17 @@ class CompatBrain:
             # Local servers vary on whether they accept this and a rejection costs the whole
             # turn, so usage (a latency-log nicety) is asked for only where it is reliable.
             kwargs["stream_options"] = {"include_usage": True}
-        if self.effort and (self.card.get("capabilities", {}) or {}).get("effort"):
+        # On this wire "don't think" is not a separate switch — it is a VALUE of the effort
+        # scale, so both intents leave through the same parameter. Each is gated on the card
+        # declaring it: sending an effort a provider does not accept is rejected server-side and
+        # costs the whole turn, and `"none"` is not universal (Ollama documents it, OpenAI's
+        # declared scale does not include it). A provider that cannot say "don't think" simply
+        # isn't told, and may think — spec/20 calls that a degradation, not an error.
+        efforts = (self.card.get("capabilities", {}) or {}).get("effort")
+        efforts = list(efforts) if isinstance(efforts, (list, tuple)) else []
+        if session.thinking is False and "none" in efforts:
+            kwargs["reasoning_effort"] = "none"          # beats the adapter's own effort
+        elif self.effort and efforts:
             kwargs["reasoning_effort"] = self.effort
         # A per-call temperature (transform's determinism) overrides the adapter's own default.
         temperature = session.temperature if session.temperature is not None else self.temperature
@@ -395,9 +427,29 @@ def _selfcheck() -> None:
         ._kwargs(Session(id="t"), "q", [])["reasoning_effort"] == "high", \
         "OpenAI declares an effort capability, so it must be sent"
 
+    # `thinking=False` (every transform sets it) rides out on the SAME parameter, because on this
+    # wire "off" is a value of the effort scale — but only where the card lists `none`.
+    fake = {"capabilities": {"effort": ["none", "low", "high"]}, "wire": "openai",
+            "where": "local", "endpoint": "127.0.0.1:1"}
+    thinker = CompatBrain("ollama", model="m", effort="high")
+    thinker.card = fake
+    kw = thinker._kwargs(Session(id="t", thinking=False), "q", [])
+    assert kw["reasoning_effort"] == "none", "thinking=False must beat the adapter's own effort"
+    assert thinker._kwargs(Session(id="t"), "q", [])["reasoning_effort"] == "high", \
+        "an unset `thinking` must leave the configured effort alone"
+    # A provider whose scale has no `none` must NOT be sent one — a rejected value costs the turn.
+    noneless = CompatBrain("openai", model="m", api_key="x")
+    assert "none" not in (noneless.card.get("capabilities", {}).get("effort") or []), \
+        "guard assumes OpenAI's declared scale still lacks `none`"
+    assert "reasoning_effort" not in noneless._kwargs(Session(id="t", thinking=False), "q", []), \
+        "don't-think must be withheld where the card cannot express it"
+    # ...and a card with no effort at all stays silent on both paths.
+    assert "reasoning_effort" not in CompatBrain("groq", model="m", api_key="x") \
+        ._kwargs(Session(id="t", thinking=False), "q", [])
+
     # A local runner: no key needed, no usage request, temperature allowed.
     olla = CompatBrain("ollama", model="m", temperature=0.4)
-    assert olla.local and olla.base_url == "http://localhost:11434/v1"
+    assert olla.local and olla.base_url == "http://127.0.0.1:11434/v1"
     assert olla._api_key == LOCAL_PLACEHOLDER_KEY, "a local runner must not demand a stored key"
     lk = olla._kwargs(Session(id="t"), "q", [])
     assert "stream_options" not in lk, "local servers are not all willing to report usage"
@@ -428,6 +480,19 @@ def _selfcheck() -> None:
     CompatBrain("groq", model="m", api_key="x")._client_once()
     build_ms = (time.perf_counter() - t0) * 1000
     assert build_ms < 50, f"building the client took {build_ms:.0f} ms — CA bundle reloaded?"
+
+    # A dead local runner must fail FAST, inside the paste path (measured 9.66 s before this).
+    # A cloud provider keeps the SDK's retries, because its faults really are transient.
+    local = CompatBrain("ollama", model="m")
+    assert local._client_once().max_retries == 0, "a refused loopback socket must not be retried"
+    assert groq._client_once().max_retries > 0, "cloud turns keep their transient-fault retries"
+    assert local._client_once().timeout.connect <= 5, "a local connect must not wait out a drop"
+    assert local._client_once().timeout.read >= 60, \
+        "a local model may think for a while once it HAS answered — only connect is shortened"
+    # ...and the URL it will dial must already be IPv4, or the connect budget is spent on ::1.
+    assert "127.0.0.1" in str(local._client_once().base_url), \
+        f"local base_url must not resolve via localhost: {local._client_once().base_url}"
+
     assert first_client.timeout.read >= 60, \
         f"custom client dropped the SDK read timeout: {first_client.timeout}"
     assert str(first_client.base_url).rstrip("/") == groq.base_url.rstrip("/")

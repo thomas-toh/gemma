@@ -173,6 +173,8 @@ class OverlayState:
     mic: float = 0.0
     error: str = ""
     kind: str = ""
+    # The Contract-T tool running right now, named for a person, or "" between calls (D38).
+    tool: str = ""
     # The model that produced the reply + the turn's total tokens (D34) — stamped on the 'done'
     # response message, shown in the peek footer.
     model: str = ""
@@ -189,6 +191,7 @@ class OverlayState:
         """Forget the current turn — prompt, reply, fault, instrument readings. The session's
         prompt history deliberately survives (it belongs to the session, not the turn)."""
         self.transcript = self.reply = self.error = self.kind = self.model = ""
+        self.tool = ""
         self.done = False
         self.tokens = 0
         self.feedback_ms = self.first_word_ms = 0.0
@@ -217,6 +220,12 @@ class OverlayState:
                 self.tokens = int(msg["tokens"])
         elif t == "mic":
             self.mic = float(msg["level"])
+        elif t == "tool":
+            # The tool currently running, or "" between calls (D38). Latched on the start
+            # message and cleared by its own `done`, rather than by the next state change: a
+            # label that outlived the work would claim Gemma was reading your mail when it was
+            # not, which is the one thing this indicator exists to get right.
+            self.tool = "" if msg.get("done") else (msg.get("label") or msg["name"])
         elif t == "error":
             self.error = msg["message"]
             self.kind = msg.get("kind", "unknown")
@@ -230,7 +239,7 @@ class OverlayState:
 def _selfcheck() -> None:
     """No Qt, no sockets: prove the framing survives arbitrary chunking and that the reducer
     keeps the reply on screen while it is spoken."""
-    assert known_types() == {"state", "transcript", "response", "mic", "latency", "error",
+    assert known_types() == {"state", "transcript", "response", "mic", "tool", "latency", "error",
                              "dismiss"}, sorted(known_types())
     # Contract P is one-way but for a single verb (D24). A subscriber must not accept it back.
     assert upstream_types() == {"dismiss"}, sorted(upstream_types())
@@ -301,6 +310,18 @@ def _selfcheck() -> None:
     assert s.transcript == "what's the weather", "speaking must not clear the prompt"
     s.apply({"type": "response", "done": True, "model": "claude-opus-4-8", "tokens": 421})
     assert s.done and s.model == "claude-opus-4-8" and s.tokens == 421, (s.model, s.tokens)
+
+    # Tool activity (D38): named while it runs, gone the moment it stops. The label is latched
+    # on the start message and cleared by its OWN done — never by a later state change, because
+    # an indicator that outlived the work would claim Gemma reached your mail when it did not.
+    s.apply({"type": "tool", "name": "search_email", "label": "Search your inbox for a message"})
+    assert s.tool == "Search your inbox for a message", s.tool
+    s.apply({"type": "tool", "name": "search_email", "done": True})
+    assert s.tool == "", "the indicator must not survive the call that raised it"
+    # A tool with no label in the registry still names something rather than nothing.
+    s.apply({"type": "tool", "name": "some_new_tool"})
+    assert s.tool == "some_new_tool", s.tool
+    s.apply({"type": "tool", "name": "some_new_tool", "done": True})
     # ...and it must survive `idle` too (D24). `idle` now means the DAEMON has finished, not
     # "blank the island": the overlay owns that, because only it knows how much text is left to
     # reveal. While the daemon owned it, it was timing a reveal it could not see, and long

@@ -33,17 +33,19 @@ from bridge.audio.listen import (
     _silero_model_path, transcribe,
 )
 from bridge.audio.speak import VOICE, OutputPump, earcon_samples, synth
-from bridge.brains.base import Done, Error, Session, TextDelta, ToolCall, transform
+from bridge.brains.base import (
+    DEFAULT_SYSTEM, Done, Error, Session, TextDelta, ToolCall, transform,
+)
 from bridge.brains.claude import ClaudeBrain
 from bridge.brains.providers import build_brain
 from bridge.brains import router
 from bridge.broadcaster import (
-    Broadcaster, m_error, m_latency, m_mic, m_response, m_state, m_transcript,
+    Broadcaster, m_error, m_latency, m_mic, m_response, m_state, m_tool, m_transcript,
 )
 from bridge.hotkeys import Hotkeys
 from bridge.log import setup_logging
 from bridge.paste import paste_text
-from bridge.tools import execute as run_tool, tool_specs
+from bridge.tools import disabled_note, execute as run_tool, label_of as tool_label, tool_specs
 from bridge.replace import apply as apply_replacements  # aliased: `replace` is dataclasses.replace here
 from bridge import settings
 
@@ -594,6 +596,24 @@ class Orchestrator:
 
     # --- the states ---
 
+    def _persona(self) -> str:
+        """The system prompt for one turn: the voice, plus a line naming the connectors the user
+        has switched off (D38). A method rather than an inline expression so the selfcheck can
+        assert on it without standing up a whole turn — the wiring is the half that used to be
+        unguarded, and a hidden tool the brain is NOT told about is exactly the D36 failure."""
+        return DEFAULT_SYSTEM + disabled_note()
+
+    def _run_tool_seen(self, call, transcript: str) -> tuple[str, str]:
+        """Run one tool with the island told, before and after (D38). The `finally` is the point:
+        the 'done' message has to go out on the refused and errored paths too, or a failed call
+        leaves the indicator naming work that stopped — and an indicator that can lie about
+        reaching your mail is worse than none (spec/50 rule 4's posture, applied to tools)."""
+        self.bc.publish(m_tool(call.name, tool_label(call.name)))
+        try:
+            return run_tool(call, session=self.session.id, transcript=transcript)
+        finally:
+            self.bc.publish(m_tool(call.name, done=True))
+
     def _turn(self, audio):
         """THINKING → SPEAKING, or held (shown, not spoken), for one utterance. Returns the
         next utterance's audio — only a barge-in produces one now — or None to end the chain,
@@ -614,12 +634,18 @@ class Orchestrator:
         # The 'working' earcon is retired (D28): since D23/D25 the overlay's THINKING state IS
         # the feedback, so nothing pings while the brain runs — the screen carries it.
         usage_box = {"tokens": 0}
+        # D38: the persona plus a line naming the connectors the user has switched off. Set per
+        # TURN, not per session, because settings are re-read each turn — and stated in prose
+        # because a hidden tool is merely absent, which the model reads as "no such capability
+        # exists" and papers over. `disabled_note()` is "" when nothing is off, leaving the
+        # persona byte-identical to before.
+        self.session.system = self._persona()
         reply, err = self._run_async(_drive(
             self._assistant_brain(), self.session, text,
             on_delta=lambda d: self.bc.publish(m_response(delta=d)),
             abort=self._abort_flag(),
-            tools=tool_specs(),                 # Contract T: only implemented, in-tier tools (spec/30)
-            execute=lambda c: run_tool(c, session=self.session.id, transcript=text),
+            tools=tool_specs(),                 # Contract T: implemented, in-tier, connected (spec/30)
+            execute=lambda c: self._run_tool_seen(c, text),
             on_usage=lambda n: usage_box.__setitem__("tokens", n),
         ))
         if err == "aborted":
@@ -883,19 +909,39 @@ class Orchestrator:
         self.bc.start()                          # Contract P feed up (crash-isolated; a busy
                                                  # port just disables it — never fatal)
         t0 = time.perf_counter()
-        log.info("warm-up: loading wake, VAD, STT and TTS models...")
+        # D39 — warm-up is split by WHEN a model is first needed, not loaded as one block.
+        # serve()'s idle loop calls wake_model.predict() on every block, and _capture needs
+        # the VAD, so those two must exist before we serve: they stay here. Whisper is not
+        # needed until a capture ENDS and Kokoro not until the brain has answered, so both go
+        # to a background thread and the doors open without waiting for them. Measured spread
+        # before this: 3.8 s to 45.9 s, all of it with the hotkeys unregistered.
+        log.info("warm-up: loading wake and VAD...")
         openwakeword.utils.download_models([WAKE_MODEL])
         wake_model = Model(wakeword_models=[WAKE_MODEL], inference_framework="onnx")
         self.vad = SileroVAD(_silero_model_path())
-        transcribe(np.zeros(SAMPLE_RATE // 2, dtype=np.float32))  # loads whisper + GPU warm-up
-        synth("ready")                                            # loads Kokoro; discarded
-        log.info("warm-up done in %.1f s", time.perf_counter() - t0)
+        log.info("wake + VAD ready in %.1f s — doors opening", time.perf_counter() - t0)
+
+        def _warm() -> None:
+            """The heavy models, off the critical path. Both lazy-init behind their own lock
+            (D39), so an early keypress that beats this thread waits for the same load rather
+            than starting a second one."""
+            try:
+                transcribe(np.zeros(SAMPLE_RATE // 2, dtype=np.float32))   # whisper + GPU warm
+                # Kokoro is NOT preloaded: `tts` is off by default (D23), so this was loading
+                # a model and discarding its audio on most starts. synth() lazy-loads on first
+                # use, which is also the only correct answer when tts is toggled on mid-session
+                # (settings are re-read every turn, D28).
+                if settings.get("tts"):
+                    synth("ready")                                         # discarded
+                log.info("warm-up done in %.1f s", time.perf_counter() - t0)
+            except Exception:                    # a warm-up crash must not kill the daemon;
+                log.exception("warm-up failed — models will load on first use")
+
+        threading.Thread(target=_warm, name="warm-up", daemon=True).start()
 
         with OutputPump() as pump, \
              sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="int16",
                             blocksize=0) as mic:
-            # After warm-up, so a press during the 22 s model load cannot queue a turn
-            # that fires the instant we start serving.
             self.hk = self.hk or Hotkeys()
             self.hk.start()
             log.info("ready — press %s or say '%s' (Ctrl-C to stop)",
@@ -1288,10 +1334,44 @@ def _selfcheck() -> None:
     finally:
         g.update(_orig)
 
+    # D37 scoring (offline half): the live run needs a model, but the VERDICT is pure. Both sides
+    # must be case-insensitive — the asymmetry that existed until 2026-08-01 failed models for
+    # capitalising a wanted phrase, which the prompt requires them to do.
+    assert _format_verdict("List one is the priority.", ["list one"], ["1.", "- "]) == ([], []), \
+        "a wanted phrase must still match once the model capitalises it"
+    assert _format_verdict("Schedule Two.", ["schedule two"], []) == ([], [])
+    assert _format_verdict("1. Buy milk", [], ["1."]) == ([], ["1."]), "a real list is still caught"
+    assert _format_verdict("prose only", ["absent"], []) == (["absent"], []), \
+        "a genuinely missing phrase must still be reported"
+    assert _format_verdict("ENUMERATE LIST", [], ["enumerate"]) == ([], ["enumerate"]), \
+        "an unwanted phrase must be caught whatever its case"
+
+    # D38: the persona the brain receives must NAME a connector the user switched off. Guarding
+    # `disabled_note()` alone proved the SENTENCE was right; this proves it is actually attached,
+    # which is the half that would fail silently — a hidden tool the brain is not told about is
+    # the can't-rendered-as-didn't failure of D36, not merely an unhelpful answer.
+    import tempfile as _tf
+    from pathlib import Path as _P
+    from bridge import settings as _st
+    with _tf.TemporaryDirectory() as _tmp:
+        os.environ["GEMMA_SETTINGS"] = str(_P(_tmp) / "settings.json")
+        _o = Orchestrator(brain=object(), broadcaster=_Rec())
+        _keys = [k for k, v in _st.schema()["settings"].items() if "connector" in v]
+        # Defaults: everything personal is off, so the persona must say so.
+        _p = _o._persona()
+        assert _p.startswith(DEFAULT_SYSTEM), "the persona must still open with the voice"
+        assert "Files" in _p and "switched off" in _p, _p
+        # Everything on: the persona is byte-identical to the plain voice.
+        for _k in _keys:
+            _st.set(_k, True)
+        assert _o._persona() == DEFAULT_SYSTEM, _o._persona()
+    os.environ.pop("GEMMA_SETTINGS", None)
+
     print("selfcheck OK: speak/hold split, capture endpoint, barge-in counter, error lines, "
           "latency table + targets, feedback credits the screen (D25), pings toggle gates earcons, "
           "dictation dispatch + cleanup-fallback-to-raw + the tidy toggle (spec/60), "
-          "D37 list commands declared in the cleanup prompt")
+          "the persona names switched-off connectors (D38), "
+          "D37 list commands declared in the cleanup prompt + case-insensitive scoring")
 
 
 # D37 (spec/60): what the spoken list commands must and must not do, as transcripts the STT would
@@ -1332,6 +1412,24 @@ _FORMAT_CASES = [
 ]
 
 
+def _format_verdict(out: str, want: list[str], unwanted: list[str]) -> tuple[list[str], list[str]]:
+    """Judge one _FORMAT_CASES result: (what's missing, what shouldn't be there).
+
+    Both sides compare case-INSENSITIVELY. They did not until 2026-08-01, and the asymmetry was
+    a real bug: `want` was matched against the raw output while `unwanted` was matched against a
+    lowercased one, so a model that CAPITALISED a wanted phrase was marked failed. The prompt
+    *requires* capitalisation, so the suite was penalising correct behaviour — qwen3.5:9b lost
+    two cases to it (`schedule two` -> `Schedule Two`, `list one` -> `List one`), both with
+    perfectly correct output. Any earlier scoreboard is suspect for the same reason.
+
+    These cases test STRUCTURE — did a list appear, did the speaker's words survive. Casing is
+    cleanup fidelity and belongs to a check that looks at it directly, not to a substring match
+    that happens to be sensitive to it."""
+    low = out.lower()
+    return ([w for w in want if w.lower() not in low],
+            [u for u in unwanted if u.lower() in low])
+
+
 def _check_format() -> None:
     """D37, LIVE: run the list commands through the real `cleanup_dictation` model (spec/60).
     Detection is prompt-side, so this is the check that actually proves it — the offline selfcheck
@@ -1347,8 +1445,7 @@ def _check_format() -> None:
         if err:
             print(f"SKIPPED — cleanup engine unavailable ({err.kind}: {err.detail})")
             return
-        missing = [w for w in want if w not in out]
-        present = [u for u in unwanted if u in out.lower()]
+        missing, present = _format_verdict(out, want, unwanted)
         ok = not missing and not present
         failures += [] if ok else [why]
         print(f"\n{'ok  ' if ok else 'FAIL'} {why}\n  said: {said}\n  got:  {out!r}")

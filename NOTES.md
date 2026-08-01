@@ -85,3 +85,19 @@ history.
   for the parked design question about rendering partials.
 - Diagnosing this needed the daemon's console, which at the time went only to stderr — in a
   Claude Code background-task file nobody would ever find. Hence `logs/gemma.log`.
+
+## Font tooling (2026-08-01)
+
+Swapping the icon font needed `fonttools` (+ `brotli`), installed into the system Python by hand.
+They are **build-time only** and deliberately NOT in `pyproject.toml` — nothing at runtime reads
+a font's tables; the app just loads the .ttf. Reach for them again only when the bundled font
+changes, e.g.:
+
+    python -c "from fontTools.ttLib import TTFont; \
+      print({n: hex(c) for c, n in TTFont('teleprompter/fonts/MaterialSymbolsOutlined.ttf').getBestCmap().items()})"
+
+**The trap that cost time:** Material *Symbols* and the older Material *Icons* map the same glyph
+NAMES to different codepoints (`check` E5CA vs E668, `close` E14C vs E5CD, `edit` E150 vs F097,
+`cloud` E2BD vs F15C). The bundled subset came from the older mapping, so swapping in the full
+Symbols font meant re-mapping every existing glyph, not just adding new ones — otherwise
+known-good icons silently become different pictures rather than failing.

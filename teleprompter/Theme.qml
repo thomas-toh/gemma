@@ -65,24 +65,27 @@ QtObject {
     readonly property int durationAnswerDwell: 20000  // answer sits before the island hides
     readonly property int durationPasteDwell: 2500    // dictation's "Pasted ✓" beat before hiding (D2)
 
-    // ── settings window (D29) ───────────────────────────────────────────────
-    // A second surface, not a second design system: the face and motion above are shared. A cool
-    // near-black set (Thomas, 2026-07-26 — the olive read as warm espresso; B ≥ G on every step so
-    // the field reads cool-neutral). The UI accent is white and the secondary colours are muted —
-    // see below. Every fill refers to a ROLE, so a palette change is this block alone. The island's
-    // pure black is its own token (`surface`); the window borrows pure black only for the card
-    // model-id wells (`surfaceDeep`, Thomas 2026-07-26).
-    readonly property color surfaceShell: "#0d0e11"   // window body
-    readonly property color surfaceRail:  "#0d0e11"   // the top-bar shares the body
-    readonly property color surfaceCard:  "#1a1c21"
-    readonly property color surfaceLift:  "#23262d"   // card hover
-    readonly property color surfaceSunk:  "#0a0b0d"   // inset fields, a step below the shell
-    readonly property color surfaceDeep:  "#000000"   // pure black — the card model-id wells
-    readonly property color surfacePop:   "#1f232b"   // dropdowns, sheets
-    readonly property color hairline:       "#2a2d33"
-    readonly property color hairlineStrong: "#3a3e46"
+    // ── settings window (D29, re-cut by D40) ────────────────────────────────
+    // A second surface, not a second design system: the face and motion above are shared. Every
+    // fill refers to a ROLE, so a palette change is this block alone.
+    //
+    // D40 turns the field WARM, reversing the cool-neutral set of 2026-07-26. That decision was
+    // taken against an olive that read as warm espresso; the brief has since changed to "read as
+    // part of the system, not as a custom-designed app", and the greys it is measured against are
+    // warm (R ≥ G ≥ B on every step). Cool-neutral is what made the old window read as designed.
+    readonly property color surfaceShell: "#262624"   // window body
+    readonly property color surfaceRail:  "#1f1e1d"   // the sidebar — a step below the body
+    readonly property color surfaceCard:  "#2e2d2b"
+    readonly property color surfaceLift:  "#32312e"   // hover, inset fields, segmented track
+    readonly property color surfaceSunk:  "#1f1e1d"   // inset fields, a step below the shell
+    readonly property color surfaceDeep:  "#141413"   // the page behind the window
+    readonly property color surfacePop:   "#2e2d2b"   // dropdowns, sheets
+    // Flat, not translucent: Qt reads an 8-digit hex as #AARRGGBB, so a stray alpha pair here is
+    // a silently invisible line rather than an error. These are the composited values.
+    readonly property color hairline:       "#393836"
+    readonly property color hairlineStrong: "#4a4844"
 
-    readonly property color bone: "#f4f2e9"           // the window's white (warmer than the island's)
+    readonly property color bone: "#f5f4f2"           // the window's white (warmer than the island's)
     readonly property color uiInk:      bone                                    // strong fills
     readonly property color uiText:     bone
     readonly property color uiTextDim:  "#c6c7bb"                               // mist
@@ -94,8 +97,18 @@ QtObject {
     readonly property color uiHoverStrong: Qt.rgba(bone.r, bone.g, bone.b, 0.09)
     readonly property color uiNavHover:    Qt.rgba(bone.r, bone.g, bone.b, 0.04)
     readonly property color uiSelected:    Qt.rgba(bone.r, bone.g, bone.b, 0.075)
-    readonly property color uiEdgeHover:   Qt.rgba(bone.r, bone.g, bone.b, 0.24)
-    readonly property color uiTrackOff:    Qt.rgba(bone.r, bone.g, bone.b, 0.10)
+    // ── OPAQUE on purpose (D40) ──────────────────────────────────────────────
+    // These two are ANIMATED against opaque colours — the recorder's border goes hairline →
+    // hover, the toggle's track goes track → accent. A ColorAnimation interpolates the alpha
+    // channel too, so a translucent endpoint makes the control briefly SEE-THROUGH on the way,
+    // which reads as a flash rather than a highlight. Same fault the Add-model button had.
+    // These are the composited values (bone at 24% over surfaceSunk, at 10% over surfaceShell),
+    // so they look identical at rest and no longer dip on the transition.
+    // The rule, for anything added later: a colour that is animated against an opaque one must
+    // be opaque. The rgba tokens above are safe because they animate against `transparent`,
+    // where fading up from nothing is the intended effect.
+    readonly property color uiEdgeHover:   "#525150"
+    readonly property color uiTrackOff:    "#3b3b39"
 
     // The UI accent is now WHITE (Thomas, 2026-07-26 — the lime read as sporty): toggles, the
     // primary model, focus, text selection all use `accent`. The secondary colours are firmed
@@ -105,13 +118,21 @@ QtObject {
     readonly property color flare:  "#cf6142"         // muted coral — mark, on-air
     readonly property color vapor:  "#40988c"         // muted teal (reserved)
     readonly property color pulse:  "#c2506f"         // muted berry — faults
-    readonly property color danger: pulse
+    // D40 splits these apart. `pulse` stays the FAULT colour, keeping the rule that red never
+    // means "the mic can hear you"; `danger` becomes a real red for the two destructive
+    // ACTIONS — the close button's hover and Remove — because a muted berry on a solid button
+    // reads as disabled, which is the opposite of the signal those two need.
+    readonly property color danger: "#d93b33"
     readonly property color lamp: flare               // the on-air lamp (name kept for callers)
     readonly property color lampSoft: Qt.rgba(0.81, 0.38, 0.26, 0.18)
 
     readonly property real opacityDim: 0.55          // a decided setting whose consumer is unbuilt
     readonly property int radiusCard: 12
     readonly property int radiusControl: 8
+    // One height for every text button AND the three window controls (D40). A token rather than
+    // a consequence of padding, because "the same size" must not depend on two paddings agreeing
+    // — which is exactly how they drifted apart when the button font changed.
+    readonly property int controlHeight: 34
     readonly property int durationControl: 180       // switch travel, hover, menu open
 
     // Type scale for the settings window — THREE sizes, named by role (standardised 2026-07-25).
@@ -123,7 +144,16 @@ QtObject {
     //   small   14 — the floor: chips, machine values, the effort scale, captions
     // Bold + sentence case carry the heading; there is no uppercase-eyebrow tier. QML wants
     // ints here — a fractional pixelSize is rejected outright.
-    readonly property int fontHeading: 18
+    // D40 re-cuts this to FOUR, a step smaller throughout, because the window is now measured
+    // against the OS rather than against itself: 17 page title · 15 section · 14 body · 12 the
+    // floor. A description takes the size of the label it belongs to (Thomas) — weight and
+    // colour do the separating, not scale, which is why there is no size between 14 and 12.
+    // These tokens are the settings window's ALONE; the island's sizes are its own, above.
+    // Bumped a step on 2026-08-01 (Thomas): 14/12 measured correct against the HTML mockup on
+    // paper — Qt's pixelSize and CSS's font-size agree on Inter — but side by side on the real
+    // display the window read visibly smaller than the page. The screen is the authority.
+    readonly property int fontTitle:   18
+    readonly property int fontHeading: 16
     readonly property int fontBase:    16
     readonly property int fontSmall:   14
     // Coded labels and machine values (model ids, SEC.01, keycaps) — Martian Mono, bundled in
