@@ -369,7 +369,12 @@ def _connectors() -> dict[str, bool]:
     JSON edit (hard rule 3). Settings are re-read every turn, which is why a toggle applies to
     the next utterance with no restart and no watcher."""
     now = settings.load()
-    return {s["connector"]: bool(now.get(key))
+    # `is True`, never `bool(...)`: a consent gate must be EXPLICIT. settings.load() has already
+    # merged the schema defaults (real booleans), so an unset key reads its default; the only thing
+    # this rejects is a hand-edited file holding a non-boolean — `"connector_files": "false"` is a
+    # truthy STRING and `bool()` would read it as ON, which is the one direction a consent gate must
+    # never fail. Everything that is not literally `true` fails closed.
+    return {s["connector"]: (now.get(key) is True)
             for key, s in settings.schema()["settings"].items() if "connector" in s}
 
 
@@ -486,7 +491,7 @@ def _selfcheck() -> None:
     from pathlib import Path
     import tempfile
 
-    global AUDIT_FILE
+    global AUDIT_FILE, _BACKENDS
 
     reg = _registry()
     assert reg, "spec/schemas/tools.json must carry the starter tools"
@@ -520,6 +525,19 @@ def _selfcheck() -> None:
 
     # The connector alone is also sufficient to exclude: switching Files off removes exactly
     # find_document and leaves every other tool where it was.
+    settings.set("connector_files", False)
+    assert {t["name"] for t in tool_specs()} == offered - {"find_document"}, tool_specs()
+
+    # A consent gate must be EXPLICIT: a hand-edited file holding a non-boolean fails CLOSED. Only
+    # the literal boolean `true` is ON — "false"/"0"/"off" are truthy STRINGS that a bool() read
+    # would have flipped on, the one direction consent must never fail. (The UI only ever writes
+    # real booleans; this is the file-override path spec/70 §2 sanctions.)
+    for junk in ("false", "0", "off", "true", 1):
+        settings.set("connector_files", junk)
+        assert "find_document" not in {t["name"] for t in tool_specs()}, \
+            f"a non-boolean connector value must fail closed, got ON for {junk!r}"
+    settings.set("connector_files", True)
+    assert "find_document" in {t["name"] for t in tool_specs()}, "the real boolean True is ON"
     settings.set("connector_files", False)
     assert {t["name"] for t in tool_specs()} == offered - {"find_document"}, tool_specs()
 
@@ -561,6 +579,18 @@ def _selfcheck() -> None:
 
     with tempfile.TemporaryDirectory() as tmp:
         AUDIT_FILE = Path(tmp) / "audit.jsonl"
+
+        # These execute() calls test DISPATCH + AUDIT + the gate — NOT the real backends, which on a
+        # box with a clipboard and an Outlook profile would read this machine's actual clipboard and
+        # inbox (finding 2026-08-02: search_email with no criteria enumerates real mail, and the
+        # "no profile on this box" comment had gone stale). Stub the two that read personal CONTENT
+        # so the check touches none; system_status and find_document stay real (a local-time read
+        # and an index query for a nonsense term — neither returns personal data). Each stubbed
+        # backend's own degradation and trust boundary are proven directly above, off the wire.
+        _real_backends = _BACKENDS
+        _BACKENDS = {**_real_backends,
+                     "read_clipboard": lambda a: "(clipboard not read during the selfcheck)",
+                     "search_email": lambda a: "(inbox not read during the selfcheck)"}
 
         # An unknown tool is refused, not executed — the allowlist backstop behind the filter.
         content, outcome = execute(ToolCall("1", "no_such_tool", {}), session="s", transcript="hi")
@@ -625,7 +655,9 @@ def _selfcheck() -> None:
                             "outcome", "duration_ms"}, sorted(rec)
         assert rec["tool"] == "no_such_tool" and rec["session"] == "s"
         assert rec["transcript_snippet"] == "hi", "the triggering transcript is recorded"
+        _BACKENDS = _real_backends
 
+    settings_dir.cleanup()          # the settings temp dir was held open for the whole check
     os.environ.pop("GEMMA_SETTINGS", None)
     print(f"tools selfcheck OK: {len(offered)} Tier-{MAX_TIER} tools offered with every "
           f"connector on ({', '.join(sorted(offered))}); tier, connector and the allowlist each "

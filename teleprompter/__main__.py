@@ -202,9 +202,13 @@ class IslandHitTest(QAbstractNativeEventFilter):
     rect (GetWindowRect), so no logical-vs-physical-pixel conversion is needed.
     """
 
-    def __init__(self, win) -> None:
+    def __init__(self, win, is_passthrough=None) -> None:
         super().__init__()
         self._win = win
+        # Called on every hit-test: return True to force the WHOLE overlay click-through, whatever
+        # the island is doing. Used so a topmost HUD never steals a click from another Gemma window
+        # (the Settings window) sitting beneath it.
+        self._is_passthrough = is_passthrough
         self._hwnd = 0
         if sys.platform == "win32":
             import ctypes
@@ -233,6 +237,13 @@ class IslandHitTest(QAbstractNativeEventFilter):
             return False, 0
         if msg.message != _WM_NCHITTEST or int(msg.hWnd or 0) != self._hwnd:
             return False, 0
+        # While another Gemma window (the Settings window) is open, the overlay must NEVER eat a
+        # click: it is a topmost HUD covering the top-centre of the screen, so its silhouette sits
+        # over a real window the user is trying to use — which is why Settings buttons under it, and
+        # the hover needed to reach a row's Edit menu, did not respond. Fully click-through then; the
+        # peek is a convenience that can wait until Settings is closed.
+        if self._is_passthrough is not None and self._is_passthrough():
+            return True, _HTTRANSPARENT
         # Interactive only when there is something to peek; otherwise fully click-through — the old
         # blanket-transparent behaviour, so the island never eats a click over a live answer's tab.
         if not (self._win.property("peekable") or self._win.property("peeking")):
@@ -379,6 +390,15 @@ def main() -> int:
     engine.rootContext().setContextProperty("reducedMotion", reduce_state)
     if reduce_state:
         log.info("system 'show animations' is off — island transitions run instant")
+
+    # Pin the QObjects exposed to QML to C++ ownership — the same guarantee the settings WINDOW is
+    # given in open_settings. A QObject reachable from QML can be adopted by the engine's JavaScript
+    # garbage collector and DELETED despite a live Python reference; that is what nulled `gemPlayer`
+    # "after a while", throwing on `gemPlayer.source`/`padRight`/`padBottom` in BOTH windows (the
+    # island's Gem and the settings sidebar's) and taking the overlay down with it. Ownership is the
+    # authority here, not the Python local, so it is set explicitly.
+    for _pinned in (model, cfg, gem_player):
+        QQmlEngine.setObjectOwnership(_pinned, QQmlEngine.ObjectOwnership.CppOwnership)
     engine.load(QUrl.fromLocalFile(str(Path(__file__).resolve().parent / "Overlay.qml")))
     roots = engine.rootObjects()
     if not roots:
@@ -406,9 +426,18 @@ def main() -> int:
             engine.rootContext().setContextProperty("reducedMotion", now)
             log.info("reduced-motion changed -> %s (live)", now)
 
+    def settings_is_open() -> bool:
+        # The overlay steps fully aside (click-through) while the Settings window is up, so it can
+        # never intercept a click meant for it. Asked of Qt each time rather than tracked, for the
+        # same reason open_settings does: our own bookkeeping fails open, the window list cannot.
+        for w in app.topLevelWindows():
+            if w.objectName() == "gemmaSettings" and w.isVisible():
+                return True
+        return False
+
     dismiss_key = DismissKey(on_dismiss, on_settings_change)
     app.installNativeEventFilter(dismiss_key)
-    island_hit = IslandHitTest(win)                                      # noqa: F841
+    island_hit = IslandHitTest(win, is_passthrough=settings_is_open)     # noqa: F841
     app.installNativeEventFilter(island_hit)                             # per-region click-through (D27)
 
     def restamp() -> None:
@@ -458,23 +487,47 @@ def main() -> int:
     settings_win: dict = {}
 
     def open_settings() -> None:
+        # Ask QT what exists, not our own dict. The dict is a fast path and can go stale — a
+        # window collected behind our back, a build that raised part-way — and every way it goes
+        # stale fails OPEN, which is how a second window appeared. The window list cannot.
+        for w in app.topLevelWindows():
+            if w.objectName() == "gemmaSettings":
+                settings_win["win"] = w
+                w.show()
+                w.raise_()
+                w.requestActivate()
+                return
+
         win_ = settings_win.get("win")
         if win_ is not None:
             # Reopening. A closed window is only hidden, so showing it again is all that is
-            # needed — unless its C++ half has gone, in which case the Python wrapper is a
-            # husk and every call on it raises. That is what made the second open do nothing.
+            # needed — unless its C++ half has gone, in which case the Python wrapper is a husk
+            # and every call on it raises. PROBE first, with a call that has no side effect: the
+            # earlier shape wrapped show/raise/activate together, so a failure part-way through
+            # left the window on screen AND fell through to build a second one. Whether the old
+            # one lives is a separate question from showing it, and has to be answered first.
             try:
+                win_.isVisible()
+            except RuntimeError:
+                log.info("settings window was collected — rebuilding it")
+                settings_win.pop("win", None)
+                win_ = None
+            if win_ is not None:
                 win_.show()
                 win_.raise_()
                 win_.requestActivate()
                 return
-            except RuntimeError:
-                log.info("settings window was collected — rebuilding it")
-                settings_win.pop("win", None)
 
+        # Claim the slot before building. Creating the window is synchronous, but the tray can
+        # deliver two activations (a double-click on the icon is two), and a second call arriving
+        # mid-build would find the slot still empty and start its own.
+        if settings_win.get("building"):
+            return
+        settings_win["building"] = True
         comp = QQmlComponent(
             engine, QUrl.fromLocalFile(str(Path(__file__).resolve().parent / "SettingsWindow.qml")))
         win_ = comp.create(engine.rootContext())
+        settings_win.pop("building", None)
         if win_ is None:
             for err in comp.errors():
                 log.error("settings window: %s", err.toString())
@@ -487,6 +540,13 @@ def main() -> int:
             win_.setIcon(gem.app_icon())  # the taskbar button for this window, explicitly
         except Exception as e:                                       # noqa: BLE001
             log.debug("could not set settings-window icon: %s", e)
+        # Re-apply the DWM rounded corners on EVERY show, not just this first one. Qt can recreate
+        # the native handle across a hide/show or a display/DPI change, and the corner preference
+        # set on the old HWND dies with it — which is why the corners sometimes went square on a
+        # reopen. The overlay re-stamps its own native styles on this same signal, for the same
+        # reason (restamp). Wired once here; it covers the reuse paths above without repeating.
+        win_.visibleChanged.connect(
+            lambda w=win_: round_corners(w) if w.isVisible() else None)
         settings_win["win"] = win_
         win_.show()
         round_corners(win_)          # after show(): winId only exists once there is a window

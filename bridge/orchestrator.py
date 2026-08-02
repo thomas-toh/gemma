@@ -24,6 +24,15 @@ import time
 from collections import deque
 from dataclasses import replace
 
+# Intel's Fortran runtime — pulled in by faster-whisper's ctranslate2 / MKL below — installs a
+# console-control handler that ABORTS the process on Ctrl-Break with `forrtl: error (200)`. That
+# hijacks run.py's D39 shutdown (it asks with CTRL_BREAK first) BEFORE Python's KeyboardInterrupt
+# can run this module's graceful `finally` — so the ugly stack trace prints AND a local model
+# server we started is left running. Disabling the handler (documented Intel env var) hands the
+# signal back to Python, so `main()`'s `except KeyboardInterrupt` / `finally` run as intended. Set
+# HERE, before the ctranslate2 import loads the runtime; `setdefault` respects an explicit override.
+os.environ.setdefault("FOR_DISABLE_CONSOLE_CTRL_HANDLER", "1")
+
 from bridge.audio.wake import (
     SAMPLE_RATE, BLOCK_SAMPLES, BUFFER_BLOCKS, WAKE_MODEL, THRESHOLD,
 )
@@ -37,7 +46,7 @@ from bridge.brains.base import (
     DEFAULT_SYSTEM, Done, Error, Session, TextDelta, ToolCall, transform,
 )
 from bridge.brains.claude import ClaudeBrain
-from bridge.brains.providers import build_brain
+from bridge.brains.providers import build_brain, ensure_local_server, stop_local_servers
 from bridge.brains import router
 from bridge.broadcaster import (
     Broadcaster, m_error, m_latency, m_mic, m_response, m_state, m_tool, m_transcript,
@@ -64,6 +73,13 @@ BARGE_CHUNKS = 4       # sustained speech chunks (~128 ms) to call it a barge-in
 MIC_LEVEL_REF = 6000.0  # int16 RMS mapped to a full overlay bar (Contract P 'mic' level).
                         # ponytail: calibration knob — mic-dependent; raise if the bars peg,
                         # lower if they barely move (the physical world needs tuning).
+
+# Minimum time the boot island (status.json 'booting', v0.7.0) stays up before it clears to 'idle'.
+# The overlay is a SEPARATE process that starts in parallel and takes ~1-2 s to load its window and
+# connect, so a fast (warm-cache) warm-up would clear `booting` before the overlay ever saw it and
+# the loader would never show. This floor holds it long enough to be caught; a genuinely slow
+# warm-up already exceeds it, so it adds no delay in the case that needs the loader most.
+MIN_BOOT_S = 1.5
 
 # The daemon's pre-router default brain model. It lives HERE, not in an adapter: the adapters
 # carry no model preference (D30 agnosticism pass), so the choice of what to run when nothing
@@ -175,6 +191,11 @@ SPOKEN_ERRORS = {
     # (was "Wake me afresh", wake-word framing for a product whose wake word is off by default).
     "context": "This conversation got too long for me. Start a new turn to reset me.",
     "unavailable": "My brain is unreachable right now.",
+    # Two conditions, one sentence, because the remedy is identical: open settings and pick a model
+    # that works. Either none was chosen, or the one chosen is no longer there — commonly a model
+    # deleted from a local runner. Deliberately points at the SETTING rather than claiming the model
+    # was deleted, since a 404 can also mean a mistyped endpoint path.
+    "no_model": "I can't find the model I'm set to use. Check the model in settings.",
     # D36: reached only after the tool loop's retry has also failed, so "try again" is the honest
     # advice — the same words usually work on a resample.
     "malformed_tool_call": "I couldn't form a valid request to my tools. Try again.",
@@ -183,6 +204,32 @@ SPOKEN_ERRORS = {
 
 def spoken_error(kind: str) -> str:
     return SPOKEN_ERRORS.get(kind, "Something went wrong on my end.")
+
+
+def _start_local_servers() -> None:
+    """Start a headless server for every role that resolves to a local runner declaring one.
+
+    Roles are deduplicated by provider — assistant and dictation on the same Ollama is one server,
+    not two. A failure is logged and swallowed: an unstartable server is exactly the case D1
+    already handles by pasting the raw transcript, so it must not take the daemon down with it."""
+    started = set()
+    for role in ("assistant", "cleanup_dictation", "cleanup_prompts"):
+        cfg = router.resolve(role)
+        if not cfg or cfg["provider"] in started:
+            continue
+        started.add(cfg["provider"])
+        try:
+            ensure_local_server(cfg["provider"], cfg.get("endpoint"), cfg.get("keep_alive"))
+        except Exception:
+            log.exception("could not start the %s server — carrying on without it", cfg["provider"])
+
+
+def _stop_local_servers() -> None:
+    """Quit-time counterpart. Only servers WE started are candidates at all (providers.py); this
+    setting decides whether even those are stopped, since leaving one running makes the next start
+    faster. Read at quit, not at spawn, so flipping it mid-session takes effect."""
+    if settings.get("local_server_stop_on_quit"):
+        stop_local_servers()
 
 
 class Dismissed(Exception):
@@ -408,6 +455,12 @@ class Orchestrator:
         self.pump: OutputPump | None = None
         self.mic = None
         self.vad: SileroVAD | None = None
+        # Warm-up gate (status.json v0.7.0). True by default so replay/selfcheck — which drive
+        # serve() directly without run()'s warm-up — are never gated; run() flips it off while the
+        # heavy models load and the boot island (a spinner) shows, and _warm flips it back on. A
+        # door press while not ready is DROPPED (Thomas): every path needs speech-to-text and the
+        # assistant needs its brain reachable, so a turn attempted before then just errors.
+        self._ready = True
 
     # orchestrator event -> Contract P 'state' (bridge/broadcaster.py, spec/schemas/status.json).
     # 'listening' is emitted by _capture (mic open); 'speaking'/'error' by _speak (its `state`
@@ -865,6 +918,16 @@ class Orchestrator:
             if door is None and not any(s >= THRESHOLD
                                         for s in wake_model.predict(frame).values()):
                 continue
+            # Booting gate (status.json v0.7.0): drop an early press/wake until warm-up has finished
+            # (Thomas — drop, don't queue). The boot island's spinner is already showing "not ready",
+            # so a dropped press is visible; a turn attempted now would hit an unloaded model and read
+            # as an error. `_pressed()` already consumed the door; reset so a tap-toggle is not left
+            # half-open, exactly as the Dismissed handler does.
+            if not self._ready:
+                if self.hk is not None:
+                    self.hk.reset()
+                log.info("door pressed during warm-up — dropped (not ready)")
+                continue
             t_wake = time.perf_counter()
             self._enter(door, t_wake)
             # ponytail: fresh history each wake-chain — whether it should persist
@@ -908,6 +971,12 @@ class Orchestrator:
 
         self.bc.start()                          # Contract P feed up (crash-isolated; a busy
                                                  # port just disables it — never fatal)
+        # Boot island: the doors close and a spinner shows until warm-up finishes. Published now,
+        # while the feed is up but the overlay may still be loading — the broadcaster retains it and
+        # replays it to the overlay when it connects, so the loader appears as soon as there is a
+        # window to draw it in (which is exactly the gap this fills).
+        self._ready = False
+        self._publish_state("booting")
         t0 = time.perf_counter()
         # D39 — warm-up is split by WHEN a model is first needed, not loaded as one block.
         # serve()'s idle loop calls wake_model.predict() on every block, and _capture needs
@@ -926,6 +995,11 @@ class Orchestrator:
             (D39), so an early keypress that beats this thread waits for the same load rather
             than starting a second one."""
             try:
+                # A local model server is warm-up too, and the slowest kind: it must be running
+                # before the first turn or dictation falls back to pasting the raw transcript.
+                # Here rather than on the critical path for the same reason as the models — the
+                # doors should not wait on it.
+                _start_local_servers()
                 transcribe(np.zeros(SAMPLE_RATE // 2, dtype=np.float32))   # whisper + GPU warm
                 # Kokoro is NOT preloaded: `tts` is off by default (D23), so this was loading
                 # a model and discarding its audio on most starts. synth() lazy-loads on first
@@ -936,6 +1010,18 @@ class Orchestrator:
                 log.info("warm-up done in %.1f s", time.perf_counter() - t0)
             except Exception:                    # a warm-up crash must not kill the daemon;
                 log.exception("warm-up failed — models will load on first use")
+            finally:
+                # Hold the boot island for a minimum beat so the parallel-starting overlay reliably
+                # CATCHES `booting` before it clears (a fast warm-up otherwise races the overlay's
+                # own startup and the loader never shows). Warm-up usually already exceeds the floor.
+                elapsed = time.perf_counter() - t0
+                if elapsed < MIN_BOOT_S:
+                    time.sleep(MIN_BOOT_S - elapsed)
+                # Warm-up is over (loaded, or failed and the models will lazy-load): clear the boot
+                # island and open the doors. Publish idle BEFORE flipping _ready, so the first real
+                # turn's `listening` can never be clobbered by this idle (it runs after ready is set).
+                self._publish_state("idle")
+                self._ready = True
 
         threading.Thread(target=_warm, name="warm-up", daemon=True).start()
 
@@ -1164,9 +1250,13 @@ def _selfcheck() -> None:
 
     # every shared Contract-B error kind has a short spoken line
     for kind in ("auth", "rate_limit", "context", "unavailable",
-                 "malformed_tool_call", "unknown"):
+                 "malformed_tool_call", "no_model", "unknown"):
         line = spoken_error(kind)
         assert line and sentences(line) <= 2, kind
+    # ...and `no_model` must say something SPECIFIC. It exists only to stop a precise, actionable
+    # cause being narrated as a shrug, so falling back to the generic line would defeat it.
+    assert spoken_error("no_model") != spoken_error("unknown"), \
+        "no_model needs its own sentence, or the whole kind is pointless"
 
     # latency table: two turns — one full (wake->listen, thinking feedback, speak), one speak-only
     tbl = latency_table([(0.0, "wake", ""), (0.1, "earcon", "listening"), (1.0, "eos", ""),
@@ -1253,6 +1343,12 @@ def _selfcheck() -> None:
     disp.hk.doors["ask"].start.set()
     disp.hk.doors["dictate"].start.set()
     assert disp._pressed().name == "ask", "the assistant wins a simultaneous press"
+
+    # Boot gate (status.json v0.7.0): `_ready` defaults True so replay/selfcheck — which drive
+    # serve() directly, with no run()/warm-up — are NEVER gated. run() flips it off while the heavy
+    # models load (publishing `booting`, the island's spinner) and _warm flips it back on; serve()
+    # DROPS a press while it is off, so a turn is never attempted against an unloaded model.
+    assert disp._ready is True, "the boot gate must default open — replay/selfcheck are not gated"
 
     # D37 spoken list commands (spec/60). Detection lives in the PROMPT, so the real proof is
     # `--check-format` against the live model; what is checkable offline is that the contract is
@@ -1487,6 +1583,11 @@ def main() -> None:
         print()  # clean newline after ^C
         if orch.trace:
             print(latency_table(orch.trace))   # the session's metrics (docs/04 §7)
+    finally:
+        # Ctrl-C reaches here, and so does run.py's shutdown since D39 asks with CTRL_BREAK before
+        # it insists with terminate(). A hard kill skips this and leaves the server idling until
+        # its own keep-alive evicts the model — the Job Object tie (launcher C2) is the full fix.
+        _stop_local_servers()
 
 
 if __name__ == "__main__":

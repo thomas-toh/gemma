@@ -32,7 +32,7 @@ try:
 except (AttributeError, OSError):
     pass
 
-from PySide6.QtCore import QObject, QUrl                                 # noqa: E402
+from PySide6.QtCore import QObject, QUrl, qInstallMessageHandler        # noqa: E402
 from PySide6.QtQml import QQmlApplicationEngine                          # noqa: E402
 from PySide6.QtWidgets import QApplication                               # noqa: E402
 
@@ -189,13 +189,132 @@ def check_recorder(engine, app) -> None:
     assert rec.property("invalid") is True, "a rejected capture should flag itself"
     rec.metaObject().invokeMethod(rec, "stop")
     app.processEvents()
-    print("  recorder: Ctrl+Alt+1 captured and committed; bare key rejected")
+    # Abandoning a rejected capture (Esc / click-away / tab-off, all routed through stop()) must
+    # clear the danger-red border — otherwise the box sits at rest wearing an error over a valid
+    # value until the next click.
+    assert rec.property("invalid") is False, "stop() must clear the invalid flag on abandon"
+    print("  recorder: Ctrl+Alt+1 captured and committed; bare key rejected; abandon clears invalid")
+
+
+def check_new_fixes(win, cfg, settle) -> None:
+    """Guards for the 2026-08-02 adversarial-fix batch (the D40 follow-up). Each is written to FAIL
+    when its fix is reverted — a warning-only gate cannot see any of these."""
+    import time
+
+    from bridge.brains import providers as _providers
+
+    def walk(item):
+        yield item
+        for ch in item.childItems():
+            yield from walk(ch)
+
+    # M5 — the Dictate section routes rows by TYPE. A bool (local_server_stop_on_quit) rendered by
+    # the provider-shaped CleanupRow came out dead: toggle stuck off, dropdown showing the literal
+    # "true". Every live CleanupRow must carry a provider row (a real toggledBy), never a bool.
+    win.setProperty("section", "models")
+    settle()
+    cleanup_rows = [it for it in walk(win.contentItem()) if it.property("toggleKey") is not None]
+    assert cleanup_rows, "no CleanupRow on the Models pane — the item walk missed the delegates"
+    for cr in cleanup_rows:
+        k = cr.property("key")
+        assert cr.property("toggleKey"), \
+            f"a CleanupRow with an empty toggleKey — the non-provider row {k!r} got the wrong delegate"
+        assert cfg.meta[k]["type"] == "provider", \
+            f"CleanupRow is rendering a {cfg.meta[k]['type']} setting ({k!r}); route it by type"
+
+    # M1 — a LOCAL provider must be addable end to end through the real controls. Local Add now
+    # requires a successful trial exactly as cloud does (uniform canCommit), where before it was
+    # committable on an endpoint alone yet could never populate a model, and so was a dead end.
+    win.setProperty("addEditing", False)
+    win.setProperty("addKind", "local")
+    win.setProperty("addProviderId", "ollama")
+    win.setProperty("addEndpoint", "127.0.0.1:11434")
+    win.setProperty("addModel", "llama3.1:8b")
+    win.setProperty("addTested", False)
+    win.setProperty("addStep", 2)
+    cfg.clearTrial()
+    settle()
+    assert win.property("addProbe") == "untested", win.property("addProbe")
+    assert win.property("canCommit") is False, \
+        "local Add must require a successful Test (addProbe ok), not merely an endpoint"
+    _saved = _providers.probe
+    _providers.probe = lambda pid, endpoint=None, timeout=None, key=None: (["llama3.1:8b"], "ok")
+    try:
+        cfg.trialProvider("ollama", "", "127.0.0.1:11434")   # exactly what the local Test button calls
+        for _ in range(100):
+            settle()
+            if cfg.trial.get("status") == "ok":
+                break
+            time.sleep(0.02)
+        assert cfg.trial.get("status") == "ok", f"the local trial never completed: {cfg.trial}"
+        _ml = win.property("addModelList")
+        _ml = _ml.toVariant() if hasattr(_ml, "toVariant") else _ml
+        assert _ml == ["llama3.1:8b"], f"the local trial's models must reach the picker: {_ml}"
+        win.setProperty("addModel", "llama3.1:8b")
+        settle()
+        assert win.property("canCommit") is True, \
+            "a local provider must be committable once its trial has come back ok"
+    finally:
+        _providers.probe = _saved
+
+    # m0 — the typed key must not survive the sheet closing (the singleton-window leak). Every exit
+    # routes through manageOpen=false, so this covers Cancel, the X, the scrim and a Remove.
+    win.metaObject().invokeMethod(win, "openAdd")
+    settle()
+    win.setProperty("addKind", "cloud")
+    win.setProperty("addProviderId", "anthropic")
+    win.setProperty("addKey", "sk-CANARY-should-clear")
+    settle()
+    win.setProperty("manageOpen", False)
+    settle()
+    assert win.property("addKey") == "", "the typed key must be cleared on every sheet exit (m0)"
+
+    # ...and closing the WHOLE window closes the sheet and clears the key (reopen must be clean).
+    win.setProperty("visible", True)
+    settle()
+    win.setProperty("manageOpen", True)
+    win.setProperty("addKey", "sk-CANARY-2")
+    settle()
+    win.setProperty("visible", False)
+    settle()
+    assert win.property("manageOpen") is False, "hiding the window must close the sheet (m0)"
+    assert win.property("addKey") == "", "hiding the window must clear the typed key (m0)"
+
+    # #38 — Done with a typed-but-untested key keeps the sheet OPEN rather than dropping the key
+    # silently. (Edit's Done is always enabled, which is the shape the finding hit.)
+    win.metaObject().invokeMethod(win, "openAdd")
+    settle()
+    win.setProperty("addKind", "cloud")
+    win.setProperty("addProviderId", "anthropic")
+    win.setProperty("addEditing", True)
+    win.setProperty("addModel", "claude-opus-4-8")
+    win.setProperty("addKey", "sk-typed-but-never-tested")
+    win.setProperty("addTested", False)
+    cfg.clearTrial()
+    settle()
+    assert win.property("addProbe") != "ok"
+    win.metaObject().invokeMethod(win, "commitAdd")
+    settle()
+    assert win.property("manageOpen") is True, \
+        "Done with an untested key must keep the sheet open, not drop the key silently (#38)"
+    win.setProperty("addEditing", False)
+    win.setProperty("manageOpen", False)
+    settle()
+    print("  new fixes: M5 delegate-by-type, local Add completable, key cleared on exit, "
+          "untested key not silently dropped")
 
 
 def check() -> None:
     # A throwaway settings file: the check must never read or write the real one.
     tmp = tempfile.mkdtemp(prefix="gemma-settings-check-")
     os.environ["GEMMA_SETTINGS"] = str(Path(tmp) / "settings.json")
+
+    # OFFLINE by construction (finding, 2026-08-02): the addProvider calls below auto-refresh, which
+    # without this would read the REAL credential store and issue authenticated GETs to the cloud
+    # providers on the dev box — the check is documented as needing "no credential store". probe's
+    # network behaviour is providers' own selfcheck; here it returns a deterministic offline answer.
+    from bridge.brains import providers as _providers
+    _providers.probe = lambda pid, endpoint=None, timeout=None, key=None: ([], "unreachable")
 
     # --- the schema→UI contract, before any window exists -----------------------
     schema = settings.schema()
@@ -266,6 +385,22 @@ def check() -> None:
     warnings: list[str] = []
     engine.warnings.connect(lambda ws: warnings.extend(w.toString() for w in ws))
 
+    # Widen the gate to RUNTIME binding errors (finding, 2026-08-02). `engine.warnings` catches
+    # load-time warnings but NOT a TypeError/ReferenceError thrown when a binding RE-EVALUATES in a
+    # state the check drives — exactly the class this check most needs to catch: an unguarded
+    # `overlay.state` read null and printed a TypeError on screen while the gate said "no warnings".
+    # Those go through Qt's message log, so a handler sees them; filter to the binding-error shapes.
+    runtime_errors: list[str] = []
+
+    def _capture_qml_errors(_mode, _ctx, message):
+        print(message, file=sys.stderr)   # keep Qt's own output visible, as the default handler does
+        if any(k in message for k in ("TypeError", "ReferenceError", "is not defined",
+                                      "Unable to assign", "Cannot read property",
+                                      "Cannot assign")):
+            runtime_errors.append(message)
+
+    qInstallMessageHandler(_capture_qml_errors)
+
     engine.load(QUrl.fromLocalFile(str(HERE / "SettingsWindow.qml")))
     roots = engine.rootObjects()
     assert roots, "SettingsWindow.qml did not load:\n  " + "\n  ".join(warnings)
@@ -305,6 +440,27 @@ def check() -> None:
     cfg.addProvider("ollama")                      # local: the second group appears
     settle()
     assert any(cfg.catalog[p]["where"] == "local" for p in cfg.models), "no local provider added"
+
+    # The two-model VRAM note, RENDERED (2026-08-02). settings_model checks the condition; this
+    # checks the Dictate row can actually grow to hold it — the row's height is computed from its
+    # label and pickers, and the note is added below with the centred children offset up by half.
+    # Drive it through the real settings so the binding chain is the one the window uses.
+    _before = win.property("height")
+    settings.set("models", {"ollama": {"on": True, "model": "qwen3:8b"}})
+    settings.set("primary", "ollama")
+    settings.set("cleanup_dictation", "ollama")
+    settings.set("cleanup_dictation_model", "")
+    cfg.changed.emit()
+    settle()
+    assert cfg.localTwoModelNote == "", "one model on both roles must not warn"
+    settings.set("cleanup_dictation_model", "qwen3:14b")     # now they differ
+    cfg.changed.emit()
+    settle()
+    assert cfg.localTwoModelNote != "", "two local models must warn"
+    settings.set("cleanup_dictation_model", "")              # back to a quiet window
+    cfg.changed.emit()
+    settle()
+    assert win.property("height") == _before, "the note must not leave the window resized"
 
     win.setProperty("manageOpen", True)
     settle()
@@ -364,18 +520,81 @@ def check() -> None:
     # The keybind recorder: drive it with synthetic key events and confirm it captures a combo
     # and commits the validated string. Done here because its logic (modifier accretion, the
     # commit-on-release) has no non-Qt half to unit-test.
+    # D40 / the stored-key leak (Thomas, 2026-08-01): the Add sheet must answer ONLY from the key
+    # typed into it. Anthropic already has a live model list in the provider cache by this point
+    # (addProvider + the roster's fetch), which is exactly the state that used to make a junk key
+    # look valid — so this asserts the sheet stays empty and uncommittable until a trial succeeds.
+    cfg.addProvider("anthropic")
+    settle()
+    win.setProperty("addEditing", False)
+    win.setProperty("addProviderId", "anthropic")
+    win.setProperty("addKind", "cloud")
+    win.setProperty("addKey", "sk-obviously-not-a-real-key")
+    win.setProperty("addHasKey", True)
+    win.setProperty("addTested", False)
+    win.setProperty("addStep", 2)
+    settle()
+    # A QML `var` crosses as a QJSValue on some paths and as a plain list on others, depending on
+    # what the binding returned — so unwrap defensively, or a REGRESSION shows up as an
+    # AttributeError here instead of as the assertion that explains it.
+    _models = win.property("addModelList")
+    _models = _models.toVariant() if hasattr(_models, "toVariant") else _models
+    assert _models == [], (
+        "an untested key must offer no models, whatever the provider cache holds: "
+        f"{_models}")
+    # It prompts, but it must not report a VERDICT it has not got.
+    _msg = win.property("addProbeMessage")
+    assert "Press Test" in _msg, _msg
+    for _claim in ("models available", "rejected"):
+        assert _claim not in _msg, f"an untested key must not report a verdict: {_msg}"
+    assert win.property("canCommit") is False, "Add must not commit on an untested key"
+    # ...and a successful trial is what unlocks it, not merely having typed something.
+    assert win.property("addProbe") == "untested", win.property("addProbe")
+    for pid in list(cfg.models):
+        cfg.removeProvider(pid)
+    settle()
+
+    # The Add form's values must SURVIVE the crossing into Python. A QML object literal arrives
+    # as a QJSValue, not a dict, so an isinstance check silently dropped every one of them and
+    # stored the schema fallbacks instead — a chosen model vanished on Add (Thomas, 2026-08-01).
+    # addKey is cleared first: commitAdd now refuses to close on a typed-but-untested key (the
+    # silent-drop fix), and the prior sub-test left one in the box.
+    win.setProperty("addKey", "")
+    win.setProperty("addProviderId", "openai")
+    win.setProperty("addKind", "cloud")
+    win.setProperty("addModel", "gpt-5.6-sol")
+    win.setProperty("addEditing", False)
+    win.setProperty("addStep", 2)
+    settle()
+    win.metaObject().invokeMethod(win, "commitAdd")
+    settle()
+    _entry = cfg.models.get("openai", {})
+    assert _entry.get("model") == "gpt-5.6-sol", (
+        f"the Add form's chosen model did not survive commitAdd: {_entry}")
+    cfg.removeProvider("openai")
+    settle()
+
+    check_new_fixes(win, cfg, settle)
+
     check_recorder(engine, app)
 
     check_gem_turn(gem_player, overlay, settle)
 
+    qInstallMessageHandler(None)                     # restore the default handler
     assert not warnings, (
         f"{len(warnings)} QML warning(s) — a binding is throwing:\n  "
         + "\n  ".join(warnings))
+    # Runtime binding errors (the class the load-time gate above cannot see). Deduped: one broken
+    # binding re-evaluates many times over a run.
+    assert not runtime_errors, (
+        f"{len(set(runtime_errors))} runtime QML binding error(s) — a binding threw while "
+        f"evaluating (an unguarded null read is the usual cause):\n  "
+        + "\n  ".join(sorted(set(runtime_errors))))
 
     os.environ.pop("GEMMA_SETTINGS", None)
     print(f"settings_check OK: window built from {len(schema['settings'])} declared settings, "
           f"{len(pane_ids)} panes, {len(schema['providers'])} providers; "
-          f"empty/one/two/local/manage states clean, no QML warnings")
+          f"empty/one/two/local/manage states clean, no QML warnings (load-time or runtime)")
 
 
 if __name__ == "__main__":

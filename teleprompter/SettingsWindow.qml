@@ -16,10 +16,14 @@
 // three things worth borrowing — text entry, scrolling and popup dismissal.
 import QtQuick
 import QtQuick.Controls.Basic
+import QtQuick.Shapes
 import teleprompter
 
 Window {
     id: root
+    // The launcher finds an existing window by this, so it can never open a second (see
+    // teleprompter/__main__.py). Asking Qt what exists beats trusting our own bookkeeping.
+    objectName: "gemmaSettings"
     title: "Gemma — Settings"
     width: 1080
     height: 760
@@ -54,13 +58,23 @@ Window {
 
     // The Models table's right-hand columns, measured in from the right edge. Header labels and
     // row controls both read these, so the two cannot drift apart.
+    // The Ask table's columns. The status toggle owns the RIGHT EDGE, so it lines up with the
+    // Tidy toggles below it and with Connectors' Status column — one switch column down the whole
+    // window. Key is a left-aligned column of its own; the row's ⋯ moved into the Provider cell,
+    // where it reads as "the menu for this provider" rather than as a fourth column.
     readonly property int colKebabW: 30
-    readonly property int colGap:    18
-    readonly property int colActiveR: colKebabW + colGap                 // toggle's right edge
-    readonly property int colKeyR:    colActiveR + 40 + colGap           // key text's right edge
+    readonly property real colModelF: 0.34      // Model column, as a fraction of the row
+    readonly property real colKeyF:   0.66      // Key column
 
     // Reduced motion is the machine's "show animations" setting, mirrored by the host (U-01).
     readonly property int t: reducedMotion ? 0 : Theme.durationControl
+
+    // Any close of the sheet (Cancel, the X, the scrim, a confirmed Remove, or a commit) forgets
+    // the typed credential and the trial verdict — the entry points already cleared them, the exits
+    // did not (the singleton-window leak). Closing the WHOLE window closes the sheet first, so a key
+    // and a live 'ok' verdict cannot survive a hide-and-reopen.
+    onManageOpenChanged: if (!manageOpen) clearSheet()
+    onVisibleChanged: if (!visible) { manageOpen = false; confirmOpen = false }
 
     // Release whatever holds the keyboard. A text field keeps its focus ring — and its cursor —
     // until something takes focus away, and clicking blank space is the gesture everyone expects
@@ -98,19 +112,60 @@ Window {
     property string addTemperature: "0.7"
     property string addEndpoint: ""
     property bool addEditing: false
+    // Has the key been tested IN THIS PANE? `cfg.probeStates` is keyed by provider and outlives
+    // the sheet, so without this a verdict from an earlier session leaked into a fresh Add —
+    // showing "the provider rejected that key" for a box you had not typed in, or worse, showing
+    // a stale "ok" and offering models on the strength of a test you never ran. Editing the key
+    // clears it again: a new key is a new question.
+    property bool addTested: false
     property string confirmTarget: ""
+    // Default ON (Thomas): the credential store is where GEMMA keeps its own key, not a shared
+    // vault another app reads — you would paste the key into that app and it would keep its own.
+    // So a key left behind after a removal is litter, not convenience.
+    property bool confirmDeleteKey: true
 
-    // The live probe outcome for the provider being added, and how to say it. Read off a tracked
-    // property (cfg.probeStates) so this re-evaluates when a background fetch lands.
-    readonly property string addProbe: addProviderId !== ""
-                                       && cfg.probeStates[addProviderId] !== undefined
-                                       ? cfg.probeStates[addProviderId] : "untested"
+    // The live outcome for the key being tried, and how to say it. Read off `cfg.trial`, a
+    // tracked property, so this re-evaluates when the background probe lands.
+    // The trial is a single slot describing the key TYPED IN THIS SHEET. Reading the shared
+    // per-provider cache here is what let a stored key answer for a typed one.
+    readonly property string addProbe: (cfg.trial.pid === addProviderId && cfg.trial.status !== "")
+                                       ? cfg.trial.status : "untested"
+
+    // The models the sheet may offer. On ADD that is the trial's list and nothing else — an
+    // unsaved key has to earn its own list. On EDIT, before any Test, the stored key's cached
+    // list is legitimate: it is what that credential actually reaches.
+    readonly property var addModelList: {
+        // A SUCCESSFUL trial always wins — it describes the key actually in the box.
+        if (cfg.trial.pid === addProviderId && cfg.trial.status === "ok")
+            return cfg.trial.models
+        // On an EDIT, anything else leaves the stored key's list alone. A failed trial is a fact
+        // about the key you just typed, not about the one already working, so it must not take
+        // the provider's settings down with it (Thomas). D30's rule — never blank a picker on a
+        // failed fetch — applied where there is something worth protecting.
+        if (addEditing && cfg.modelOptions[addProviderId] !== undefined)
+            return cfg.modelOptions[addProviderId]
+        // On an ADD there is nothing to protect: an unsaved key earns its own list or shows none.
+        if (addKind === "local")
+            return cfg.trial.pid === addProviderId ? cfg.trial.models : []
+        return []
+    }
     readonly property string addProbeMessage: {
-        var n = cfg.modelOptions[addProviderId] !== undefined
-                ? cfg.modelOptions[addProviderId].length : 0
+        // One line carries every state of the credential, so the form never stacks two sentences
+        // saying related things: what to do next, then what came back. Local providers get it too
+        // (D40 fix) — their Test reaches the server and their empty picker must explain itself.
+        if (!addTested)
+            return addKind === "local"
+                   ? "Press Test to reach the server and load its models"
+                   : (addHasKey
+                      ? (addEditing ? "Press Test to check this key before saving."
+                                    : "Press Test to check the key and load this provider's models")
+                      : "Add a key to load this provider's models")
+        var n = root.addModelList.length
         switch (addProbe) {
         case "fetching":    return "Asking the provider…"
-        case "ok":          return n + (n === 1 ? " model available" : " models available")
+        case "ok":          return (addEditing && addKey !== "")
+                                   ? "Provider has accepted this key. Saving will replace the old key."
+                                   : n + (n === 1 ? " model available" : " models available")
         case "auth":        return "The provider rejected that key."
         case "nokey":       return "No key saved yet."
         case "unreachable": return "Could not reach the provider. Check the connection."
@@ -120,9 +175,20 @@ Window {
         }
     }
 
+    // Can this form be committed? Adding a model with a junk credential used to be possible — the
+    // button never asked whether the provider had actually answered. A model list only exists after
+    // a successful fetch, so requiring one IS requiring a working credential; requiring a chosen
+    // model stops a provider being added with nothing to call. Uniform across cloud and LOCAL now
+    // (D40 fix): a local provider is reached with the same Test button, so it earns its list the
+    // same way — before this, local could never populate a model and so could never be added.
+    readonly property bool canCommit: addProviderId !== "" && addModel !== "" && addProbe === "ok"
+
     function openAdd() {
         addStep = 1
         addEditing = false
+        addTested = false
+        keyField.text = ""
+        cfg.clearTrial()
         manageOpen = true
     }
 
@@ -138,6 +204,9 @@ Window {
         addThinking = false
         addTemperature = "0.7"
         addEndpoint = cat.endpoint !== undefined ? cat.endpoint : ""
+        addTested = false
+        keyField.text = ""
+        cfg.clearTrial()
         addStep = 2
     }
 
@@ -158,29 +227,59 @@ Window {
         addEndpoint = st && st.endpoint !== undefined ? st.endpoint
                       : (cat.endpoint !== undefined ? cat.endpoint : "")
         addStep = 2
+        // An edit opens with a STORED key: `addModelList` falls back to its cached list until a
+        // Test is run, so `addTested` stays FALSE — nothing here has been tried yet.
+        addTested = false
+        keyField.text = ""
+        cfg.clearTrial()
         manageOpen = true
         // Fill the picker from the stored key without waiting for a Test press. Cheap — a list
         // already held is not re-fetched.
         cfg.refreshModels(pid)
     }
 
+    // Forget the typed credential and the trial verdict. Called on EVERY exit from the sheet, not
+    // just entry: the window is a reused singleton (teleprompter/__main__.py), so a key left in
+    // keyField.text or root.addKey outlived Cancel, the X, a click on the scrim, and even closing
+    // the window — sitting in a QML-readable property until the sheet happened to open again.
+    function clearSheet() {
+        keyField.text = ""
+        addKey = ""
+        addTested = false
+        cfg.clearTrial()
+    }
+
     function commitAdd() {
         if (addProviderId === "")
             return
+        // A key typed but NOT confirmed with Test must not be silently dropped on Done: keep the
+        // sheet open (the status line already reads "Press Test…") rather than closing as if it
+        // saved (Thomas). The only-ok-writes rule stands; this stops the SILENT loss beside it.
+        if (addKind === "cloud" && addKey !== "" && addProbe !== "ok") {
+            addTested = false          // ensure the line reads the "Press Test first" prompt
+            return
+        }
         // The key goes to the credential store, never into the settings file (spec/50 rule 10).
-        // An empty box on an edit means "leave the stored key alone", not "clear it".
-        if (addKind === "cloud" && addKey !== "")
+        // An empty box on an edit means "leave the stored key alone", not "clear it" — and a key
+        // that has NOT come back ok is never written at all, so a wrong key cannot replace a
+        // working one just because you pressed Done (Thomas).
+        if (addKind === "cloud" && addKey !== "" && addProbe === "ok")
             cfg.setKey(addProviderId, addKey)
+        // Temperature is written as a NUMBER, and ONLY for a provider whose catalogue declares the
+        // capability (the three local runners) — not stamped as the string "0.7" onto everyone.
+        var cat = cfg.catalog[addProviderId]
+        var caps = (cat !== undefined && cat.capabilities !== undefined) ? cat.capabilities : ({})
+        var temp = parseFloat(addTemperature)
+        var writeTemp = (caps.temperature === true && addTemperature !== "" && !isNaN(temp))
         cfg.addProvider(addProviderId, {
             "model": addModel,
             "effort": addEffort !== "" ? addEffort : null,
             "thinking": addThinking,
-            "temperature": addTemperature,
+            "temperature": writeTemp ? temp : null,
             "endpoint": addKind === "local" ? addEndpoint : null
         })
-        addKey = ""
         addStep = 1
-        manageOpen = false
+        manageOpen = false          // triggers clearSheet via onManageOpenChanged
     }
 
     // Material Symbols Outlined, bundled FULL rather than subset (Thomas, 2026-08-01), so an
@@ -225,6 +324,21 @@ Window {
         readonly property string globe:     ""   // public              — connector: Web
         readonly property string apps:      ""   // widgets             — connector: Apps & media
         readonly property string hub:       ""   // database            — connector: MCP servers
+    }
+
+    // Escape closes what is open, innermost first: the confirm dialog, then the Add/Edit sheet. An
+    // open Dropdown popup consumes Escape itself (it takes focus now), and the KeyRecorder consumes
+    // it while recording, so neither reaches this — it fires only for the sheets, which otherwise
+    // had no keyboard dismissal at all (mouse-only).
+    Shortcut {
+        sequences: [StandardKey.Cancel]
+        enabled: root.confirmOpen || root.manageOpen
+        onActivated: {
+            if (root.confirmOpen)
+                root.confirmOpen = false
+            else if (root.manageOpen)
+                root.manageOpen = false
+        }
     }
 
     // ── building blocks ───────────────────────────────────────────────────────
@@ -341,6 +455,8 @@ Window {
             enabled: dd.enabled
             onClicked: {
                 if (menu.visible) { menu.close(); return }
+                if (dd.options.length === 0)
+                    return          // nothing to show — opening would draw a 10px empty sliver
                 if (Date.now() - dd.closedAt > 120)
                     menu.open()
             }
@@ -361,6 +477,9 @@ Window {
 
         Popup {
             id: menu
+            // Takes focus while open so its default CloseOnEscape fires — a hand-rolled popup with
+            // focus:false never sees Escape, so it could only be dismissed with the mouse (D40 fix).
+            focus: true
             onClosed: dd.closedAt = Date.now()
             x: dd.alignRight ? dd.width - width : 0
             // Placed when it OPENS, not bound: a menu near the foot of the window has to flip
@@ -372,7 +491,9 @@ Window {
                 var margin = 12
                 var below = root.height - (pt.y + dd.height) - margin
                 var above = pt.y - margin
-                var want = Math.min(dd.options.length * 32 + 10, 320)
+                // Cap at Theme.dropdownRows rows, then scroll — the design token is now load-bearing
+                // rather than a number the popup restated (and disagreed with) as a literal 320.
+                var want = Math.min(dd.options.length * 32 + 10, Theme.dropdownRows * 32 + 10)
                 if (below >= want) {
                     menu.height = want; menu.y = dd.height + 4
                 } else if (above >= want) {
@@ -482,6 +603,7 @@ Window {
         property bool primary: false
         property bool danger: false
         property bool enabled: true
+        property bool busy: false       // swaps the label for a spinner, keeping the same box
         signal clicked()
         implicitWidth: lbl.implicitWidth + 26
         implicitHeight: Theme.controlHeight
@@ -494,17 +616,31 @@ Window {
         border.color: bh.hovered ? Theme.hairlineStrong : Theme.hairline
         Behavior on color { ColorAnimation { duration: root.t } }
         HoverHandler { id: bh; enabled: b.enabled; cursorShape: Qt.PointingHandCursor }
-        TapHandler { enabled: b.enabled; onTapped: b.clicked() }
+        Spinner {
+            anchors.centerIn: parent
+            running: b.busy
+            tint: b.danger || b.primary ? Theme.surfaceShell : Theme.uiText
+        }
         Text {
             id: lbl
             anchors.centerIn: parent
+            opacity: b.busy ? 0 : 1
             text: b.label
             color: b.danger ? "#ffffff" : (b.primary ? Theme.surfaceShell : Theme.uiText)
             font.family: fontFamily
             font.pixelSize: Theme.fontBase
             font.weight: Font.Medium
         }
+        MouseArea {
+            anchors.fill: parent
+            enabled: b.enabled
+            cursorShape: Qt.PointingHandCursor
+            onClicked: b.clicked()
+        }
     }
+
+    // The circular loader is now the shared teleprompter/Spinner.qml (tokenised 2026-08-02), used
+    // here on the Test button and on the island's boot indicator, so the two are one mark.
 
     component IconBtn: Rectangle {
         id: ib
@@ -513,7 +649,12 @@ Window {
         signal clicked()
         implicitWidth: 30; implicitHeight: 30
         radius: 7
-        color: ih.hovered ? (danger ? Theme.danger : Theme.uiHoverStrong) : "transparent"
+        // Danger opaque-at-rest (surfaceShell), for the same alpha reason as CaptionButton — no
+        // IconBtn sets danger today, but this keeps the branch from being a loaded gun for the
+        // first that does. ponytail: assumes a surfaceShell ground; give it a prop if one lands on
+        // another ground.
+        color: danger ? (ih.hovered ? Theme.danger : Theme.surfaceShell)
+                      : (ih.hovered ? Theme.uiHoverStrong : "transparent")
         Behavior on color { ColorAnimation { duration: root.t } }
         HoverHandler { id: ih; cursorShape: Qt.PointingHandCursor }
         Glyph {
@@ -567,7 +708,7 @@ Window {
                     width: eff.cell
                     height: parent.height
                     radius: 7
-                    color: active ? Theme.surfaceCard : "transparent"
+                    color: active ? Theme.surfaceCard : Theme.surfaceLift
                     Behavior on color { ColorAnimation { duration: root.t } }
                     Column {
                         anchors.centerIn: parent
@@ -595,6 +736,44 @@ Window {
                     }
                 }
             }
+        }
+    }
+
+    component CheckBox: Item {
+        id: cb
+        property bool checked: false
+        property string label: ""
+        signal toggled(bool value)
+        implicitWidth: box.width + 10 + cbl.implicitWidth
+        implicitHeight: Math.max(20, cbl.implicitHeight)
+        Rectangle {
+            id: box
+            width: 18; height: 18; radius: 5
+            anchors.verticalCenter: parent.verticalCenter
+            color: cb.checked ? Theme.accent : Theme.surfaceLift
+            border.width: 1
+            border.color: cb.checked ? Theme.accent : Theme.hairlineStrong
+            Behavior on color { ColorAnimation { duration: root.t } }
+            Glyph {
+                anchors.centerIn: parent
+                d: ico.check; px: Theme.iconSm
+                tint: Theme.surfaceShell
+                opacity: cb.checked ? 1 : 0
+                Behavior on opacity { NumberAnimation { duration: root.t } }
+            }
+        }
+        Text {
+            id: cbl
+            anchors.left: box.right; anchors.leftMargin: 10
+            anchors.verticalCenter: parent.verticalCenter
+            text: cb.label
+            color: Theme.uiTextDim
+            font.family: fontFamily; font.pixelSize: Theme.fontBase
+        }
+        MouseArea {
+            anchors.fill: parent
+            cursorShape: Qt.PointingHandCursor
+            onClicked: cb.toggled(!cb.checked)
         }
     }
 
@@ -628,7 +807,8 @@ Window {
                     width: seg.icons.length > 0 ? seg.cell : (segLbl.implicitWidth + 22)
                     height: seg.cell
                     radius: 7
-                    color: on ? Theme.surfaceCard : (sh.hovered ? Theme.uiNavHover : "transparent")
+                    color: on ? Theme.surfaceCard
+                              : (sh.hovered ? Qt.lighter(Theme.surfaceLift, 1.18) : Theme.surfaceLift)
                     Behavior on color { ColorAnimation { duration: root.t } }
                     HoverHandler { id: sh; enabled: seg.enabled; cursorShape: Qt.PointingHandCursor }
                     Glyph {
@@ -646,7 +826,6 @@ Window {
                         color: parent.on ? Theme.uiText : Theme.uiTextFaint
                         font.family: fontFamily
                         font.pixelSize: Theme.fontSmall
-                        font.weight: parent.on ? Font.Medium : Font.Normal
                     }
                     MouseArea {
                         anchors.fill: parent
@@ -656,26 +835,6 @@ Window {
                     }
                 }
             }
-        }
-    }
-
-    // A shortcut, in a FIXED box. Two things made it wobble: the field sized itself to its
-    // contents, and the UI face's figures are proportional — "1" is narrower than "2", so two
-    // otherwise identical bindings rendered at different widths and read as a mistake. A fixed
-    // centred box hides both. Wide enough for "Ctrl + Shift + Alt + F12".
-    component Kbd: Rectangle {
-        property alias text: kt.text
-        implicitWidth: 168
-        implicitHeight: Theme.controlHeight
-        radius: 6
-        color: Theme.surfaceLift
-        border.width: 1; border.color: Theme.hairlineStrong
-        Text {
-            id: kt
-            anchors.centerIn: parent
-            color: Theme.uiText
-            font.family: fontFamily
-            font.pixelSize: Theme.fontBase
         }
     }
 
@@ -698,7 +857,11 @@ Window {
 
         Column {
             id: txt
-            y: 15
+            // Centred in the ROW, not pinned 15px from its top. The old shape gave the text a
+            // fixed top offset and then centred the CONTROL on the text's centre — so whenever
+            // the control was taller than the label (a 34px field beside a 21px label) the pair
+            // sat high in the row and the gap to the divider below was bigger than the one above.
+            y: r.stack ? 15 : (r.height - implicitHeight) / 2
             anchors.left: parent.left
             width: r.stack ? parent.width
                            : Math.max(60, parent.width - ctlRow.implicitWidth - 24)
@@ -732,7 +895,7 @@ Window {
             anchors.right: r.stack ? undefined : parent.right
             anchors.left: r.stack ? parent.left : undefined
             y: r.stack ? txt.y + txt.implicitHeight + 11
-                       : txt.y + txt.implicitHeight / 2 - implicitHeight / 2
+                       : (r.height - implicitHeight) / 2
             opacity: r.built ? 1 : Theme.opacityDim
             enabled: r.built
             Row {
@@ -802,12 +965,20 @@ Window {
                 onToggled: function (v) { cfg.set(sr.key, v) }
             }
         }
+        // A field OWNS its text while focused, exactly as the key field does. `cfg.changed` fires on
+        // every settings write AND every background model-probe landing, so a live `text:` binding
+        // re-evaluated mid-edit and wiped what was being typed — a click on any toggle, or a probe
+        // landing seconds later, silently cleared the box. So: seed from the model, and re-sync only
+        // when focus is elsewhere; commit on editingFinished.
         Component {
             id: textCtl
             Field {
                 implicitWidth: 260
-                text: cfg.values[sr.key] !== undefined ? cfg.values[sr.key] : ""
                 enabled: sr.built
+                readonly property string stored: cfg.values[sr.key] !== undefined
+                                                  ? String(cfg.values[sr.key]) : ""
+                Component.onCompleted: text = stored
+                onStoredChanged: if (!activeFocus) text = stored
                 onEditingFinished: cfg.set(sr.key, text)
             }
         }
@@ -816,10 +987,13 @@ Window {
             Area {
                 implicitWidth: sr.width
                 implicitHeight: 86
-                text: cfg.values[sr.key] !== undefined ? cfg.values[sr.key] : ""
+                enabled: sr.built
                 placeholderText: "E.g., explain things to me in an ordered way, using headings; "
                                + "don't use metaphors, and answer directly without technical jargon."
-                enabled: sr.built
+                readonly property string stored: cfg.values[sr.key] !== undefined
+                                                  ? String(cfg.values[sr.key]) : ""
+                Component.onCompleted: text = stored
+                onStoredChanged: if (!activeFocus) text = stored
                 onEditingFinished: cfg.set(sr.key, text)
             }
         }
@@ -868,6 +1042,11 @@ Window {
     }
 
     // ── layout ────────────────────────────────────────────────────────────────
+    // Disabled as a whole behind a sheet — a disabled item takes NO input of any kind (clicks AND
+    // the wheel, which a MouseArea scrim alone would let past to the Flickable). The sheet's scrim
+    // is the visual dim + click-to-dismiss on top. (Making the caption buttons live behind a sheet
+    // was tried and reverted: it needed a hole in the scrim, which broke click-to-dismiss and left
+    // the page interactive — worse than a modal that briefly owns the whole window.)
     Item {
         anchors.fill: parent
         enabled: !root.modalOpen
@@ -976,9 +1155,13 @@ Window {
                 Item {
                     id: micMark
                     width: 20; height: 20
-                    x: 10
-                    anchors.bottom: parent.bottom; anchors.bottomMargin: 10
-                    readonly property bool capturing: overlay.state === "listening"
+                    x: 6
+                    anchors.bottom: parent.bottom; anchors.bottomMargin: 6
+                    // Null-guarded: a context property can read null (before it is set, during
+                    // teardown, or if the exposed QObject is momentarily collected), and a binding
+                    // must never throw on it. `capturing` guarding `overlay.mic` means the level is
+                    // only read when overlay is non-null.
+                    readonly property bool capturing: overlay ? overlay.state === "listening" : false
                     readonly property real level: capturing ? overlay.mic : 0
                     // The Material Symbols mic, not a drawing (Thomas): every icon in this
                     // window comes from the font. The level fills it by CLIPPING a second copy
@@ -1025,13 +1208,15 @@ Window {
                     width: 52; height: 52
                     sourceSize: Qt.size(52, 52)
                     smooth: false
-                    source: gemPlayer.source
+                    // Null-guarded like the mic mark: gemPlayer can read null transiently, and
+                    // these bindings must not throw on it (the class the runtime-error gate caught).
+                    source: gemPlayer ? gemPlayer.source : ""
                     anchors.right: parent.right
-                    anchors.rightMargin: 10 - gemPlayer.padRight * 2
+                    anchors.rightMargin: 10 - (gemPlayer ? gemPlayer.padRight : 0) * 2
                     anchors.bottom: parent.bottom
                     // Cancel the frame's empty rows, less 1px so her base clears the window's
                     // rounded corner (Thomas).
-                    anchors.bottomMargin: -gemPlayer.padBottom * 2 + 1
+                    anchors.bottomMargin: -(gemPlayer ? gemPlayer.padBottom : 0) * 2 + 1
                 }
             }
         }
@@ -1095,7 +1280,8 @@ Window {
                 Flickable {
                     id: scroller
                     // Named for findChild, which sees objectName and never a QML id: settings_check
-                    // asserts this goes inert behind an open sheet (the scroll lock).
+                    // asserts this goes inert behind an open sheet (the scroll lock — it inherits
+                    // enabled:false from the page Item above when a modal is up).
                     objectName: "scroller"
                     anchors.fill: parent
                     contentWidth: width
@@ -1133,7 +1319,12 @@ Window {
                     height: root.fadeHeight
                     gradient: Gradient {
                         GradientStop { position: 0.0; color: Theme.surfaceShell }
-                        GradientStop { position: 1.0; color: "transparent" }
+                        // Same hue at zero alpha, NOT "transparent" — Qt's transparent is transparent
+                        // BLACK, so a gradient to it fades through a dark band (the animation-alpha
+                        // rule in Theme.qml, in its static form).
+                        GradientStop { position: 1.0
+                            color: Qt.rgba(Theme.surfaceShell.r, Theme.surfaceShell.g,
+                                           Theme.surfaceShell.b, 0) }
                     }
                 }
             }
@@ -1171,7 +1362,6 @@ Window {
                            : (ni.active || nh.hovered ? Theme.uiText : Theme.uiTextDim)
             font.family: fontFamily
             font.pixelSize: Theme.fontBase
-            font.weight: ni.active ? Font.Medium : Font.Normal
         }
         Rectangle {
             visible: ni.soon
@@ -1193,7 +1383,11 @@ Window {
             anchors.fill: parent
             enabled: !ni.soon
             cursorShape: Qt.PointingHandCursor
-            onClicked: root.section = ni.pane
+            // Commit a field being edited BEFORE the section changes: switching panes destroys the
+            // delegate, and a destroyed TextField emits no editingFinished, so typed text that had
+            // not been committed was lost outright. dropFocus() fires editingFinished first (the
+            // title bar and page background already do this; the nav item was the missed door).
+            onClicked: { root.dropFocus(); root.section = ni.pane }
         }
     }
 
@@ -1206,7 +1400,13 @@ Window {
         width: 46
         height: root.topH
         radius: 0
-        color: cbh.hovered ? (danger ? Theme.danger : Theme.uiHoverStrong) : "transparent"
+        // Danger animates OPAQUE-to-opaque (surfaceShell -> danger), not against "transparent":
+        // Theme.qml's rule — Qt's transparent is transparent BLACK, so an opaque red fading up from
+        // it dips through muddy dark red. surfaceShell is the header's own colour, so at rest it
+        // reads exactly as transparent would. The non-danger branch keeps the translucent hover
+        // token over a dark ground, which is the rule's sanctioned exception.
+        color: danger ? (cbh.hovered ? Theme.danger : Theme.surfaceShell)
+                      : (cbh.hovered ? Theme.uiHoverStrong : "transparent")
         Behavior on color { ColorAnimation { duration: root.t } }
         HoverHandler { id: cbh; cursorShape: Qt.PointingHandCursor }
         Glyph {
@@ -1269,27 +1469,27 @@ Window {
             Item {
                 width: parent.width
                 height: 30
-                readonly property int colName: Math.round(parent.width * 0.34)
                 Text {
                     x: 0; anchors.bottom: parent.bottom; bottomPadding: 9
                     text: "Provider"; color: Theme.uiTextFaint
                     font.family: fontFamily; font.pixelSize: Theme.fontSmall
                 }
                 Text {
-                    x: parent.colName; anchors.bottom: parent.bottom; bottomPadding: 9
+                    x: Math.round(parent.width * root.colModelF)
+                    anchors.bottom: parent.bottom; bottomPadding: 9
                     text: "Model"; color: Theme.uiTextFaint
                     font.family: fontFamily; font.pixelSize: Theme.fontSmall
                 }
                 Text {
-                    anchors.right: parent.right; anchors.rightMargin: root.colKeyR
+                    x: Math.round(parent.width * root.colKeyF)
                     anchors.bottom: parent.bottom; bottomPadding: 9
                     text: "Key"; color: Theme.uiTextFaint
                     font.family: fontFamily; font.pixelSize: Theme.fontSmall
                 }
                 Text {
-                    anchors.right: parent.right; anchors.rightMargin: root.colActiveR
+                    anchors.right: parent.right
                     anchors.bottom: parent.bottom; bottomPadding: 9
-                    text: "Active"; color: Theme.uiTextFaint
+                    text: "Status"; color: Theme.uiTextFaint
                     font.family: fontFamily; font.pixelSize: Theme.fontSmall
                 }
                 Rectangle {
@@ -1317,13 +1517,20 @@ Window {
             }
 
             SectionHeading { text: "Dictate" }
+            // Only the PROVIDER-typed cleanup rows are CleanupRows — a delegate built for a
+            // provider+model+toggle. A bool like local_server_stop_on_quit fell through the same
+            // delegate and rendered dead (toggle stuck off, dropdown showing the literal "true"),
+            // so rows are routed by their schema type now.
             Repeater {
-                model: cfg.rowsFor("models")
+                model: cfg.rowsFor("models").filter(function (k) {
+                    return cfg.meta[k] !== undefined && cfg.meta[k].type === "provider"
+                })
                 delegate: CleanupRow {
                     required property string modelData
                     key: modelData
                 }
             }
+
         }
     }
 
@@ -1336,7 +1543,10 @@ Window {
         width: parent ? parent.width : 0
         height: 56
         Component.onCompleted: cfg.refreshModels(pid)
-        readonly property int colName: Math.round(width * 0.34)
+        readonly property int colName: Math.round(width * root.colModelF)
+        // A handler, not a MouseArea: the row is full of controls that take their own clicks, and
+        // this only needs to report hover without competing for them.
+        HoverHandler { id: mrHover }
 
         Glyph {
             id: mrIcon
@@ -1385,13 +1595,16 @@ Window {
         Dropdown {
             x: mr.colName
             anchors.verticalCenter: parent.verticalCenter
-            maxValueWidth: Math.max(140, mr.width * 0.26)
+            // Subtract the dropdown's OWN chrome (side margins, spacing, chevron, implicit padding
+            // ≈ 58px) so the value elides before its right edge crosses the Key column — 40 left
+            // ~3px of overlap at the default width for a long model id.
+            maxValueWidth: Math.round(mr.width * (root.colKeyF - root.colModelF)) - 60
             options: cfg.modelOptions[mr.pid] !== undefined ? cfg.modelOptions[mr.pid] : []
             value: mr.st.model !== undefined ? mr.st.model : ""
             onPicked: function (v) { cfg.setModel(mr.pid, "model", v) }
         }
         Text {
-            anchors.right: parent.right; anchors.rightMargin: root.colKeyR
+            x: Math.round(mr.width * root.colKeyF)
             anchors.verticalCenter: parent.verticalCenter
             text: mr.cat.auth === "key" ? (cfg.keys[mr.pid] === "stored" ? "Stored" : "No key")
                                         : "N/A"
@@ -1400,17 +1613,24 @@ Window {
         }
         Toggle {
             id: activeSw
-            anchors.right: parent.right; anchors.rightMargin: root.colActiveR
+            anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             on: mr.st.on === true
             onToggled: function (v) { cfg.setModel(mr.pid, "on", v) }
         }
+        // Inside the Provider cell, hard against the Model column: it belongs to this provider,
+        // not to a column of its own. Shown ON HOVER only — at rest the row is four columns of
+        // data and nothing else, and a menu that appears where the pointer already is costs
+        // nothing to find. It keeps its space either way, so revealing it never shifts the row.
         IconBtn {
             id: mrKebab
-            anchors.right: parent.right
+            x: mr.colName - root.colKebabW - 14
             anchors.verticalCenter: parent.verticalCenter
             implicitWidth: root.colKebabW
             d: ico.kebab
+            opacity: mrHover.hovered ? 1 : 0
+            enabled: mrHover.hovered
+            Behavior on opacity { NumberAnimation { duration: root.t } }
             onClicked: root.beginEdit(mr.pid)
         }
         Rectangle {
@@ -1436,14 +1656,25 @@ Window {
         readonly property string pid: cfg.values[key] !== undefined ? cfg.values[key] : ""
         readonly property bool built: m !== undefined && m.built === true
         readonly property bool on: toggleKey !== "" && cfg.values[toggleKey] === true
+        readonly property bool isLocal: cfg.catalog[pid] !== undefined
+                                        && cfg.catalog[pid].where === "local"
         width: parent ? parent.width : 0
-        height: 30 + Math.max(lab.implicitHeight, pickers.implicitHeight)
+        // The controls keep their own height; a note, when there is one, is added BELOW them and
+        // the three centred children shift up by half of it (verticalCenterOffset), so the row
+        // still reads as one line with a consequence attached rather than a taller muddle.
+        readonly property real rowH: 30 + Math.max(lab.implicitHeight, pickers.implicitHeight)
+        // One number for the note's breathing room, used by BOTH the height below and the note's
+        // own bottom margin — set them separately and the text sits hard against the hairline,
+        // which is what it did at 6.
+        readonly property real noteGap: 14
+        height: rowH + (note.visible ? note.implicitHeight + noteGap : 0)
         onPidChanged: if (pid !== "") cfg.refreshModels(pid)
 
         Text {
             id: lab
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
+            anchors.verticalCenterOffset: -(cr.height - cr.rowH) / 2
             text: cr.m !== undefined ? cr.m.label : ""
             color: cr.built ? Theme.uiText : Theme.uiTextFaint
             font.family: fontFamily; font.pixelSize: Theme.fontBase
@@ -1453,6 +1684,7 @@ Window {
             id: pickers
             anchors.right: sw.left; anchors.rightMargin: 14
             anchors.verticalCenter: parent.verticalCenter
+            anchors.verticalCenterOffset: -(cr.height - cr.rowH) / 2
             spacing: 12
             opacity: (cr.built && cr.on) ? 1 : Theme.opacityDim
             enabled: cr.built && cr.on
@@ -1487,10 +1719,32 @@ Window {
             id: sw
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
+            anchors.verticalCenterOffset: -(cr.height - cr.rowH) / 2
             on: cr.on
             enabled: cr.built && cr.toggleKey !== ""
             opacity: cr.built ? 1 : Theme.opacityDim
             onToggled: function (v) { cfg.set(cr.toggleKey, v) }
+        }
+        // The consequence of THIS row's choice: two roles on one local provider but different
+        // models means the server swaps them in and out unless both fit in VRAM, and that failure
+        // is invisible — no error, just a full reload on every switch between doors. Shown here
+        // rather than as its own section because this is the row that creates it. Text and
+        // condition both come from outside QML (schema + cfg.localTwoModelNote, "" when it does
+        // not apply); `built` keeps it off the unbuilt prompt-cleanup row, which would otherwise
+        // show the same warning twice once that lands.
+        Text {
+            id: note
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: cr.noteGap
+            visible: cr.built && cr.isLocal && cfg.localTwoModelNote !== ""
+            text: cfg.localTwoModelNote
+            // Fainter than the row it hangs off: this is a consequence, not a second label, and
+            // at `uiTextDim` it competed with the setting's own name.
+            color: Theme.uiTextFaint
+            font.family: fontFamily; font.pixelSize: Theme.fontSmall
+            wrapMode: Text.WordWrap
         }
         Rectangle {
             anchors.bottom: parent.bottom
@@ -1577,13 +1831,22 @@ Window {
             anchors.verticalCenter: parent.verticalCenter
             spacing: 7
             Text {
+                id: cnLabel
                 anchors.verticalCenter: parent.verticalCenter
                 text: cn.m !== undefined ? cn.m.label : ""
+                // Elide before the Enables column (x = 30% of the row): "Apps & media" + its badge
+                // ran 11px into the tool text at the 900px minimum width. Reserve the badge's space
+                // only when it shows.
+                width: Math.min(implicitWidth,
+                                Math.round(cn.width * 0.30) - (cnIcon.width + 11) - 12
+                                - (cn.built ? 0 : nbBadge.width + 7))
+                elide: Text.ElideRight
                 color: cn.built ? Theme.uiText : Theme.uiTextFaint
                 font.family: fontFamily; font.pixelSize: Theme.fontBase
                 font.weight: Font.Medium
             }
             Rectangle {
+                id: nbBadge
                 visible: !cn.built
                 anchors.verticalCenter: parent.verticalCenter
                 width: nbLbl.implicitWidth + 12; height: 18
@@ -1785,9 +2048,16 @@ Window {
                                                    ? cfg.catalog[root.addProviderId] : ({})
                         readonly property var caps: cat.capabilities !== undefined
                                                     ? cat.capabilities : ({})
-                        // Nothing below the key can be truthful until the provider can be asked
-                        // what it has, so the form stops there until there is one.
-                        readonly property bool ready: root.addKind === "local" || root.addHasKey
+                        // Nothing below can be truthful until the provider has been reached and
+                        // named its models — for LOCAL as well as cloud now (D40 fix): a local
+                        // provider earns its list from the same Test button, so it is no longer
+                        // "ready" the instant its sheet opens with an empty picker.
+                        readonly property bool ready: root.addModelList.length > 0
+                        // Whether ANY capability row (effort / thinking / temperature) will render
+                        // — so the row above the first of them drops its divider when none do, and
+                        // no hairline floats alone above the sheet foot.
+                        readonly property bool hasDials: caps.effort !== undefined
+                            || caps.thinking === true || caps.temperature === true
 
                         Row_ {
                             visible: root.addEditing
@@ -1802,44 +2072,53 @@ Window {
                             label: "Model"
                             Dropdown {
                                 alignRight: true
-                                options: cfg.modelOptions[root.addProviderId] !== undefined
-                                         ? cfg.modelOptions[root.addProviderId] : []
+                                options: root.addModelList
                                 value: root.addModel
                                 onPicked: function (v) { root.addModel = v }
                             }
                         }
                         Row_ {
                             visible: root.addKind === "cloud"
+                            // No dials below (a provider with no effort/thinking/temperature) -> this
+                            // is the last content row, so it drops its divider rather than float a
+                            // hairline just above the sheet foot's own rule.
+                            divider: formCol.hasDials
                             label: "API key"
                             Field {
+                                id: keyField
                                 implicitWidth: 240
                                 echoMode: TextInput.Password
+                                passwordCharacter: "•"     // • — Qt's default ● is huge
+                                passwordMaskDelay: 0
                                 placeholderText: root.addHasKey ? "Replace the stored key"
                                                                 : "Paste a key"
-                                onTextChanged: { root.addKey = text; root.addHasKey = text.length > 0 }
+                                onTextChanged: {
+                                    root.addKey = text
+                                    root.addHasKey = text.length > 0
+                                    root.addTested = false
+                                    cfg.clearTrial()      // a new key is a new question
+                                }
                             }
                             // Fetching the model list IS the key test, so one button does both. It
                             // passes the TYPED key: nothing is stored until you commit, so probing
                             // the credential store would test the old one.
                             Btn {
-                                label: root.addProbe === "fetching" ? "Testing…" : "Test"
+                                label: "Test"
+                                busy: root.addProbe === "fetching"
+                                // An empty box on ADD would probe the CREDENTIAL STORE — the
+                                // stored key answering for the one you are adding. On an edit an
+                                // empty box legitimately means "check the key I cannot see".
                                 enabled: root.addProbe !== "fetching"
-                                onClicked: cfg.testProvider(root.addProviderId, root.addKey)
+                                         && (root.addEditing || root.addKey !== "")
+                                onClicked: {
+                                    root.addTested = true
+                                    cfg.trialProvider(root.addProviderId, root.addKey)
+                                }
                             }
-                        }
-                        // What the provider actually said. Without this a wrong key and a dropped
-                        // connection look identical — both just leave the picker empty.
-                        Text {
-                            width: parent.width
-                            visible: root.addKind === "cloud" && root.addProbeMessage !== ""
-                            text: root.addProbeMessage
-                            color: root.addProbe === "ok" ? Theme.uiText : Theme.uiTextFaint
-                            font.family: fontFamily; font.pixelSize: Theme.fontSmall
-                            topPadding: 8; bottomPadding: 8
-                            wrapMode: Text.WordWrap
                         }
                         Row_ {
                             visible: root.addKind === "local"
+                            divider: formCol.hasDials
                             label: "Address"
                             desc: "Where the local server is listening."
                             Field {
@@ -1847,10 +2126,35 @@ Window {
                                 text: root.addEndpoint
                                 onTextChanged: root.addEndpoint = text
                             }
+                            // A local provider is reached the SAME way a cloud key is checked — the
+                            // Test button probes the endpoint and loads the model list, which is what
+                            // makes a local provider addable at all (D40 fix). It passes the TYPED
+                            // address: the entry is not stored yet, so there is nothing to read.
+                            Btn {
+                                label: "Test"
+                                busy: root.addProbe === "fetching"
+                                enabled: root.addProbe !== "fetching" && root.addEndpoint !== ""
+                                onClicked: {
+                                    root.addTested = true
+                                    cfg.trialProvider(root.addProviderId, "", root.addEndpoint)
+                                }
+                            }
+                        }
+                        // What the provider actually said. Without this a wrong key/address and a
+                        // dropped connection look identical — both just leave the picker empty. Shown
+                        // for BOTH kinds now (local's empty picker must explain itself too).
+                        Text {
+                            width: parent.width
+                            visible: root.addProbeMessage !== ""
+                            text: root.addProbeMessage
+                            color: root.addProbe === "ok" ? Theme.uiText : Theme.uiTextFaint
+                            font.family: fontFamily; font.pixelSize: Theme.fontSmall
+                            topPadding: 8; bottomPadding: 8
+                            wrapMode: Text.WordWrap
                         }
                         Row_ {
                             visible: formCol.ready && formCol.caps.effort !== undefined
-                            divider: formCol.caps.thinking === true
+                            divider: formCol.caps.thinking === true || formCol.caps.temperature === true
                             label: "Effort"
                             EffortDots {
                                 options: formCol.caps.effort !== undefined ? formCol.caps.effort : []
@@ -1860,21 +2164,30 @@ Window {
                         }
                         Row_ {
                             visible: formCol.ready && formCol.caps.thinking === true
+                            divider: formCol.caps.temperature === true
                             label: "Extended thinking"
-                            divider: false
                             Toggle {
                                 on: root.addThinking
                                 onToggled: function (v) { root.addThinking = v }
                             }
                         }
-                        Text {
-                            width: parent.width
-                            visible: !formCol.ready
-                            text: "Add a key to load this provider's models"
-                            color: Theme.uiTextFaint
-                            font.family: fontFamily; font.pixelSize: Theme.fontBase
-                            horizontalAlignment: Text.AlignHCenter
-                            topPadding: 22; bottomPadding: 22
+                        // Temperature — declared only by the local runners (Ollama / LM Studio /
+                        // llama.cpp). A real numeric control, plumbed through the router to the B2
+                        // adapter; written as a NUMBER, and only for a provider that offers it.
+                        Row_ {
+                            visible: formCol.ready && formCol.caps.temperature === true
+                            divider: false
+                            label: "Temperature"
+                            Field {
+                                implicitWidth: 90
+                                text: root.addTemperature
+                                inputMethodHints: Qt.ImhFormattedNumbersOnly
+                                validator: DoubleValidator {
+                                    bottom: 0.0; top: 2.0; decimals: 2
+                                    notation: DoubleValidator.StandardNotation
+                                }
+                                onEditingFinished: root.addTemperature = text
+                            }
                         }
                     }
                 }
@@ -1896,7 +2209,11 @@ Window {
                     anchors.verticalCenter: parent.verticalCenter
                     label: "Remove"
                     danger: true
-                    onClicked: { root.confirmTarget = root.addProviderId; root.confirmOpen = true }
+                    onClicked: {
+                        root.confirmTarget = root.addProviderId
+                        root.confirmDeleteKey = true
+                        root.confirmOpen = true
+                    }
                 }
                 Row {
                     anchors.right: parent.right; anchors.rightMargin: 20
@@ -1911,6 +2228,9 @@ Window {
                         visible: root.addStep === 2 || root.addEditing
                         label: root.addEditing ? "Done" : "Add model"
                         primary: !root.addEditing
+                        // Done always works — an edit is closing a form whose values already
+                        // exist. Add has to earn it.
+                        enabled: root.addEditing || root.canCommit
                         onClicked: root.commitAdd()
                     }
                 }
@@ -1919,9 +2239,11 @@ Window {
     }
 
     Component { id: isDefaultChip
+        // Same height AND font as setDefaultBtn (Theme.controlHeight / fontBase), so the row does
+        // not resize as it flips between "Set as default" and "Current default" (Thomas).
         Rectangle {
-            implicitWidth: dcl.implicitWidth + 20; implicitHeight: 28
-            radius: 6
+            implicitWidth: dcl.implicitWidth + 26; implicitHeight: Theme.controlHeight
+            radius: Theme.radiusControl
             color: "transparent"
             border.width: 1; border.color: Theme.hairlineStrong
             Text {
@@ -1929,7 +2251,8 @@ Window {
                 anchors.centerIn: parent
                 text: "Current default"
                 color: Theme.uiTextDim
-                font.family: fontFamily; font.pixelSize: Theme.fontSmall
+                font.family: fontFamily; font.pixelSize: Theme.fontBase
+                font.weight: Font.Medium
             }
         }
     }
@@ -1972,10 +2295,22 @@ Window {
                 }
                 Text {
                     width: parent.width
-                    text: "Removing this model prevents Gemma from accessing the API key but does not delete it from your system's credential store. You would have to delete it manually."
+                    text: "Gemma will stop using this model."
                     color: Theme.uiTextDim
                     font.family: fontFamily; font.pixelSize: Theme.fontBase
                     wrapMode: Text.WordWrap
+                }
+                CheckBox {
+                    // Only shown when a key is actually STORED (D40's recorded rule): a key-auth
+                    // provider with nothing saved has nothing to delete, so offering to "also
+                    // delete the stored API key" — checked — describes a no-op.
+                    visible: cfg.catalog[root.confirmTarget] !== undefined
+                             && cfg.catalog[root.confirmTarget].auth === "key"
+                             && cfg.keys[root.confirmTarget] === "stored"
+                    height: visible ? implicitHeight : 0
+                    label: "Also delete the stored API key"
+                    checked: root.confirmDeleteKey
+                    onToggled: function (v) { root.confirmDeleteKey = v }
                 }
                 Item { width: 1; height: 6 }
                 Row {
@@ -1986,6 +2321,12 @@ Window {
                         label: "Remove"
                         danger: true
                         onClicked: {
+                            // Clear the credential BEFORE dropping the provider: setKey reads the
+                            // catalogue for the credential's name, and it also wipes the cached
+                            // model list so a re-add cannot show what the old key could reach.
+                            var cat = cfg.catalog[root.confirmTarget]
+                            if (root.confirmDeleteKey && cat !== undefined && cat.auth === "key")
+                                cfg.setKey(root.confirmTarget, "")
                             cfg.removeProvider(root.confirmTarget)
                             root.confirmOpen = false
                             root.manageOpen = false

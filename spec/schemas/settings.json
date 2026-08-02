@@ -11,11 +11,12 @@
         { "id": "preferences", "label": "Preferences" }
       ]
     },
-    { "id": "models",     "label": "Model selection" },
+    { "id": "models",     "label": "Models" },
     { "id": "connectors", "label": "Connectors" },
     { "id": "triggers",   "label": "Triggers" }
   ],
 
+  "$comment_vram": "`local_two_model_note` holds the text the Models pane shows when two roles resolve to different models on the SAME local provider. Stated as a fact, never computed: judging whether both fit would need total VRAM, current usage and each model's loaded footprint, and would be wrong often enough to be an annoyance. The failure it warns about is invisible — no error, just a full model reload on every switch between Ask and Dictate, which reads as 'dictation is randomly slow'.",
   "$comment_settings": "One entry per knob. `built: false` renders the row dimmed and its control disabled — the setting is decided but its consumer does not exist yet. `pane: null` means no UI row at all (the value is still read by the daemon). `help` is shown only where the consequence cannot be inferred from the label.",
   "$comment_connectors": "D38 — the consent gate, one `connector_*` entry per connector at the end of `settings`. `connector` holds the id that schemas/tools.json matches, so a card lists the tools it enables by READING the registry rather than restating them (hard rule 3); `help` is what that connector reaches, shown on the card because switching one on must be consent to something specific rather than to a category. Anything reading personal data is OFF by default (the D23 precedent: a capability stays off until it is asked for) — System is on because the time and the battery are not personal data. Key order is display order. Adding a connector is one entry here plus a `connector` on the tools that belong to it; no UI work.",
   "settings": {
@@ -76,10 +77,17 @@
       "label": "Show Gem in the island", "built": true,
       "$comment": "D35. Off restores the pre-Gem island exactly \u2014 padding, wave width and text column all fall back to their original formulas (asserted in teleprompter/overlay_check.py)."
     },
+    "local_server_stop_on_quit": {
+      "type": "bool", "default": true, "pane": "general", "group": "preferences",
+      "label": "Stop the local model server when Gemma quits",
+      "help": "Gemma calls a local server when running a local model, and closes the server on shutdown.",
+      "built": true,
+      "$comment": "Moved to General > Preferences (Thomas, 2026-08-02). Governs ONLY a server Gemma itself started \u2014 one already running when Gemma arrived is never stopped, whatever this says (a safety property, not a preference: it may be doing someone else's work). Best-effort on Windows: run.py asks the daemon to stop first (CTRL_BREAK) so this can run, but a hard kill skips it and leaves the server idling until its own keep-alive evicts the model. The Job Object tie (launcher C2, STATE parked) is the complete fix."
+    },
 
     "models": {
       "type": "object", "default": {}, "pane": "models",
-      "label": "Model selection", "built": true,
+      "label": "Models", "built": true,
       "$comment": "Providers the user has added, keyed by provider id -> {on, model, effort, thinking, ...}. Rendered as cards, not a row. KEY ORDER IS THE DISPLAY ORDER \u2014 moveProvider rewrites the dict to reorder."
     },
     "primary": {
@@ -140,6 +148,13 @@
       "help": "Certain tasks require permission. These can be skipped, but you bear all consequences for any action taken while permissions are skipped.",
       "built": false,
       "$comment": "Supersedes D20's narrower `auto_apply`: skips EVERY gate including the Tier-3 confirmation. That converts a spec/50 + CLAUDE.md rule-4 design constant into a preference and needs its own decision record before the executor lands (M1). Placeholder disclaimer."
+    },
+
+    "local_two_model_note": {
+      "type": "string", "pane": null, "built": false,
+      "default": "Ask and Dictate use different local models and would be limited by memory.",
+      "label": "Two-model VRAM note",
+      "$comment": "`built: false` — the TEXT is settled and lives here so the window can render it without restating a string in QML (hard rule 3), but the condition and the placement are Models-pane work, owed."
     },
 
     "connector_system": {
@@ -242,8 +257,11 @@
       "name": "Ollama", "where": "local", "auth": "endpoint", "endpoint": "127.0.0.1:11434",
       "wire": "openai",
       "$comment": "`effort` includes `none` because Ollama's OpenAI-compatible endpoint documents that value and treats it as thinking-OFF — one field carrying a switch AND a dial. It is the only way to reach the thinking toggle from here: Ollama's native `think` field and `chat_template_kwargs` are both ignored on /v1 (tested 2026-08-01, v0.32.5). A thinking model left to reason costs ~6.5 s on a dictation cleanup against ~0.45 s without, so `transform` always asks for `none`. Endpoint is 127.0.0.1, never `localhost`: the wasted IPv6 attempt costs ~2 s per connection on Windows.",
+      "$comment_serve": "`serve` is the argv Gemma runs to start this server headless when a role resolves here and nothing is listening. Declared per card, never hardcoded in an adapter, for the same reason as `api` and `credential` (D30). It is NOT a Contract T tool and spec/50 rule 1 does not apply: the model never sees it, and this argv is a fixed list from this file — nothing user- or model-composed reaches a shell. Only Ollama declares one; LM Studio and llama.cpp are left to the user to start. The binary is found on PATH, so a missing install is a no-op, not an error.",
+      "serve": ["ollama", "serve"],
       "adapter": true, "models": [],
       "capabilities": { "temperature": true, "context": true, "thinking": true,
+                        "keep_alive": true,
                         "effort": ["none", "low", "medium", "high", "max"] }
     },
     "lmstudio": {

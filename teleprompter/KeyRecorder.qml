@@ -51,7 +51,9 @@ Rectangle {
         mods = []; keyName = ""; invalid = false; recording = true
         rec.forceActiveFocus()
     }
-    function stop() { recording = false; mods = []; keyName = "" }
+    // `invalid` is reset too: a rejected bare-key capture that is then abandoned (Esc, click-away,
+    // tab-off) must not leave the box wearing its danger-red border at rest over a valid value.
+    function stop() { recording = false; mods = []; keyName = ""; invalid = false }
     function finish() {
         var c = combo()
         if (keyName !== "" && cfg.validateBinding(c)) {

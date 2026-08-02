@@ -1,6 +1,6 @@
 # Spec 00 — System overview & status
 
-**Last reconciled: 2026-07-31** · Build progress: [STATE.md](../STATE.md) · Decisions record: [docs/02](../docs/02_architecture/02_system_architecture.md)
+**Last reconciled: 2026-08-02** · Build progress: [STATE.md](../STATE.md) · Decisions record: [docs/02](../docs/02_architecture/02_system_architecture.md)
 
 ## The system in one paragraph
 
@@ -863,7 +863,10 @@ nothing that touches their files at all (Thomas). So consent becomes a second, i
   **Apps & media** (the Tier-2 starters, unbuilt).
 - **One filter, already the only door.** `tools.tool_specs()` is the single place a tool reaches the
   brain, so consent is one more condition beside the tier — plus a refusal backstop in `execute()`,
-  because a tool the user switched off must be dead even if something else calls it.
+  because a tool the user switched off must be dead even if something else calls it. The gate reads
+  each toggle **explicitly** (`value is True`), not for truthiness: an unrecognised connector id, a
+  missing key, and a hand-edited non-boolean (`"connector_files": "false"` — a truthy *string*) all
+  fail **closed**. A consent gate may only ever err toward off (hardened 2026-08-02).
 - **Default off for anything personal** — Files, Email and Clipboard off, System on. The precedent
   is D23: `tts` and `listen_for_me` are capabilities that stay off until asked for. A fresh install
   dictates and answers and reaches nothing of yours. The cost is accepted: a new user asking "find
@@ -1016,4 +1019,32 @@ is new content with no settings behind it. Blueprint:
 `?sheet=` and `?mic=` reach the states a screenshot cannot).
 
 Build status: STATE, Config & routing.
+
+**D41 (2026-08-02): a boot island — show that Gemma is starting, and drop work until it can be
+done.** Two processes come up in parallel, and since D39 the daemon opens its hotkey doors as soon
+as the wake word loads — well before the models that actually answer are ready. So an early press
+ran a turn against an unloaded model, or a local server that had not started, and surfaced as
+"something went wrong on my end": an error for what was really *not ready yet*. And nothing on
+screen said Gemma was starting at all. Both halves are fixed here.
+
+- **A `booting` state** (Contract P, `status.json` v0.7.0, the `state` enum gains it). The daemon
+  publishes it the moment it comes up and clears it to `idle` when warm-up finishes — speech-to-text
+  loaded, any local model server started. The overlay draws it as **a narrow pill with a small
+  circular loader and nothing else** — no status word, no Gem. The loader is the settings Test
+  button's own mark, tokenised into a shared `Spinner.qml` (Thomas), so the two are one component
+  rather than two things that resemble each other.
+- **A press before ready is DROPPED, not queued** (Thomas). Every path needs speech-to-text and the
+  assistant needs its brain reachable, so there is nothing a press can usefully do yet — and a turn
+  firing seconds later, after you have looked away, is more surprising than "try again". The visible
+  loader is what makes a dropped press self-explanatory; without it, dropping would be silence.
+- **A minimum duration (`MIN_BOOT_S`).** The overlay is a separate process that takes a second or
+  two to load and connect, so a warm-cache start would clear `booting` before the overlay ever saw
+  it and the loader would never appear. The daemon holds it for a short floor so a parallel start
+  reliably catches it. A slow warm-up already exceeds the floor, so this adds no delay in exactly
+  the case that most needs the loader.
+- **Amends D24 and D39.** D24 said the island shows only during a turn; it now also appears at
+  startup and hides when ready. D39's early-doors stands — the doors still register early — but they
+  now drop a press until `_ready` rather than attempting a turn.
+
+Build status: STATE, Track P.
 

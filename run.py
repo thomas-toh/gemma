@@ -11,14 +11,28 @@ nonzero code leaves the other running, so you restart just the one that broke �
 dead daemon still has a live overlay to be reported by. That restart-one independence is
 why two processes beat a merge, which D39 considered and rejected.
 
+Shutdown ASKS before it insists. The daemon may now own a headless local model server (Ollama),
+and it can only stop that from its own cleanup path — so a bare `terminate()`, which on Windows is
+TerminateProcess and runs no cleanup at all, would strand the server every time. Children are
+started in their own process group and sent CTRL_BREAK first, which arrives as KeyboardInterrupt
+and lets `finally` run; terminate() and then kill() remain as the escalation.
+
 ponytail: still no Windows Job-Object lifetime tie (launcher C2) — SIGKILL run.py and these
 children can orphan; Ctrl-C and normal exit are handled. Add it when orphans are seen.
 """
 from __future__ import annotations
 
+import signal
 import subprocess
 import sys
 import time
+
+# Windows: a child must be in its OWN process group to be sent CTRL_BREAK without the event also
+# hitting us. Both constants are Windows-only; off Windows the group flag is 0 and SIGTERM is the
+# polite signal, which already runs `finally`.
+_NEW_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+_POLITE = getattr(signal, "CTRL_BREAK_EVENT", signal.SIGTERM)
+GRACE_S = 8.0            # generous: the daemon may be waiting on a local server to stop
 
 CHILDREN = {
     "daemon": [sys.executable, "-m", "bridge.orchestrator"],   # voice loop + Contract P feed
@@ -35,8 +49,32 @@ def stop_others(exits: dict[str, int | None]) -> bool:
     return any(code == 0 for code in exits.values())
 
 
+def shutdown(procs: dict) -> None:
+    """Ask, wait, then insist. The asking is what lets the daemon stop a local model server it
+    started — TerminateProcess runs no cleanup, so without this the server is stranded on every
+    quit that isn't a console Ctrl-C."""
+    alive = [p for p in procs.values() if p.poll() is None]
+    for p in alive:
+        try:
+            p.send_signal(_POLITE)
+        except (OSError, ValueError):
+            pass                                   # already gone, or no group to signal
+    deadline = time.monotonic() + GRACE_S
+    while time.monotonic() < deadline and any(p.poll() is None for p in alive):
+        time.sleep(0.2)
+    for p in alive:                                # ...then insist
+        if p.poll() is None:
+            p.terminate()
+    for p in alive:
+        try:
+            p.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            p.kill()
+
+
 def main() -> int:
-    procs = {name: subprocess.Popen(cmd) for name, cmd in CHILDREN.items()}
+    procs = {name: subprocess.Popen(cmd, creationflags=_NEW_GROUP)
+             for name, cmd in CHILDREN.items()}
     reported: set[str] = set()
     try:
         while any(p.poll() is None for p in procs.values()):
@@ -56,14 +94,7 @@ def main() -> int:
     except KeyboardInterrupt:
         pass
     finally:
-        for p in procs.values():                     # ask both to stop...
-            if p.poll() is None:
-                p.terminate()
-        for p in procs.values():                     # ...then insist if one won't
-            try:
-                p.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                p.kill()
+        shutdown(procs)
     return 0
 
 
@@ -81,7 +112,33 @@ def _selfcheck() -> None:
     assert not stop_others({"daemon": 3221225477, "overlay": None}), "a hard crash is still a crash"
     # Mixed: one crashed earlier, then the other was quit cleanly -> stop.
     assert stop_others({"daemon": 1, "overlay": 0})
-    print("run.py selfcheck OK — clean exit ties, crash isolates (D39)")
+
+    # Shutdown ASKS before insisting, so the daemon's `finally` can stop a local model server.
+    # A child that answers the polite signal must never be terminated.
+    class _Child:
+        def __init__(self, obeys): self.obeys, self.signalled, self.terminated, self.n = obeys, False, False, 0
+        def poll(self):
+            self.n += 1
+            return 0 if (self.obeys and self.signalled and self.n > 1) else None
+        def send_signal(self, _s): self.signalled = True
+        def terminate(self): self.terminated = True
+        def wait(self, timeout=None): return 0
+        def kill(self): pass
+
+    good = _Child(obeys=True)
+    shutdown({"daemon": good})
+    assert good.signalled, "shutdown must ask first"
+    assert not good.terminated, "a child that obeys the signal must not then be terminated"
+
+    global GRACE_S
+    _grace, GRACE_S = GRACE_S, 0.01                 # don't wait out the real grace period
+    stubborn = _Child(obeys=False)
+    shutdown({"daemon": stubborn})
+    GRACE_S = _grace
+    assert stubborn.signalled and stubborn.terminated, "a child that ignores it must be insisted on"
+
+    print("run.py selfcheck OK — clean exit ties, crash isolates (D39), "
+          "shutdown asks before it insists")
 
 
 if __name__ == "__main__":

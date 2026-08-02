@@ -23,6 +23,13 @@ log = logging.getLogger("gemma.teleprompter")
 
 KEY_SERVICE = "gemma"
 
+# The ONLY fields the UI may persist into a provider's `models[<pid>]` entry. An allowlist, not a
+# comment: `addProvider`/`setModel` merge whatever the form hands them, so without this a field
+# named `key`/`api_key` would land in settings.json — the one file spec/50 rule 10 says a secret
+# must never enter. These are exactly what the router reads back (bridge/brains/router.py).
+_PERSIST_FIELDS = frozenset(
+    {"on", "model", "effort", "thinking", "temperature", "endpoint", "keep_alive"})
+
 
 class SettingsModel(QObject):
     """One `changed` signal for the lot — the window is small and rebuilt on open, so
@@ -44,6 +51,12 @@ class SettingsModel(QObject):
         # is what Test means), so a returning worker must prove it is still the newest before it
         # writes — otherwise the stale answer lands last and the user reads the wrong status.
         self._gen: dict[str, int] = {}
+        # The TRIAL: one slot, not a per-provider cache. "Does this key I just typed work?" is a
+        # question about an unsaved credential, and answering it into the shared provider cache is
+        # what let a stored key's result be read as a verdict on a typed one (Thomas, 2026-08-01).
+        # The roster keeps using `_live`/`_status`; the Add/Edit sheet reads only this.
+        self._trial: dict = {"pid": "", "status": "", "models": []}
+        self._trial_gen = 0
         self._lock = threading.Lock()
 
     # --- the schema: what to draw ------------------------------------------------
@@ -70,6 +83,11 @@ class SettingsModel(QObject):
 
     @Slot(str, "QVariant")
     def set(self, key: str, value) -> None:
+        # A QML object/array literal crosses as a QJSValue, not a dict/list — json.dumps then
+        # raises inside settings.set and the write vanishes with no signal (the class that ate the
+        # Add form). Unwrap before it reaches the file. A scalar has no toVariant and passes through.
+        if value is not None and hasattr(value, "toVariant"):
+            value = value.toVariant()
         settings.set(key, value)
         self.changed.emit()
 
@@ -152,29 +170,49 @@ class SettingsModel(QObject):
 
     @Slot(str, "QVariant")
     def addProvider(self, pid: str, config=None) -> None:
-        """Add or update a provider. `config` carries whatever the Add form collected; anything
-        it omits falls back to a sensible start, so the one-argument call still works."""
+        """Add or update a provider. `config` carries whatever the sheet collected; anything it
+        omits keeps its current value, so the one-argument call still works.
+
+        An EDIT merges into the stored entry rather than rebuilding it: `on` and any field the form
+        does not carry (a hand-added `keep_alive`) survive, and the default is NOT re-taken — a
+        provider switched off must not come back on, and become primary, just because Done was
+        pressed on its sheet. Only a genuinely NEW provider seeds the defaults and claims primary.
+        """
         cat = self.catalog.get(pid)
         if cat is None:
             return
-        caps = cat.get("capabilities", {})
-        efforts = caps.get("effort") or []
-        entry = {
-            "on": True,
-            # Fallback list until the live fetch lands; may be empty (a local runner ships none).
-            "model": (cat.get("models") or [""])[0],
-            # `high` where offered — the provider default — else the top of a shorter scale.
-            "effort": ("high" if "high" in efforts else efforts[-1]) if efforts else None,
-            "thinking": False,
-        }
-        if cat.get("auth") == "endpoint":
-            entry["endpoint"] = cat.get("endpoint", "")
-        if isinstance(config, dict):
-            entry.update({k: v for k, v in config.items() if v is not None})
+        # A QML object literal crosses as a QJSValue, NOT a dict — so an isinstance(dict) check
+        # silently rejected it and every value the form collected was thrown away, leaving only
+        # the schema fallbacks. Unwrap before anything reads it.
+        if config is not None and not isinstance(config, dict):
+            config = config.toVariant() if hasattr(config, "toVariant") else None
         added = dict(self.models)
+        existing = added.get(pid)
+        is_new = existing is None
+        if is_new:
+            caps = cat.get("capabilities", {})
+            efforts = caps.get("effort") or []
+            entry = {
+                "on": True,
+                # Fallback until the live fetch lands; may be empty (a local runner ships none).
+                "model": (cat.get("models") or [""])[0],
+                # `high` where offered — the provider default — else the top of a shorter scale.
+                "effort": ("high" if "high" in efforts else efforts[-1]) if efforts else None,
+                "thinking": False,
+            }
+            if cat.get("auth") == "endpoint":
+                entry["endpoint"] = cat.get("endpoint", "")
+        else:
+            entry = dict(existing)          # keep `on`, and any field the form does not carry
+        if isinstance(config, dict):
+            # Allowlisted: a stray field (a key the form should never send to disk) is dropped, not
+            # persisted. `v is not None` lets a capability the provider lacks (temperature on a
+            # cloud card) be omitted rather than written.
+            entry.update({k: v for k, v in config.items()
+                          if v is not None and k in _PERSIST_FIELDS})
         added[pid] = entry
         settings.set("models", added)
-        if not settings.get("primary"):
+        if is_new and not settings.get("primary"):
             settings.set("primary", pid)
         self.changed.emit()
         self.refreshModels(pid)     # so a freshly added card has a real picker, not an empty one
@@ -187,11 +225,24 @@ class SettingsModel(QObject):
         if settings.get("primary") == pid:
             live = [k for k, v in added.items() if v.get("on")]
             settings.set("primary", live[0] if live else "")
+        # Clear any ROLE still naming the removed provider (cleanup_dictation / cleanup_prompts).
+        # The router already falls back cleanly, but a stale pointer left in the file kept the
+        # Dictate row displaying a provider that is no longer added — UI and daemon disagreeing
+        # about a fact both can see. Derived from the schema, so a new provider-typed role is
+        # covered without touching this (hard rule 3).
+        for key, s in self.meta.items():
+            if s.get("type") == "provider" and settings.get(key) == pid:
+                settings.set(key, "")
         self.changed.emit()
 
     @Slot(str, str, "QVariant")
     def setModel(self, pid: str, field: str, value) -> None:
         """Change one field of one added provider (on / model / effort / thinking / …)."""
+        if field not in _PERSIST_FIELDS:
+            log.warning("setModel refused unknown field %r for %s", field, pid)
+            return
+        if value is not None and hasattr(value, "toVariant"):
+            value = value.toVariant()      # QJSValue -> a real dict/list/scalar, as in set()
         added = dict(self.models)
         if pid not in added:
             return
@@ -258,6 +309,38 @@ class SettingsModel(QObject):
             live = self._live.get(pid)
         return live or self.catalog.get(pid, {}).get("models", [])
 
+    @Property(str, notify=changed)
+    def localTwoModelNote(self) -> str:
+        """The VRAM note, or "" when it does not apply (Thomas, 2026-08-02).
+
+        Fires when two roles resolve to DIFFERENT models on the SAME local provider. That is the
+        configuration where Ollama has to swap models in and out unless both fit in VRAM, and the
+        failure is invisible: no error, just a full model reload on every switch between Ask and
+        Dictate, which reads as "dictation is randomly slow".
+
+        Deliberately NOT computed. Judging whether both actually fit would need total VRAM, current
+        usage and each model's loaded footprint, and would be wrong often enough to be an
+        annoyance — so this states the fact and leaves the judgement to someone who can see their
+        own GPU. Same reason a cloud provider never triggers it: two remote models cost nothing to
+        hold. The text comes from the schema, never restated here (hard rule 3).
+        """
+        by_provider: dict[str, set] = {}
+        for role in ("primary", "cleanup_dictation", "cleanup_prompts"):
+            pid = settings.get(role)
+            card = self.catalog.get(pid, {}) if pid else {}
+            if card.get("where") != "local":
+                continue
+            cfg = (settings.get("models") or {}).get(pid)
+            if not isinstance(cfg, dict) or not cfg.get("on"):
+                continue
+            key = (settings.spec(role) or {}).get("modelKey")
+            model = (str(settings.get(key) or "").strip() if key else "") or cfg.get("model")
+            if model:
+                by_provider.setdefault(pid, set()).add(model)
+        if any(len(models) > 1 for models in by_provider.values()):
+            return str((settings.spec("local_two_model_note") or {}).get("default") or "")
+        return ""
+
     @Property("QVariant", notify=changed)
     def probeStates(self) -> dict:
         """Every provider's last probe outcome, keyed by id — a property so a binding that shows
@@ -284,6 +367,55 @@ class SettingsModel(QObject):
             if pid in self._fetching:
                 return "fetching"
             return self._status.get(pid, "untested")
+
+    @Property("QVariant", notify=changed)
+    def trial(self) -> dict:
+        """The current trial: `{pid, status, models}`. Empty until a key is tested in the sheet."""
+        return dict(self._trial)
+
+    @Slot()
+    def clearTrial(self) -> None:
+        """Forget the last trial — called whenever the sheet opens or the typed key changes, so a
+        verdict can never outlive the question that produced it."""
+        with self._lock:
+            self._trial_gen += 1          # orphan any answer still in flight
+            self._trial = {"pid": "", "status": "", "models": []}
+        self.changed.emit()
+
+    @Slot(str, str)
+    @Slot(str, str, str)
+    def trialProvider(self, pid: str, key: str, endpoint: str = "") -> None:
+        """Probe a TYPED credential and report into the trial slot alone, leaving the provider cache
+        untouched. A failed trial clears the trial's model list: an empty picker is honest when the
+        key just failed, and unlike the roster there is no list here worth protecting.
+
+        `endpoint` is the address TYPED IN THE SHEET, for a LOCAL provider being added (its entry is
+        not stored yet, so there is nothing to read it from). Cloud passes "" and the probe uses the
+        catalogue's `api`."""
+        cat = self.catalog.get(pid)
+        if cat is None:
+            return
+        with self._lock:
+            self._trial_gen += 1
+            gen = self._trial_gen
+            self._trial = {"pid": pid, "status": "fetching", "models": []}
+        self.changed.emit()
+        endpoint = (endpoint or "").strip() or (self.models.get(pid) or {}).get("endpoint")
+
+        def work() -> None:
+            try:
+                found, status = providers.probe(pid, endpoint, key=key)
+            except Exception as e:            # probe swallows its own, but never trust that
+                log.warning("trial probe failed for %s: %s", pid, e)
+                found, status = [], "error"
+            with self._lock:
+                if self._trial_gen != gen:    # a newer trial overtook this one — drop the answer
+                    return
+                self._trial = {"pid": pid, "status": status,
+                               "models": found if status == "ok" else []}
+            self.changed.emit()
+
+        threading.Thread(target=work, daemon=True, name=f"trial-{pid}").start()
 
     @Slot(str)
     @Slot(str, str)
@@ -382,6 +514,7 @@ class SettingsModel(QObject):
         name = cat["credential"]
         try:
             import keyring
+            import keyring.errors
             if value.strip():
                 keyring.set_password(KEY_SERVICE, name, value.strip())
                 log.info("key stored as (%s, %s)", KEY_SERVICE, name)
@@ -393,8 +526,11 @@ class SettingsModel(QObject):
                 try:
                     keyring.delete_password(KEY_SERVICE, name)
                     log.info("key cleared for (%s, %s)", KEY_SERVICE, name)
-                except Exception:
-                    pass                          # nothing stored — clearing is a no-op
+                except keyring.errors.PasswordDeleteError:
+                    pass          # THE no-op: PasswordDeleteError is keyring's "nothing stored".
+                    # A LOCKED vault or an OS refusal raises a DIFFERENT type — those fall through
+                    # to the outer except, so a delete the user asked for that did not happen is
+                    # reported (False), not swallowed as success (the M6 lie).
                 # Drop what the old key told us, or the picker would keep offering models this
                 # profile can no longer reach.
                 with self._lock:
@@ -417,6 +553,15 @@ if __name__ == "__main__":
     from PySide6.QtCore import QCoreApplication
 
     app = QCoreApplication([])                    # QObject needs an application object
+
+    # OFFLINE by construction (finding, 2026-08-02): addProvider auto-refreshes, so without this
+    # every add here would read the REAL credential store and issue an authenticated GET on the
+    # dev box — a check documented as needing "no credential store" quietly did neither. probe's
+    # own network behaviour is providers' selfcheck; here it is stubbed to a deterministic offline
+    # answer. Tests that need a specific probe result install their own stub over this one.
+    _saved_probe = providers.probe
+    providers.probe = lambda pid, endpoint=None, timeout=None, key=None: ([], "unreachable")
+
     with tempfile.TemporaryDirectory() as tmp:
         os.environ["GEMMA_SETTINGS"] = str(Path(tmp) / "s.json")
         m = SettingsModel()
@@ -424,7 +569,8 @@ if __name__ == "__main__":
         assert [g["id"] for g in m.groupsFor("general")] == ["profile", "preferences"]
         assert m.groupsFor("triggers") == [], "a flat pane declares no groups"
         assert m.rowsInGroup("general", "preferences") == \
-            ["theme", "language", "pings", "listen_for_me", "tts", "gem_in_island"], \
+            ["theme", "language", "pings", "listen_for_me", "tts", "gem_in_island",
+             "local_server_stop_on_quit"], \
             m.rowsInGroup("general", "preferences")
         # Every row of a grouped pane must land in a group, or it renders nowhere.
         grouped = sum(len(m.rowsInGroup("general", g["id"])) for g in m.groupsFor("general"))
@@ -541,6 +687,120 @@ if __name__ == "__main__":
         m.refreshModels("ollama")
         assert m.modelState("ollama") == "ok", "a cached list is not re-fetched by refreshModels"
         m.removeProvider("ollama")
+
+        # --- an EDIT merges, it does not rebuild (M2) ------------------------------------
+        # commitAdd funnels an edit through addProvider(pid, config). A provider switched OFF must
+        # not come back on — nor steal the default — just because Done was pressed on its sheet,
+        # and a field the form does not carry must survive.
+        settings.set("models", {}); settings.set("primary", "")
+        em = SettingsModel()
+        em.addProvider("openai")
+        em.addProvider("groq")
+        settings.set("primary", "groq")               # openai is the non-primary one we disable
+        em.setModel("openai", "on", False)
+        # a hand-added field the sheet has no control for
+        _added = dict(em.models); _added["openai"] = {**_added["openai"], "keep_alive": "10m"}
+        settings.set("models", _added)
+        em.addProvider("openai", {"model": "gpt-x", "endpoint": None, "temperature": None})
+        assert em.models["openai"]["on"] is False, "an edit must not re-enable a disabled provider"
+        assert settings.get("primary") == "groq", "an edit must not steal the default"
+        assert em.models["openai"]["model"] == "gpt-x", "the edited field lands"
+        assert em.models["openai"].get("keep_alive") == "10m", "the merge keeps uncarried fields"
+
+        # --- the persistable-field allowlist: no secret to the file (rule 10) ------------
+        em.addProvider("groq", {"model": "g-1", "key": "sk-MUST-NOT-PERSIST",
+                                "api_key": "sk-NOR-THIS"})
+        _g = em.models["groq"]
+        assert _g["model"] == "g-1"
+        assert "key" not in _g and "api_key" not in _g, \
+            f"a credential-shaped field must never reach settings.json: {_g}"
+        em.setModel("groq", "key", "sk-STILL-NOT")
+        assert "key" not in em.models["groq"], "setModel must refuse a non-persistable field"
+
+        # --- removing a provider clears the roles that named it (M12) --------------------
+        settings.set("cleanup_dictation", "groq")
+        em.removeProvider("groq")
+        assert settings.get("cleanup_dictation") == "", \
+            "a role must not keep naming a removed provider"
+        em.removeProvider("openai")
+
+        # --- setKey never claims success on a real credential-store failure (M6) ---------
+        # A fake keyring, injected in-process: a LOCKED vault refuses the delete, and setKey must
+        # report that (False) rather than swallow it as success while the key stays in the store.
+        import sys as _sys
+        import types as _types
+
+        class _FakeErrors:
+            class PasswordDeleteError(Exception): pass
+            class KeyringLocked(Exception): pass
+
+        def _fake_keyring(delete_exc):
+            k = _types.ModuleType("keyring")
+            k.errors = _FakeErrors
+            store = {("gemma", "anthropic"): "existing-key"}
+            k.get_password = lambda s, n: store.get((s, n))
+            k.set_password = lambda s, n, v: store.__setitem__((s, n), v)
+            def _del(s, n):
+                if delete_exc is not None:
+                    raise delete_exc
+                store.pop((s, n), None)
+            k.delete_password = _del
+            k._store = store
+            return k
+
+        _prev = _sys.modules.get("keyring"), _sys.modules.get("keyring.errors")
+        try:
+            settings.set("models", {}); settings.set("primary", "")
+            km = SettingsModel()
+            km.addProvider("anthropic")
+            locked = _fake_keyring(_FakeErrors.KeyringLocked("vault locked"))
+            _sys.modules["keyring"] = locked
+            _sys.modules["keyring.errors"] = locked.errors
+            assert km.setKey("anthropic", "") is False, \
+                "a refused delete must report failure, not a swallowed success (M6)"
+            assert locked._store.get(("gemma", "anthropic")) == "existing-key", \
+                "the key really is still stored — so setKey must not have said True"
+            nothing = _fake_keyring(_FakeErrors.PasswordDeleteError("nothing stored"))
+            _sys.modules["keyring"] = nothing
+            _sys.modules["keyring.errors"] = nothing.errors
+            assert km.setKey("anthropic", "") is True, \
+                "PasswordDeleteError IS the legitimate nothing-stored no-op"
+        finally:
+            for _name, _mod in zip(("keyring", "keyring.errors"), _prev):
+                if _mod is None:
+                    _sys.modules.pop(_name, None)
+                else:
+                    _sys.modules[_name] = _mod
+
+    # --- the two-model VRAM note (2026-08-02). Fires only for DIFFERENT models on the SAME local
+    # provider: a cloud provider costs nothing to hold two of, and one model shared by both roles
+    # never swaps. Nothing is computed about actual VRAM (see the property).
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ["GEMMA_SETTINGS"] = str(Path(tmp) / "n.json")
+        n = SettingsModel()
+        note = str((settings.spec("local_two_model_note") or {}).get("default"))
+
+        settings.set("models", {"ollama": {"on": True, "model": "qwen3:8b"}})
+        settings.set("primary", "ollama"); settings.set("cleanup_dictation", "ollama")
+        settings.set("cleanup_dictation_model", "")
+        assert n.localTwoModelNote == "", "one model serving both roles never swaps"
+
+        settings.set("cleanup_dictation_model", "qwen3:14b")          # the role override differs
+        assert n.localTwoModelNote == note, "two local models on one provider must warn"
+
+        settings.set("models", {"groq": {"on": True, "model": "llama-3.3-70b-versatile"}})
+        settings.set("primary", "groq"); settings.set("cleanup_dictation", "groq")
+        settings.set("cleanup_dictation_model", "llama-3.1-8b-instant")
+        assert n.localTwoModelNote == "", "a CLOUD provider holds no VRAM — never warn"
+
+        settings.set("models", {"ollama": {"on": False, "model": "qwen3:8b"}})
+        settings.set("primary", "ollama"); settings.set("cleanup_dictation", "ollama")
+        settings.set("cleanup_dictation_model", "qwen3:14b")
+        assert n.localTwoModelNote == "", "a switched-off card is not in play"
+
     os.environ.pop("GEMMA_SETTINGS", None)
-    print("settings_model selfcheck OK: add/remove/enable/primary bookkeeping, "
-          "live model fetch falls back without blanking the picker")
+    providers.probe = _saved_probe
+    print("settings_model selfcheck OK: add/remove/enable/primary bookkeeping, live model fetch "
+          "falls back without blanking the picker, edits merge, the field allowlist keeps secrets "
+          "out of the file, removed providers leave no stale role, and setKey reports a real "
+          "credential-store failure")

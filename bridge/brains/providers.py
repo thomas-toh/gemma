@@ -85,6 +85,100 @@ def base_url(pid: str, endpoint: str | None = None) -> str:
     return c.get("api", "")
 
 
+# Local servers THIS process started, pid -> Popen. Only these may ever be stopped: one that was
+# already running belongs to someone else and may be doing their work (see stop_local_servers).
+_spawned: dict[str, object] = {}
+
+DEFAULT_KEEP_ALIVE = "30m"      # Ollama's own default is 5m — too short for intermittent dictation,
+                                # which then pays an 8-12 s model load on the first turn after a gap.
+_SERVER_READY_S = 10.0          # how long to wait for a freshly spawned server to answer
+
+
+def _listening(pid: str, endpoint: str | None = None) -> bool:
+    """Is something already serving this provider's endpoint?"""
+    import socket
+    from urllib.parse import urlparse
+    url = base_url(pid, endpoint)
+    if not url:
+        return False
+    u = urlparse(url)
+    if not u.hostname:
+        return False
+    try:
+        socket.create_connection((u.hostname, u.port or 80), timeout=1.0).close()
+        return True
+    except OSError:
+        return False
+
+
+def ensure_local_server(pid: str, endpoint: str | None = None,
+                        keep_alive: str | None = None) -> bool:
+    """Start this provider's server if it declares one and nothing is listening.
+
+    Returns True only if WE started it — the caller needs that to know what it may stop later.
+
+    The argv comes from the card's `serve` (hard rule 3), so no adapter knows a binary name and a
+    provider that declares none is simply never started. Windows gets CREATE_NO_WINDOW: the point
+    of the exercise is a server with no console and no tray (Thomas — `ollama app.exe` is the tray,
+    `ollama.exe serve` is the server).
+
+    `keep_alive` rides in the ENVIRONMENT because it cannot be sent per-request: Ollama ignores
+    `keep_alive` on the OpenAI-compatible `/v1`, exactly as it ignores `think` and `num_ctx`
+    (all three tested 2026-08-02, v0.32.5). So it governs a server we start and cannot reach one
+    the user started themselves — a real limit, stated in the setting's help text.
+    """
+    import os
+    import shutil
+    import subprocess
+    import time
+
+    argv = card(pid).get("serve")
+    if not argv or _listening(pid, endpoint):
+        return False
+    exe = shutil.which(argv[0])
+    if not exe:
+        log.info("%s declares a server but %r is not installed — leaving it to the user",
+                 pid, argv[0])
+        return False
+
+    env = {**os.environ, "OLLAMA_KEEP_ALIVE": keep_alive or DEFAULT_KEEP_ALIVE}
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)          # 0 off Windows
+    log.info("starting %s headless (%s), keep-alive %s", pid, exe, env["OLLAMA_KEEP_ALIVE"])
+    proc = subprocess.Popen([exe, *argv[1:]], env=env, creationflags=flags,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    deadline = time.monotonic() + _SERVER_READY_S
+    while time.monotonic() < deadline:
+        if _listening(pid, endpoint):
+            _spawned[pid] = proc
+            return True
+        if proc.poll() is not None:                             # died on its own
+            log.warning("%s server exited immediately (code %s)", pid, proc.returncode)
+            return False
+        time.sleep(0.2)
+    log.warning("%s server did not answer within %.0f s — leaving it running", pid, _SERVER_READY_S)
+    _spawned[pid] = proc                                        # ours regardless; still ours to stop
+    return True
+
+
+def stop_local_servers() -> None:
+    """Stop the local servers THIS process started, and only those.
+
+    A server that was already up when we arrived is never in `_spawned`, so it is never touched —
+    it may be doing someone else's work, which is why that is a rule and not a setting. The
+    setting (`local_server_stop_on_quit`) governs only whether we stop OUR OWN."""
+    import subprocess
+    while _spawned:
+        pid, proc = _spawned.popitem()
+        if proc.poll() is not None:                             # already gone
+            continue
+        log.info("stopping the %s server we started", pid)
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
 def credential_for(pid: str) -> str | None:
     """A provider's API key: OS credential store first (spec/50 rule 10, service 'gemma'),
     then the env var the card names.
@@ -212,11 +306,12 @@ def list_models(pid: str, endpoint: str | None = None, timeout: float = FETCH_TI
 
 
 def build_brain(provider: str, model: str | None = None, endpoint: str | None = None,
-                effort: str | None = None):
+                effort: str | None = None, temperature: float | None = None):
     """Construct the adapter that serves `provider`, chosen by its `wire`: B1 (ClaudeBrain) for
     the anthropic wire, B2 (CompatBrain) for the OpenAI wire that the other ten share. `effort` is
-    the card's reasoning-effort dial, passed to the OpenAI wire (which sends it only where the
-    provider declares the capability).
+    the card's reasoning-effort dial and `temperature` its sampling dial, both passed to the OpenAI
+    wire (which sends each only where the provider declares the capability — only local providers
+    declare temperature today).
 
     This is adapter CONSTRUCTION, not routing: it builds the brain you name. Deciding *which*
     provider to use — the primary, per-role selection — is spec/20's router (`router.py`).
@@ -227,11 +322,13 @@ def build_brain(provider: str, model: str | None = None, endpoint: str | None = 
         from .claude import ClaudeBrain
 
         # ponytail: Claude's effort/extended-thinking are not wired into B1 yet (M0.5 persona/output
-        # work); `effort` is ignored here rather than faked. B2 below honours it.
+        # work), and Anthropic declares no temperature capability; both are ignored here rather than
+        # faked. B2 below honours them.
         return ClaudeBrain(model=model)
     from .compat import CompatBrain
 
-    return CompatBrain(provider, model=model, endpoint=endpoint, effort=effort)
+    return CompatBrain(provider, model=model, endpoint=endpoint, effort=effort,
+                       temperature=temperature)
 
 
 if __name__ == "__main__":
@@ -271,6 +368,32 @@ if __name__ == "__main__":
     assert base_url("ollama", "") == base_url("ollama") == "http://127.0.0.1:11434/v1"
     assert base_url("ollama", "   ") == "http://127.0.0.1:11434/v1", "whitespace is still blank"
     assert base_url("nosuch") == "", "an unknown provider resolves to nothing, never raises"
+
+    # --- local server lifetime. THE rule: only a server WE started may ever be stopped, because
+    # one that was already running belongs to someone else. Tested with no processes at all.
+    assert not _spawned, "the registry must start empty"
+    assert card("ollama").get("serve"), "ollama must declare how to start itself"
+    for pid in ("groq", "openai", "anthropic"):
+        assert not card(pid).get("serve"), f"{pid} is a cloud provider and must declare no server"
+    # A provider that declares nothing is never started, whatever the port says.
+    assert ensure_local_server("groq") is False, "a card with no `serve` must never be started"
+    assert ensure_local_server("nosuch") is False, "an unknown provider must not raise"
+
+    class _Fake:                                   # stands in for a Popen we own
+        def __init__(self): self.stopped = False
+        def poll(self): return None
+        def terminate(self): self.stopped = True
+        def wait(self, timeout=None): return 0
+
+    ours = _Fake()
+    _spawned["ollama"] = ours
+    stop_local_servers()
+    assert ours.stopped, "a server we started must be stopped"
+    assert not _spawned, "stopping must clear the registry"
+    # ...and the registry is the ONLY thing consulted: nothing else can be stopped, because a
+    # server we did not start never enters it. Calling again on an empty registry is a no-op.
+    stop_local_servers()
+    assert not _spawned
 
     # A local runner has no key by design; asking for one must not invent a placeholder here.
     assert credential_for("ollama") is None, "endpoint auth carries no credential"

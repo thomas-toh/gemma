@@ -1,6 +1,6 @@
 # Spec 20 — Contract B: brain adapters
 
-**Last reconciled: 2026-07-28** · Build progress: [STATE.md](../STATE.md) · Rationale: docs/02 §3
+**Last reconciled: 2026-08-02** · Build progress: [STATE.md](../STATE.md) · Rationale: docs/02 §3
 
 *(Interface contract. Build status + the standalone B1 API smoke test
 (`scripts/b1_smoke.py`) live in STATE, Tracks G & B.)*
@@ -37,14 +37,38 @@ implementation therefore serves Groq, Claude and a local model alike. The caller
 brain, and thereby the privacy posture: dictation cleanup uses Groq (cloud, D15/S-06),
 `--clean-prompts` a local model — `transform` privileges neither and does not force `local_only`.
 Errors come back as the same shared `Error` taxonomy `converse` uses, so a caller narrates one set.
-Two per-call generation overrides ride on `Session` (`max_tokens`, `temperature`) because a
-transform of a long dictation must exceed the short spoken cap and cleanup wants determinism;
-every adapter honours them identically.
+Three per-call generation overrides ride on `Session` (`max_tokens`, `temperature`, `thinking`)
+because a transform of a long dictation must exceed the short spoken cap and cleanup wants
+determinism; every adapter honours them identically.
+
+**A transform NEVER reasons (added 2026-08-01).** `transform` sets `Session.thinking = False`, an
+invariant of the verb in the same way `temperature = 0` is — not a user setting. "Rewrite this,
+never answer it" leaves nothing to deliberate about, and reasoning is pure cost in a path that
+sits between speaking and pasting: measured on qwen3:8b, one dictation-length cleanup took 6.5 s
+thinking against 0.44 s without, and on harder inputs it ran to 71k tokens and never answered at
+all. `thinking` is stated as a provider-agnostic **intent**, never as a wire parameter — each
+provider spells "don't think" differently, so translating it is the adapter's job, exactly like
+error mapping and tool translation. An adapter with no way to express it sends nothing and the
+model may think: a degradation, not an error. On the OpenAI wire "off" is a *value* of the effort
+scale (`reasoning_effort: "none"`), so it is gated on the provider card declaring that value —
+sending an effort a provider does not accept is rejected server-side and costs the whole turn.
 
 Rules: adapters MUST stream (no buffer-then-return); MUST surface tool calls to the
 orchestrator rather than executing anything themselves (B3 excepted, see below); MUST
 map provider errors to the shared `Error` kinds (auth · rate_limit · context ·
-unavailable · malformed_tool_call · unknown).
+unavailable · malformed_tool_call · no_model · unknown).
+
+**`no_model` (added 2026-08-02).** The model named for this turn cannot be used: either none was
+chosen, or the one chosen is not there — commonly a model deleted from a local runner after being
+configured. One kind for both, because the user's remedy is identical: open settings and pick a
+model that works. It exists because the alternative was narrating a **precise, actionable cause as
+a shrug** — Ollama answers `404 · model 'x' not found`, and flattening that to `unknown` produced
+"Something went wrong on my end", or in dictation a silent fall back to pasting the raw
+transcript. Same can't-rendered-as-didn't failure D36 fixed for tool calls. Mapped by exception
+type and status only, never message prose (B-02); on the OpenAI wire the 404 branch MUST precede
+the generic `APIStatusError` branch, since `NotFoundError` subclasses it. The spoken line points
+at the model *setting* rather than asserting a deletion, because a 404 can also mean a mistyped
+endpoint path.
 
 **Tool translation is the adapter's job (added 2026-07-24, D30).** A `ToolSpec` is an entry of
 `spec/schemas/tools.json` verbatim — it spells the JSON-schema key `parameters` and carries a
@@ -141,7 +165,9 @@ profile still answers. An **injected** brain (replay/selfcheck) bypasses the rou
 (spec/70); per-task-type routing ("short → cheap") and its classifier; `local_only` policy mapping
 (a `local_only` session forcing a local B2). v1 is role → instance; the orchestrator seam
 (`build_for_role`) does not change when Layer 2 lands — only the data the router reads. B1's
-effort/extended-thinking are still unwired (M0.5), so `effort` reaches only the B2 wire for now.
+effort/extended-thinking are still unwired (M0.5), so `effort` reaches only the B2 wire for now;
+`temperature` likewise reaches only B2 (coerced to a float in `resolve`, since only the local
+providers declare the capability, and carried on to `CompatBrain` at construction).
 
 Note `local_only` is enforced per adapter, not per row: B2 refuses a `local_only` session when
 pointed at a cloud provider and serves it when pointed at a local runner, since the same class is

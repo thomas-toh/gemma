@@ -197,43 +197,67 @@ class OverlayState:
         self.feedback_ms = self.first_word_ms = 0.0
 
     def apply(self, msg: dict) -> None:
-        t = msg["type"]
+        # A type-valid message with a required field MISSING must be ignored, never raise. The
+        # Decoder validates the message TYPE only (feed()), so a well-typed message with fields
+        # absent CAN reach here — from a future producer, or a non-Gemma process that squats the
+        # port (broadcaster does not set SO_REUSEADDR on Windows). A raise here aborts the whole
+        # read in feed._on_ready, dropping every later message in that batch and leaving the mic
+        # timer unarmed. So each branch reads with .get and skips a malformed field rather than
+        # indexing it. Booleans are read STRICTLY (`is True`): a stray "done":"false" is a truthy
+        # string, and truthiness there would clear a live indicator the wire says is still running.
+        t = msg.get("type")
         if t == "state":
-            self.state = msg["state"]
+            st = msg.get("state")
+            if not isinstance(st, str) or not st:
+                return
+            self.state = st
             if self.state in clears_turn():
                 self.clear_turn()
             if self.state != "listening":
                 self.mic = 0.0          # bars fall the moment the capture window closes
         elif t == "transcript":
-            self.transcript = msg["text"]
+            text = msg.get("text")
+            if not isinstance(text, str):
+                return
+            self.transcript = text
             # Only settled prompts join the history; partials (streaming STT, deferred) would
             # otherwise pile up one entry per keystroke-equivalent.
-            if msg.get("final", True) and msg["text"]:
-                self.history.append(msg["text"])
+            if msg.get("final", True) and text:
+                self.history.append(text)
                 del self.history[:-HISTORY_MAX]
         elif t == "response":
-            self.reply += msg.get("delta", "")
-            self.done = bool(msg.get("done", False))
+            self.reply += str(msg.get("delta", "") or "")
+            self.done = msg.get("done") is True
             if msg.get("model"):
-                self.model = msg["model"]        # stamped on the 'done' message (D34)
-            if msg.get("tokens"):
-                self.tokens = int(msg["tokens"])
+                self.model = str(msg["model"])   # stamped on the 'done' message (D34)
+            if msg.get("tokens") is not None:
+                try:
+                    self.tokens = int(msg["tokens"])
+                except (TypeError, ValueError):
+                    pass
         elif t == "mic":
-            self.mic = float(msg["level"])
+            try:
+                self.mic = float(msg.get("level"))
+            except (TypeError, ValueError):
+                self.mic = 0.0
         elif t == "tool":
             # The tool currently running, or "" between calls (D38). Latched on the start
             # message and cleared by its own `done`, rather than by the next state change: a
             # label that outlived the work would claim Gemma was reading your mail when it was
             # not, which is the one thing this indicator exists to get right.
-            self.tool = "" if msg.get("done") else (msg.get("label") or msg["name"])
+            self.tool = "" if msg.get("done") is True else (msg.get("label") or msg.get("name") or "")
         elif t == "error":
-            self.error = msg["message"]
+            self.error = str(msg.get("message", "") or "")
             self.kind = msg.get("kind", "unknown")
         elif t == "latency":
-            if msg["metric"] == "feedback":
-                self.feedback_ms = float(msg["ms"])
-            elif msg["metric"] == "first_word":
-                self.first_word_ms = float(msg["ms"])
+            try:
+                ms = float(msg.get("ms"))
+            except (TypeError, ValueError):
+                return
+            if msg.get("metric") == "feedback":
+                self.feedback_ms = ms
+            elif msg.get("metric") == "first_word":
+                self.first_word_ms = ms
 
 
 def _selfcheck() -> None:
@@ -250,6 +274,14 @@ def _selfcheck() -> None:
     # the schema and this reducer teaching opposite rules for a day.
     assert clears_turn() == {"listening", "thinking"}, sorted(clears_turn())
     assert "idle" not in clears_turn(), "D24: idle means the daemon is free, not blank the island"
+    # `booting` (status.json v0.7.0) is a real state that does NOT clear a turn — it only ever
+    # precedes the first turn, so there is nothing on screen to clear.
+    _states = status_schema()["$defs"]["state"]["properties"]["state"]["enum"]
+    assert "booting" in _states, "status.json must declare the booting state (v0.7.0)"
+    assert "booting" not in clears_turn(), "booting must not clear a turn"
+    _boot = OverlayState()
+    _boot.apply({"type": "state", "state": "booting"})
+    assert _boot.state == "booting", _boot.state
 
     # Latency targets are loaded, not hardcoded (D25 — they had drifted across four files).
     # The reclassification is DATA the overlay obeys: first_word is 'measured', so the readout
@@ -322,6 +354,25 @@ def _selfcheck() -> None:
     s.apply({"type": "tool", "name": "some_new_tool"})
     assert s.tool == "some_new_tool", s.tool
     s.apply({"type": "tool", "name": "some_new_tool", "done": True})
+
+    # A type-valid but field-INVALID message must be IGNORED, never raise (2026-08-02). The decoder
+    # validates the type only, so a well-typed message with fields absent reaches the reducer — and
+    # a raise would abort feed._on_ready mid-batch, dropping every later message and leaving the mic
+    # timer unarmed. Reachable from a non-Gemma producer on the port (no SO_REUSEADDR on Windows).
+    hardy = OverlayState()
+    hardy.apply({"type": "state", "state": "thinking"})
+    for junk in ({"type": "tool"}, {"type": "state"}, {"type": "state", "state": ""},
+                 {"type": "transcript"}, {"type": "mic"}, {"type": "mic", "level": "loud"},
+                 {"type": "error"}, {"type": "latency"}, {"type": "response", "tokens": "lots"}):
+        hardy.apply(junk)                        # none of these may raise
+    assert hardy.state == "thinking", "an absent/empty state must be ignored, not applied"
+    assert hardy.tool == "", "{type: tool} with no name must not raise, and names nothing"
+    # done and the tool-clear are read STRICTLY: a string "false" is truthy, and must not pass.
+    hardy.apply({"type": "tool", "name": "search_email"})
+    hardy.apply({"type": "tool", "name": "search_email", "done": "false"})
+    assert hardy.tool == "search_email", "a string 'false' done must not clear a live indicator"
+    hardy.apply({"type": "response", "delta": "hi", "done": "false"})
+    assert hardy.done is False, "done parses strictly — the string 'false' is not True"
     # ...and it must survive `idle` too (D24). `idle` now means the DAEMON has finished, not
     # "blank the island": the overlay owns that, because only it knows how much text is left to
     # reveal. While the daemon owned it, it was timing a reveal it could not see, and long

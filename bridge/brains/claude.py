@@ -132,7 +132,7 @@ class ClaudeBrain:
             yield Error("auth", "no API key (keyring service 'gemma', account 'anthropic')")
             return
         if not self.model:
-            yield Error("unknown", "no model chosen for 'anthropic'")
+            yield Error("no_model", "no model chosen for 'anthropic'")
             return
 
         client = self._client_once()
@@ -301,8 +301,8 @@ def _selfcheck() -> None:
             return ev
 
     ev = asyncio.run(_first(ClaudeBrain(api_key="x"), Session(id="t")))
-    assert isinstance(ev, Error) and ev.kind == "unknown", \
-        f"no model must be reported, not defaulted: {ev}"
+    assert isinstance(ev, Error) and ev.kind == "no_model", \
+        f"no model must be reported as such, not defaulted nor shrugged at: {ev}"
 
     print("selfcheck OK: error mapping by type/status (no prose), no baked model default, client "
           "built once with the trust store memoised and the SDK's long read timeout intact")

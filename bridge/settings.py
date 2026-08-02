@@ -81,9 +81,16 @@ def set(key: str, value) -> None:
     data = _read_raw()
     data[key] = value
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    # ponytail: values are logged, so never put a secret in this file — keys live in the OS
-    # credential store (spec/50 rule 10). `models` is the only structured value and holds none.
-    log.info("setting %s = %r", key, value)
+    # A structured value is logged as its SHAPE, never verbatim: keys live in the OS credential
+    # store (spec/50 rule 10), and the log is this file's shadow — dumping a whole dict at INFO is
+    # one careless field away from writing a secret down. Scalars are safe and useful to see; the
+    # `models` dict (the only structured value today) is logged as its provider ids alone.
+    if isinstance(value, dict):
+        log.info("setting %s (%d: %s)", key, len(value), ", ".join(map(str, value)))
+    elif isinstance(value, list):
+        log.info("setting %s (%d items)", key, len(value))
+    else:
+        log.info("setting %s = %r", key, value)
 
 
 if __name__ == "__main__":

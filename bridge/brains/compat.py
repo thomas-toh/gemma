@@ -76,6 +76,15 @@ def _error_kind(exc: Exception, offered_tools: bool = False) -> str:
     if isinstance(exc, openai.APIConnectionError):
         # Covers a local runner that simply isn't running — the commonest local failure.
         return "unavailable"
+    if isinstance(exc, openai.NotFoundError):
+        # 404: the model we were told to use is not there. Distinct from `unavailable` (the server
+        # answered) and from `unknown` (we would be throwing away a precise, actionable cause and
+        # narrating a shrug — the can't-rendered-as-didn't failure D36 fixed for tool calls).
+        # Commonest cause by far is a model deleted from a local runner after being configured.
+        # MUST precede the APIStatusError branch below: NotFoundError is a subclass of it.
+        # A 404 could also be a wrong base-URL path, which is why the spoken line points at the
+        # model SETTING rather than asserting the model was deleted.
+        return "no_model"
     if isinstance(exc, openai.APIStatusError):
         if exc.status_code >= 500:
             return "unavailable"
@@ -231,7 +240,7 @@ class CompatBrain:
             yield Error("auth", f"no API key (keyring service 'gemma', account {cred!r})")
             return
         if not self.model:
-            yield Error("unknown", f"no model chosen for {self.provider!r}")
+            yield Error("no_model", f"no model chosen for {self.provider!r}")
             return
 
         client = self._client_once()
@@ -347,11 +356,21 @@ def _selfcheck() -> None:
     assert _error_kind(_exc(openai.InternalServerError, 500)) == "unavailable"
     assert _error_kind(_exc(openai.BadRequestError, 400)) == "unknown", \
         "a 400 must map to the generic apology — no prose-guessing at 'context' (B-02)"
-    assert _error_kind(_exc(openai.NotFoundError, 404)) == "unknown", "a bad model id is not a 5xx"
+    # A 404 was `unknown` until 2026-08-02 — "a bad model id is not a 5xx" was the whole of the
+    # reasoning, and it stopped one step short: a bad model id is not a 5xx AND it is not a shrug.
+    assert _error_kind(_exc(openai.NotFoundError, 404)) == "no_model", "a bad model id is nameable"
     assert _error_kind(RuntimeError("boom")) == "unknown"
 
     # ...except on a round that OFFERED tools, where a 400 is the provider rejecting its own
     # model's broken tool call server-side (D36). It becomes the kind the tool loop retries.
+    # A 404 is the model we were told to use not being there — commonly one deleted from a local
+    # runner after it was configured. It must NOT fall through to `unknown`: Ollama tells us the
+    # exact cause and a shrug would throw that away. NotFoundError subclasses APIStatusError, so
+    # this also pins the ORDER of the ladder — put the generic branch first and this silently
+    # regresses to `unknown` with every test still green except this one.
+    assert _error_kind(_exc(openai.NotFoundError, 404)) == "no_model"
+    assert _error_kind(_exc(openai.BadRequestError, 400)) == "unknown", \
+        "a plain 400 stays generic — only 404 carries the model-not-found meaning"
     assert _error_kind(_exc(openai.BadRequestError, 400), offered_tools=True) == "malformed_tool_call"
     assert _error_kind(_exc(openai.BadRequestError, 400), offered_tools=False) == "unknown", \
         "no tools offered means a 400 cannot be a bad tool call"
@@ -359,7 +378,7 @@ def _selfcheck() -> None:
     assert _error_kind(_exc(openai.InternalServerError, 500), offered_tools=True) == "unavailable"
     assert _error_kind(_exc(openai.AuthenticationError), offered_tools=True) == "auth"
     assert _error_kind(_exc(openai.RateLimitError), offered_tools=True) == "rate_limit"
-    assert _error_kind(_exc(openai.NotFoundError, 404), offered_tools=True) == "unknown", \
+    assert _error_kind(_exc(openai.NotFoundError, 404), offered_tools=True) == "no_model", \
         "a bad model id stays a bad model id — only 400 is the tool-call signal"
     # The shape actually observed on groq: mid-stream rejection, so a bare APIError with NO
     # status code (the HTTP request logged 200). This is the case that matters in practice.
@@ -468,9 +487,14 @@ def _selfcheck() -> None:
     ok = asyncio.run(first(CompatBrain("ollama", model="m"), Session(id="t", local_only=True)))
     assert not (isinstance(ok, Error) and "local_only" in ok.detail), \
         "a local runner must accept a local_only session"
-    assert asyncio.run(first(CompatBrain("groq", api_key="x"))).kind == "unknown", \
-        "no model chosen must be reported, not sent as model=None"
-    assert asyncio.run(first(CompatBrain("groq", model="m", api_key=None))).kind in ("auth", "unknown")
+    assert asyncio.run(first(CompatBrain("groq", api_key="x"))).kind == "no_model", \
+        "no model chosen must be reported as such, not sent as model=None nor shrugged at"
+    # Two legitimate outcomes, depending on whether this machine holds a Groq key: `auth` with no
+    # key at all (CI), `no_model` where a key exists and the call actually reaches Groq, which
+    # answers 404 for the bogus model id. The second is live confirmation that the 404 mapping is
+    # not Ollama-specific — Groq returns the same shape for a model that isn't there.
+    assert asyncio.run(first(CompatBrain("groq", model="m", api_key=None))).kind in \
+        ("auth", "no_model")
 
     # Client lifetime (spec/20). No network: every cost here is local CPU.
     assert ssl_context() is ssl_context(), "the CA bundle must be parsed once per process"

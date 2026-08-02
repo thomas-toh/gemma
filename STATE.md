@@ -35,45 +35,21 @@ quality it stood for is real and now has its own section — **Config & routing*
 **Queued next (2026-07-31, Thomas) — three checklists.** All three are *design-first*; none should
 start as code.
 
-**Dictation latency — a day of measurement, 2026-08-01. Four bugs found, all fixed, nothing yet
-committed to spec.** The complaint was "local cleanup is slower than Groq". It was, by ~10×, for
-reasons that had nothing to do with the model:
+**Dictation latency — fixed 2026-08-01/02, all recorded elsewhere.** "Local cleanup is slower than
+Groq" was true by ~10×, for four reasons that had nothing to do with the model: STT silently on the
+CPU (~950 ms → ~35 ms) · `localhost` costing ~2 s per connection (→ 0.2 ms) · a dead local runner
+taking 9.66 s to report itself (→ ~2 s) · thinking models reasoning during cleanup (6.5 s → 0.44 s,
+one case looping to 71k tokens and never answering). Findings in **NOTES § GPU speech-to-text** and
+**§ Local model runners**; the `transform`-never-thinks invariant and the `no_model` kind in
+**spec/20**. Local cleanup now runs ~0.45 s against Groq-70B's ~0.24 s.
 
-- **STT ran on the CPU, not the 5080** (~950 ms → **~35 ms**). `_add_cuda_dll_dirs()` called
-  `os.add_dll_directory()`, which **ctypes honours and ctranslate2 does not** — so the directory was
-  right, the DLL was loadable, and every transcribe still failed with `cublas64_12.dll is not found`
-  and fell back to CPU, 16 times in the log before anyone noticed. Reordering the calls does not
-  help (tested both ways). Fix: **preload each CUDA DLL by absolute path** — Windows keys loaded
-  modules by base name, so ctranslate2's later `LoadLibrary` finds the copy already in the process.
-  Now `_load_cuda_dlls()` in `listen.py`, guarded by an idempotency check that runs without a GPU.
-- **`localhost` cost ~2 s per connection** (→ **0.2 ms**). It resolves to IPv6 `::1` first and every
-  local runner binds IPv4, so the wasted attempt was paid on *every* call, not just failures.
-  Rewritten to `127.0.0.1` in `base_url()` — deliberately in the URL builder, not only the
-  catalogue default, so it repairs endpoints already stored in a profile and ones typed by hand.
-  The three local cards now default to `127.0.0.1` too.
-- **A dead local runner took 9.66 s to report itself** (→ ~2 s). The SDK retried a refused loopback
-  socket twice. Local providers now get `max_retries=0` and a 2 s **connect** budget; the 600 s
-  read timeout is untouched, because a local model may legitimately think for a long time once it
-  HAS answered. Cloud providers keep their retries — their faults really are transient.
-- **Thinking models reasoned during cleanup** (6.5 s → **0.44 s**, and one case looped to **71,391
-  tokens** and never answered). `transform` now sets `Session.thinking = False` — an invariant of
-  the verb, beside `temperature=0`, not a user setting: a constrained rewrite has nothing to
-  deliberate about. Each adapter translates it; on the OpenAI wire "off" is a *value* of the effort
-  scale (`reasoning_effort: "none"`), gated on the card listing `none`, because a rejected value
-  costs the whole turn. Ollama's card now declares it — `think:false` and `chat_template_kwargs`
-  are both ignored on `/v1` (tested, v0.32.5), so this is the only reachable route.
-- **Owed:** none of this is in spec yet, and the `transform`-never-thinks invariant belongs in
-  spec/20 beside the other Session overrides.
-
-- [ ] **A deleted model is reported as `unknown`** (found 2026-08-01). Delete a model from Ollama and
-  Gemma finds out only when it calls, then flattens Ollama's precise `404 · model 'x' not found`
-  into the generic `unknown` bucket — so dictation silently pastes raw transcripts and the assistant
-  says "something went wrong on my end". Same **can't-rendered-as-didn't** failure D36 fixed for
-  tool calls. The settings window doesn't catch it either: the picker fetches the live list but
-  nothing compares the *stored* selection against it. Fix is small but touches spec/20's closed set
-  of error kinds, so it wants a decision: ① map `NotFoundError`/404 to its own kind in `compat.py`
-  (by type and status, never message prose — B-02) · ② a user-facing line in the orchestrator's
-  message map · ③ optionally, flag a stored model missing from the fetched list in the settings UI.
+- [x] **DONE 2026-08-02 — `no_model`**, so a missing model is nameable instead of "something went
+  wrong on my end". Full account in spec/20. One thing to not undo: the 404 branch MUST precede the
+  generic `APIStatusError` branch (`NotFoundError` subclasses it) — the selfcheck pins that order,
+  because reversing it regresses silently with every other test still green.
+  - [ ] **Owed — the settings window still doesn't catch it earlier.** The picker fetches the live
+    model list but nothing compares the *stored* selection against it, so a deleted model still
+    displays as configured.
 
 - [ ] **The absent settings — wants its own design session, probably its own tab.** Four settings
   are specced in spec/70 §3 but surfaced nowhere: **STT model · wake phrase · TTS voice ·
@@ -95,26 +71,14 @@ reasons that had nothing to do with the model:
   (short → Groq, long → Haiku) · a **`local_only`** policy, which is also what decides whether a
   retrieval tool's hits may reach a cloud brain (spec/30 §Retrieval). Existing detail: the "Owed —
   router Layer 2" entry below, and spec/20:140.
-- [x] **DONE 2026-07-31 (D39) — one app: lifetimes tied, processes NOT merged.** The single-process
-  merge was considered and **rejected** — the complaint was about what dies when, and that is a
-  launcher concern. `run.py`: a **clean** exit of either child (code 0) stops the other, so tray Quit
-  and Ctrl-C are each one door out; a **crash** (nonzero) spares the survivor, so D13/D19 isolation is
-  untouched and a dead daemon still has a live overlay to be reported by. Expected to amend D13/D19
-  and D10; **amends nothing** in the end, and **spec/50 rule 12 stays untouched** — a `quit` upstream
-  verb was rejected because that channel may only stop work in flight and is unauthenticated, so the
-  verb would let any local process kill Gemma. Cost accepted: two hand-started terminals stay untied.
-  Guarded by `python run.py --selfcheck` (all four clean/crash × daemon/overlay cases), CI-wired.
-  - [x] **Cold start, fixed in the same work.** Warm-up is no longer one serial block — it is split by
-    **when a model is first needed**. Wake + VAD load before serving (`serve()` predicts every block,
-    `_capture` needs the VAD); **whisper and Kokoro moved to a background thread**, so the **hotkeys
-    now register without waiting** for them. (b) **Kokoro is no longer preloaded** — `tts` is off by
-    default (D23), so most starts were loading a speech model to discard its audio; lazy is also the
-    only correct answer when it's toggled on mid-session. (c) **`local_files_only` with a network
-    fallback**, killing the per-start huggingface.co revision call for a model already on disk. The
-    **lock** in `listen.py`/`speak.py` is what makes this safe: warm-up now runs concurrently with a
-    live hotkey, so without it an early press and the warm thread each build a CUDA model.
-    ⚠ **Not yet measured on the box** — the 3.8–45.9 s spread was the *before*; the after wants a
-    real start with a stopwatch, and an early keypress during warm-up wants trying once.
+- [x] **DONE 2026-07-31 (D39) — one app: lifetimes tied, processes NOT merged**, plus the cold start
+  split by when each model is first needed. Full account in spec/00; the CUDA and `localhost`
+  findings are in NOTES. The two things that outlive it: **spec/50 rule 12 stayed untouched** (a
+  `quit` upstream verb was rejected — that channel may only stop work in flight and is
+  unauthenticated, so the verb would let any local process kill Gemma), and the **lock** in
+  `listen.py`/`speak.py` is load-bearing now that warm-up runs beside a live hotkey.
+  ⚠ **Not yet measured on the box** — the 3.8–45.9 s spread was the *before*; the after wants a real
+  start with a stopwatch, and an early keypress during warm-up wants trying once.
 
 **Parked, not in the sequence:**
 - **Local B2 brain (Ollama)** — deferred. M2 "it's local" and the *local* cleanup-engine option
@@ -122,24 +86,27 @@ reasons that had nothing to do with the model:
   endpoint, and the router (D33) can already point a role at one — so this is now "stand a local
   server up and pick it", not new adapter work.
   **Stood up 2026-08-01.** Ollama v0.32.5 on the 5080, reached through B2 with no adapter work —
-  `qwen3:8b` · `qwen3:14b` · `qwen3.5:9b` pulled and measured (scoreboard in Track D). VRAM at the
-  4096 default: 5.58 / 9.65 / 5.64 GB — it scales with `num_ctx`, so a 128 k context costs ~11 GB
-  for nothing. **Context cannot be set through `/v1`** (`num_ctx` ignored in both shapes; native
-  `/api/chat` honours it but *reloads the model*, ~3.4 s), so it is a load-time property, not a
-  per-call knob — and the `"context": true` capability on the three local cards is **read by
-  nothing** and arguably unimplementable as declared. Ollama needs **GGUF**; an ONNX build is the
-  wrong artefact (it targets ONNX Runtime GenAI, a *library*, while B2 needs an HTTP endpoint).
-  Model eviction is `OLLAMA_KEEP_ALIVE`, default 5 min — an intermittent dictation habit pays a
-  cold start (8–12 s) each time.
-  - [ ] **Headless Ollama — designed, not built** (Thomas: no tray clutter). The tray comes from
-    `ollama app.exe`; `ollama.exe serve` is the server and has no GUI. So: disable its autostart
-    (Task Manager > Startup, a user action), and have Gemma spawn `ollama.exe serve` with
-    `CREATE_NO_WINDOW` when a role resolves to a local runner and nothing is listening.
-    **"Start if absent, never stop"** — deliberately one-way: no supervision, no restart logic, no
-    orphan handling, and Gemma never owns a third-party process's lifetime (D39 declined that for
-    its own two). Belongs in D39's warm-up thread so the server is up before the first dictation.
-    Undecided: whether it is always-on or behind a setting. If `ollama.exe` is absent, do nothing —
-    D1 already pastes the raw transcript when cleanup is unreachable.
+  `qwen3:8b` · `qwen3:14b` · `qwen3.5:9b` pulled and measured (scoreboard in Track D). The runner's
+  quirks — the three fields `/v1` ignores, `num_ctx` VRAM figures, GGUF-not-ONNX, the two binaries —
+  are in NOTES § Local model runners. The one thing that is a REPO fault rather than a fact about
+  Ollama: the **`"context": true` capability on the three local cards is read by nothing** and is
+  unimplementable as declared, since context cannot be set through `/v1`. Remove it or redefine it.
+  - [x] **DONE 2026-08-02 — headless Ollama, started and stopped by Gemma.**
+    `providers.ensure_local_server()` starts it with no window when a role resolves to a provider
+    declaring a **`serve` argv in its card** and nothing is listening; keep-alive 30 min via
+    `OLLAMA_KEEP_ALIVE` at spawn. Rationale is in the card's own `$comment_serve` and the
+    `local_server_stop_on_quit` `$comment`. Three things worth not relearning:
+    - **The safety rule is NOT configurable: only a server WE started may be stopped.** One already
+      running when Gemma arrived never enters the registry — it may be doing someone else's work.
+      The setting governs only our own. Verified live.
+    - **Keep-alive governs a server Gemma starts and cannot reach one the user started**, because
+      `/v1` ignores `keep_alive` — so it rides in the spawn environment, not on the request.
+    - **run.py ASKS before it insists** (`CTRL_BREAK` → `terminate` → `kill`), because
+      `TerminateProcess` runs no cleanup and a tray Quit would otherwise strand the server every
+      time. **Still incomplete:** a hard kill skips it; launcher C2 (Job Object) is the full fix.
+    - [ ] **Owed — the whole quit chain has never been observed.** Every link is unit-tested with
+      fakes and the links have never met: `run.py` → `CTRL_BREAK` → the daemon's `finally` →
+      `stop_local_servers()`. Start it, tray Quit, confirm both processes and Ollama are gone.
   - [ ] **Untested: `reasoning_effort: "none"` against a NON-thinking model on Ollama.** Documented
     at the endpoint rather than per model, so it should be a no-op, but a rejected value costs the
     whole turn. One pull of any non-thinking model settles it.
@@ -185,6 +152,13 @@ reasons that had nothing to do with the model:
   model, roughly Groq's entire free daily tier. Hence two tiers: a **short smoke set** behind a
   user-facing button, the **full suite** as a maintainer command. A local model makes the full tier
   free to run.
+- **DONE 2026-08-02 — the two-model VRAM note**, as help text inside the Dictate row: two roles on
+  different models of one LOCAL provider means the server swaps them, and the failure is invisible —
+  no error, just a reload on every switch. Text in the schema (`local_two_model_note`), condition in
+  `settings_model.localTwoModelNote`, both guarded. Deliberately **not computed** — judging whether
+  both fit would need VRAM totals we cannot see. **A standalone section under Dictate was tried and
+  rejected** — the Models pane reads Ask · Dictate and a third peer heading is not the same kind of
+  thing (Thomas); don't re-try it.
 - **Model presentation — publish MEASUREMENTS, never recommendations** (Thomas, 2026-07-31). A
   curated "recommended" badge is a treadmill: re-earned at every release, and a stale recommendation
   misleads worse than silence. A **measurement** does not rot — "8/9 on 2026-08-01" stays true, and
@@ -265,7 +239,10 @@ recorded in spec/00 §D25 and `spec/schemas/targets.json`).
     unclickable `soon` items); header row carrying the page title, its one action and Windows'
     own caption buttons; Models and Connectors as TABLES, retiring D29's card rosters; the three
     sheets (Add a model, per-model settings, confirm-before-remove). Mono is gone; dropdowns are
-    one class with an explicit left/right orientation.
+    one class with an explicit left/right orientation — left in a table column, where it lines up
+    under its heading; right in a row's control slot, against the edge every toggle uses. The
+    pane is **Models**, not "Model selection" (renamed in the schema, so the sidebar, the header
+    and the row label all followed from one edit).
   - **The icon font is bundled WHOLE** (Thomas supplied it) — the 14-glyph subset was the binding
     constraint. Codepoints re-mapped across the board: the full Symbols font maps the same names
     differently from the old Material Icons subset, so a straight swap would have silently
@@ -280,30 +257,78 @@ recorded in spec/00 §D25 and `spec/schemas/targets.json`).
     warning; the D38 cross-schema guards are intact; `bridge.orchestrator --selfcheck` now
     asserts the persona actually NAMES a switched-off connector (the wiring, not just the
     sentence — verified to fail when detached).
-  - **Owed:** the **Add a model** sheet and the **remove confirmation** have never been looked at
-    — `settings_check` only proves they do not throw. And the **tool-activity indicator** still
-    has no renderer: Contract P's `tool` message and `overlay.tool` exist and are guarded, but
-    nothing on the island draws it (this is the surviving half of D38's item 9; the connector
-    cards half was absorbed into D40's table).
+  - **The credential trial (2026-08-01).** `probeStates`/`modelOptions` are caches keyed by
+    PROVIDER, but the Add sheet asks a question about an unsaved CREDENTIAL — so a stored key's
+    result was read as a verdict on a typed one, and a junk key could present 11 models. Split:
+    `settings_model` gained a single `trial` slot (`trialProvider` / `clearTrial`) that never
+    touches the provider cache; the sheet reads only that. Consequences, each deliberate:
+    **Add** offers nothing until a trial succeeds (a model list only exists after a real fetch,
+    so requiring one IS requiring a working key) and **Add model** stays greyed until there is
+    also a model chosen · **Test is disabled on Add with an empty box**, because `key=""` falls
+    back to the credential store — the stored key answering for the one being added · **on Edit a
+    FAILED trial changes nothing**, since the stored key is the working state and a failure is a
+    fact about the typed key only (D30's don't-blank-a-picker rule, applied where there is
+    something worth protecting); a key is written only when the trial came back `ok`, so a wrong
+    key cannot replace a right one, and success says so before you save. Guarded in
+    `settings_check` against a warm cache — verified to FAIL when the leak is reintroduced.
+  - **UI faults whose lesson lives in the code that carries it:** the `ColorAnimation` alpha /
+    transparent-black flash (rule in `Theme.qml`), the row that centred its control on the LABEL
+    rather than the row, and the singleton `open_settings` asking Qt via `app.topLevelWindows()`
+    instead of trusting our own bookkeeping (which fails **open** every way it goes stale). The
+    fourth — never bind `font.weight` to a state — is cross-cutting and now in NOTES § PySide6.
+  - **Removing a model deletes its key by default (Thomas, 2026-08-01).** The confirmation carries
+    a checkbox, **on** by default: the credential store is where GEMMA keeps its own key, not a
+    shared vault another app reads — you would paste the key into that app and it would keep its
+    own copy — so a key left behind after a removal is litter, not convenience. The checkbox shows
+    only for providers that HAVE a key, and the credential is cleared BEFORE the provider is
+    dropped, because `setKey` looks the credential's name up in the catalogue. Re-adding cannot
+    corrupt anything either way: `keyring.set_password` overwrites the entry for
+    `("gemma", <provider>)` rather than appending. **Verified live** — OpenAI removed, gone from
+    `settings.json`, `primary` fell back to Anthropic, and the credential really was deleted.
+  - **Two Add-flow bugs, one of them serious.** (i) The sheet is built ONCE and reused, so the key
+    `Field` owned its own `text` — `addKey = ""` reset only the window's copy and the box came back
+    pre-filled. Cleared explicitly on every entry point now. (ii) **`addProvider` discarded the
+    entire form.** A QML object literal crosses into Python as a **QJSValue, not a dict**, so its
+    `isinstance(config, dict)` check was always false and `entry.update(config)` never ran — every
+    value the form collected was thrown away and the SCHEMA FALLBACKS stored instead. It surfaced
+    as "the model I picked is not selected" only because OpenAI ships no offline list so its
+    fallback is `""`; on Anthropic the fallback is a real id, so the wrong model would have been
+    stored silently. **Anything added before this fix holds fallbacks, not choices** — worth
+    opening the row menu on each existing provider once. Guarded: `settings_check` drives
+    `commitAdd` through the real window and asserts the chosen model survives (fails on revert).
+  - **One status line in the key form, not two:** "Add a key…" -> "Press Test…" once something is
+    typed -> "N models available" or "The provider rejected that key."
+  - **Adversarial fix pass, 2026-08-02** — 33 findings over the D40 window + the D38/model
+    interfaces, confirmed set cleared in one batch, all 24 checks green. **Full account:**
+    `docs/01_scoping/Reviews/2026-08-02_0212_Review-adversarial-settings-window-tool-interfaces.md`.
+    Two consequences that do not live in that file: **anything added before the `addProvider` fix
+    holds schema fallbacks, not the choices made** — worth opening each existing provider's row menu
+    once; and the "caption buttons stay live behind a sheet" fix was **reverted** — it needed a hole
+    in the scrim, which broke click-to-dismiss and left the page interactive, so a modal that
+    briefly owns the whole window is the lesser evil.
+  - **Temperature is now a real control** (Thomas): plumbed for the three local providers that
+    declare the capability (Ollama / LM Studio / llama.cpp), written as a **number**, carried by
+    `router.resolve` → `build_for_role` → `CompatBrain(temperature=…)`. No longer stamped as the
+    string `"0.7"` onto every provider. `context` stays unsurfaced (unsettable through `/v1`).
+  - **Owed:** nothing on this pane — the Add flow (cloud AND local), Edit, the remove confirmation
+    and the sheets are all driven by `settings_check` end to end now.
+  - **PARKED — the tool-activity indicator** (the surviving half of D38 item 9; the connector-cards
+    half was absorbed into D40's table). Contract P's `tool` message, decode's reducer and
+    `overlay.tool` are built and guarded; **nothing on `Overlay.qml` draws it.** Deferred by
+    Thomas (2026-08-01) until there are more tools: it needs a design pass on the ISLAND, and
+    with four Tier-1 tools there is not enough of a tool round to design against. The knot when
+    it resumes: during a tool round the status-word slot already reads "Thinking…", which is the
+    7b dead-air problem in another costume.
 
-- **Built — the settings window (D29):** a schema-driven QML window off `spec/schemas/settings.json`
-  (defaults, `built` flags and the provider catalogue all live there, so a knob is a JSON edit).
-  **Models** = the provider roster, an editor card per model (the model well/picker, the dials that
-  provider actually offers, on/off, primary, a key-status footer, and a gear opening the Add/Edit
-  sheet). **Config** = profile · preferences · triggers. Guarded by `settings_check` (CI-wired,
-  fails on any QML warning).
-- **Built — the router v1 (D33):** `bridge/brains/router.py` resolves a role to the configured
-  provider+model from settings, read fresh each turn — `assistant` ← `primary`,
-  `cleanup_dictation`/`cleanup_prompts` ← their keys, each via `models[<provider>]`. The
-  orchestrator (`_assistant_brain`, `_cleanup_brain`) rebuilds the adapter only when
-  `router.signature(role)` changes, so the client is kept (spec/20 adapter lifetime) yet a picker
-  change lands next turn with no restart. An unconfigured role falls back to the daemon default
-  (`DAEMON_MODEL` / Groq cleanup); an injected brain (replay) bypasses the router entirely. **The
-  model picker now drives the daemon** — all of D30's adapter work is reachable by the assistant,
-  not just by dictation cleanup.
+- **Built — D29** (the schema-driven settings window: every knob is a `settings.json` edit, guarded
+  by `settings_check`) · **D33** (the router v1: role → configured provider+model, read fresh each
+  turn, adapter rebuilt only when `router.signature(role)` changes — so the picker drives the
+  daemon with no restart). Full accounts in spec/00; the config surface itself is spec/70.
 - **Built — the config source:** `%APPDATA%\gemma\settings.json` via `bridge/settings.py`, written
-  by the tray/window and re-read by the daemon each turn. Started at D28 with the `tts` and `Pings`
-  toggles.
+  by the window and re-read by the daemon each turn (D28).
+- **Built 2026-07-28 — the dictation Engine card is live.** Engine dropdown resolved by the router;
+  "Tidy dictation" off skips the transform and pastes raw, and skips the `transforming` state too
+  (showing "Tidying…" while nothing tidies would be a lie). Guarded in the orchestrator selfcheck.
 - **Owed — the window is below par** (Thomas, 2026-07-28). Named gaps: the AddCard dashed border
   (Qt), roster reorder, and the settings not surfaced at all yet — **STT model · wake phrase · TTS
   voice · word-replacement** (spec/70 §3).
@@ -311,15 +336,6 @@ recorded in spec/00 §D25 and `spec/schemas/targets.json`).
   roles/routes redesign (spec/70) · per-task-type routing and its classifier (short → Groq, long →
   Haiku) · a `local_only` policy. B1's `effort`/`thinking` stay unwired until M0.5, so `effort`
   currently reaches only B2.
-- **Built 2026-07-28 — the dictation Engine card is live.** Both its controls now do something:
-  the **Engine dropdown** was already resolved by the router (D33), and the **"Tidy dictation"
-  toggle** is now read by `_dictate` — off skips the transform entirely and pastes the raw
-  transcript, reusing the delivery path that already existed for cleanup failure, and it skips
-  the `transforming` state too, since showing "Tidying…" while nothing tidies would be a lie.
-  `built: true` on both keys. Found during the reconciliation pass: flipping the flag alone would
-  have shipped a toggle that appeared to control tidying and did nothing. Guarded in the
-  orchestrator selfcheck (toggle-off pastes raw, and the state run is
-  `["transcribing","pasted","idle"]`), verified to FAIL when the gate is reverted.
 
 ## Track G — Bridge (Doc 04 → **M0 ✅**, M1, M2)
 
@@ -388,34 +404,21 @@ recorded in spec/00 §D25 and `spec/schemas/targets.json`).
 
 ## Track P — Teleprompter (Contract P) — built and live; in polish
 
-- **DONE 2026-07-30 — dropdowns standardised to two classes.** Every dropdown shows either WORDS
-  (provider names, languages, enum choices) or a MACHINE VALUE (a model id); the class picks the
-  face *and* the size together and applies to the button and its popup rows alike. `Theme.fontDropdown`
-  (16) / `fontDropdownMono` (12) — no new numbers, both taken from the exemplars Thomas named
-  (Config > Preferences > Language, and Ask > Model). The enforcement is that `Dropdown.fontPx` is now
-  **readonly**, computed from `mono`: a call site picks the class and *cannot* invent a size, which is
-  how the window had drifted to three sizes across six dropdowns. Two were wrong and are the only
-  visual change: Dictate > Engine was sans at the mono size (12 → 16, Thomas's complaint) and
-  Add-provider > Model was mono at the sans size (16 → 12). Spec: spec/70 §2.
-- **DONE 2026-07-30 — the Test button did nothing while a probe was in flight.** A production bug,
-  not a test flake: `settings_model._fetch` guarded on `pid in self._fetching` *before* honouring
-  `force`, so `testProvider` was swallowed by any probe already running — exactly when the user has
-  just changed a key or endpoint, which is the only reason to press Test. Surfaced as a selfcheck
-  failure on Thomas's box only (`a dead runner must be nameable, got 'empty'`): a live local Ollama
-  with no models pulled answers `empty`, and CI has none, so it had always passed there. Fix is two
-  parts — `force` now overtakes an in-flight probe, and a per-provider **generation counter** makes a
-  returning worker prove it is still the newest before it writes, so the overtaken (slow, stale)
-  answer is discarded instead of landing last. The check fakes both probes and returns them out of
-  order, so it is deterministic and needs no network or local runner; confirmed to fail without the
-  guard before being restored.
-
-- **DONE 2026-07-28 (D34) — model + token count in the peek footer.** The peek names the model that
-  answered + the turn's total tokens (`claude-opus-4-8 • 1847 tokens`, mono, bottom-left — variant A).
-  Contract P: `response` gains optional `model`+`tokens` (`status.json` → v0.5.0), stamped on the `done`
-  message (model from the router-resolved brain's `.model`; tokens summed from each round's
-  `Done(usage)`, input+output); `decode`/`OverlayModel`/`PeekPanel` carry and render it. Guarded in
-  `broadcaster` + `decode` selfchecks; overlay/settings checks green. Owed: live on the box (peek a
-  real answer and read the footer).
+- **DONE 2026-08-02 (D41) — the boot island**: a `booting` state (status.json v0.7.0) drawn as a
+  narrow pill with the shared `Spinner.qml`, and door presses **dropped** until warm-up finishes.
+  Full account in spec/00. Guarded in `overlay_check` · `decode` · `orchestrator` (the gate defaults
+  open, so replay is never gated). **Unproven live** — the two-process boot timing it exists to fill
+  is exactly what headless cannot show.
+- **DONE 2026-07-30 — dropdowns standardised to two classes** (WORDS vs a MACHINE VALUE; the class
+  picks face and size together, and `Dropdown.fontPx` is readonly so a call site cannot invent a
+  size). Rule: spec/70 §2.
+- **DONE 2026-07-30 — the Test button was swallowed by an in-flight probe.** `force` now overtakes
+  one, and a per-provider generation counter makes a returning worker prove it is still the newest
+  before it writes. Guarded deterministically in `settings_model` (both probes faked, returned out
+  of order).
+- **DONE 2026-07-28 (D34) — model + token count in the peek footer** (`response` gains optional
+  `model`+`tokens`, status.json v0.5.0). Full account in spec/00. **Owed:** live on the box — peek a
+  real answer and read the footer.
 - **Works now:** the island renders real turns end to end (key → STT → brain → Teleprompter → TTS).
   `teleprompter/`: `decode.py` (Qt-free NDJSON framing + reducer, loading `clearsTurn`/`upstream`
   from `status.json` rather than restating them) · `model.py` · `feed.py` (QTcpSocket + reconnect +
@@ -439,91 +442,17 @@ recorded in spec/00 §D25 and `spec/schemas/targets.json`).
   which clips *painting* too · and the **window itself never animates** (a native resize lands a
   frame apart from the scene graph, so newly exposed area paints late) — it is a fixed transparent
   frame and the island animates inside it, which is why `WS_EX_TRANSPARENT` is load-bearing.
-- **Built (D24) — the island owns the display.** The prompt hands over to the reply only once it has
-  finished revealing (`promptShown` + `Theme.durationPromptHold`), and the island hides *itself*
-  `Theme.durationAnswerDwell` after the text finishes appearing, replacing a daemon-side timer that
-  was estimating the overlay's own typing speed. `DismissKey`, a `QAbstractNativeEventFilter`, holds
-  bare Esc via `RegisterHotKey` for exactly as long as the window is visible. **Verified live
-  2026-07-22** — the prompt gate, Esc on a displayed answer, Esc mid-thought, and Esc handed back to
-  other apps when the island is hidden.
-- **Built (D27) — the expanded view / "peek".** Hover a shown answer → hint; click → the island
-  grows *in place* into the current turn read in full (prompt pinned and collapsible past 2 lines ·
-  reply scroll under a top/bottom fade · **Copy** + **Save**-to-file). Content-clamped height, then
-  scroll; Esc collapses before dismissing; the dwell pauses while open. The island takes input over
-  its silhouette when peekable, via per-region `WM_NCHITTEST` — **amends D22**. Action icons are
-  hand-drawn SVGs; exact Material Symbols can drop in. **Unproven live:** the hover → click → peek
-  path and the per-region hit-test have only run offscreen, with no real mouse (the `WM_NCHITTEST`
-  mechanism itself is proven in the spike). "Send" stays a Contract-T integration (M1+), never an
-  overlay button.
-- **Built (D32) — Gem the mascot, first surfaces.** The commissioned ghost sprite kit
-  (`teleprompter/gem/`, its own source of truth — never hand-edit) renders in three places through
-  one renderer, `teleprompter/gem.py`: the **Windows taskbar / app icon** (`portrait.plain` on a
-  rounded chip), the **tray** (status-driven off the live feed), and the **settings top bar**
-  (replacing the on-air lamp — `arriving` on open → `idle` → `listening` while capturing). QML draws
-  it through a `QQuickImageProvider` (`image://gem/<state>/<frame>`). Native purple/orange accents
-  are kept; the **body flips light** on dark surfaces — a palette MAP over the kit's indices, never
-  a repaint or a second export. Truthful by construction (spec/50 rule 4): every surface is driven
-  by real Contract-P state. The overlay island is deliberately left alone for now. Parked kit extra:
-  the costume portraits (DJ/engineer/…) for settings sections.
-  - **Refined 2026-07-28 (`d468005`):** the tray follows the **taskbar** theme
-    (`SystemUsesLightTheme`), not the app theme (`AppsUseLightTheme`) — the two differ on a common
-    Windows 11 combo (light apps + dark taskbar), which rendered Gem's dark body invisible; and the
-    tray now **animates idle** too (every multi-frame state animates; only a genuinely single-frame
-    state rests). The settings top bar was simplified in the same commit: the orange brand Mark and
-    the "Gemma" wordmark removed, Models/Config centred, Gem moved to the **top-LEFT** as the page's
-    only mark and its mic indicator.
-  - **Superseded 2026-07-29 by D35 (below).** The tray is no longer a Gem surface, and the kit is
-    v3. Read D35 for what is true; the paragraph above is kept as the record of what D32 shipped.
-    *(This also closes the "spec/00 D32 not updated with `d468005`" debt — D35 restates the tray.)*
-- **Built (D35, 2026-07-29) — sprite kit v3 + the tray's mic ring.** Design shipped v2 then v2.2/v3
-  in a day; neither is drop-in over v1. States hold named **clips** with
-  policies (loop / oneshot / hold), and the kit carries its own **timing script**. `idle/rest` is a
-  single frame, so `gem.py` now runs that script — `GemPlayer` (a Qt-free port of the kit's own
-  player) plus `QmlGem`, which hands QML one bindable URL, so the settings window sets a state and
-  stops counting frames. Both palettes are read **from the JSON** (a light + a dark hex per role,
-  plus a `shade`); only body and eye are overridden — this amends D32's "the accents don't
-  flip", which predates the kit having ground-specific accents (Thomas). Gem's surfaces are now two:
-  the **taskbar / app icon** (`idle/rest`, cropped to the frame's own ink) and the **settings top
-  bar at 52px** (2× the cell — the whole cell fits the 58px bar, so nothing is cropped; 3×/78px was
-  tried and is too tall, and there is no integer step between). `idle` with its own fidgets →
-  `listening` while capturing. The **tray drops Gem**
-  for a **mic-level ring** — hollow ink while the mic is closed, a coral core with a halo that grows
-  and brightens with the real RMS while open; no timer (mic frames are the clock), repaint gated on
-  a 12-step quantisation. Thomas is commissioning a separate tray set. Gone with v1: `portrait.plain`,
-  `arriving`, `question`, `alert`, and `gem.gem_state()` (the tray was its only consumer).
-  Guarded: `teleprompter.gem` + a new `teleprompter.tray` selfcheck, both CI-wired.
-  - **We ship Design's 26px build**, not their 32 — same art, tighter cell, Gem 54% of the width
-    instead of 44%. Checked on arrival: 462 frames / 24 clips, every frame 26 × 26 legal chars,
-    both atlases compared to the JSON pixel-for-pixel (a 26-cell JSON beside a 32-cell atlas throws
-    nothing and renders garbage). Our earlier self-recrop and its `recrop_26.py` are superseded by
-    Design's own export and removed.
-  - **The idle script is two-tier now** — `filler` (blink, look-around) on a fast beat, a **gag**
-    (`jump` `skip-rope` `guitar` `phone` `basketball` `disguise`) every `gagEvery` fillers. The trap:
-    a v2 loader *runs* a v3 kit and just plays gags where fillers belong, so Gem performs constantly
-    — no crash, no warning. `GemPlayer` was ported to the two-tier shape and the selfcheck asserts
-    the tiers stay separate over ~74 simulated minutes. Eyes are 2px wide as of this kit.
+- **Built — D24** (the island owns the display: prompt hand-over, self-hiding dwell, bare-Esc
+  `DismissKey`; verified live 2026-07-22) · **D27** (the peek — hover→click expansion, Copy/Save,
+  per-region `WM_NCHITTEST`, amends D22) · **D32 → superseded by D35** (Gem's first surfaces) ·
+  **D35** (sprite kit v3, the tray's mic ring, Gem on the island behind `gem_in_island`). Full
+  accounts in spec/00. Design constraints that outlive them are in spec/40 §Visual output and the
+  Windows gotchas above.
+  - **Owed — unproven live:** D27's hover→click→peek path and per-region hit-test have only run
+    offscreen with no real mouse · D35's tray ring against a real mic, the taskbar icon, and Gem
+    miming a real turn. Headless cannot show any of them.
   - **Owed — the sprite lab:** `needs-permission/granted` f5 (the falling lock) loses 5px off the
-    bottom to the 26px crop. Design says flag it and leave it — it wants a human pass, not invented
-    pixels.
-  - **Gem mimes the turn (settings bar):** `listening` → `working` while the brain composes →
-    `speaking` for as long as the ISLAND's typewriter is still laying the answer down → `done` →
-    `idle`. Driven by `overlay.revealing`, a new UI-side field on `OverlayModel` that `Overlay.qml`
-    publishes — the daemon's `speaking` state never fires with TTS off, and its stream finishes
-    seconds before the reveal does. It needed its own notify signal — published through the model's
-    blanket `changed` it invalidated its own inputs and QML spun a binding loop.
-  - **Gem is on the island too, behind `gem_in_island`** (preferences, default on — Thomas).
-    52px inside the pill on the left, `gemLeft` 4 / `gemGap` 6 over a cell that carries ~12px of
-    its own margin; the waveform used to be centred in the whole pill and ran 30px under her, so it
-    now starts after her column and the Gem theme narrows to 14 bars / 10px fade (from 20 / 22).
-    Compact pill 230 → 238px. Off restores the pre-Gem island **exactly**, which `overlay_check`
-    proves by re-deriving the original formulas rather than trusting the branch. Her x/y are
-    rounded to whole pixels (an odd pill width would land a nearest-neighbour sprite on a half
-    pixel), CI-guarded. The phase ladder moved out of QML into `QmlGem` now two windows drive one
-    player, and gained `error` (which outranks a pending reply) plus dictation's
-    `transcribing`/`transforming` → `working` and `pasted` → `done`. **No Gem on the peek** — a
-    `search` clip for it is commissioned.
-  - **Owed — live on the box:** the tray ring against a real mic, the taskbar icon, and Gem
-    miming a real turn on both surfaces. Headless cannot show them.
+    bottom to the 26px crop. Design says flag it and leave it — it wants a human pass.
   - **Open (Thomas):** whether Gem stays on the island at all — "more professional" without her.
     The switch already carries either answer; only its **default** would change.
 - **Settled (2026-07-21) — mic cues.** Barge-in detection is the **same species as the wake-word
@@ -806,35 +735,13 @@ recorded in spec/00 §D25 and `spec/schemas/targets.json`).
   WANTS it to, and a tool passes both or is neither offered nor run. Decision and rationale in
   spec/00 D38; the gate in spec/30 § Connectors; the pane in spec/70. **Items 1–8 of the checklist
   are done; item 9 (the design pass) is Thomas's and is the only one open.**
-  - **The two schemas.** Every tool declares a `connector` (`system` · `clipboard` · `files` ·
-    `email` · `apps_media`) and a `label` — the tool said in a sentence a person would use, which
-    both the card and the island's indicator read, so there is one wording and no copy of it in
-    code. `settings.json` gained a `connectors` pane and one `connector_*` bool each; **System is
-    the only one defaulting on**, asserted as a rule in `settings_check` rather than trusted per
-    entry, so a new personal connector cannot quietly ship on. Web, Apps & media and a dimmed
-    **MCP** slot are `built: false`. `tools.json` → v0.3.0, `settings.json` → v0.3.0.
-  - **The gate is two lines and a backstop.** `tool_specs()` filters on the connector beside
-    `MAX_TIER`; `execute()` re-checks, so a switched-off tool is dead even if a stale round or a
-    caller that skips the filter reaches it. An unrecognised connector id fails **closed**. The
-    connector map is derived from the schema, so adding one is a JSON edit.
-  - **A disabled connector is SAID, not silently missing.** `tools.disabled_note()` appends one
-    sentence to the persona naming what is off ("…never imply you looked and found nothing") —
-    the D36 can't-rendered-as-didn't failure, prevented by construction. It names only connectors
-    with a usable tool behind them: "Web is off" would imply switching it on would work.
-  - **The pane is a third top-bar section** (Models | Connectors | Config), a card roster on the
-    Models precedent — each card states what it reaches and lists the tools it enables, ticked
-    where they can actually run. Rendered and eyeballed offscreen; **not yet seen on the box.**
-  - **Contract P gained `tool`** (`status.json` → v0.6.0): `{name, label, done}`, published as a
-    call starts and again as it returns — around every outcome, refusals included, so the
-    indicator can never outlive the work. Reduced by `decode`, exposed as `overlay.tool`.
-    **Nothing renders it yet**, deliberately: that is item 9.
-  - Guarded: `bridge.tools --selfcheck` (fresh install offers System only · all-on offers the four
-    Tier-1 and no Tier-2, proving the gates independent · a connector alone excludes · `execute()`
-    refuses one anyway · the note names the right connectors), plus `settings_check` (every tool's
-    connector has a setting, or it would be withheld forever with no warning) and `decode`
-    (the label is cleared by its own `done`). The tools check now points `GEMMA_SETTINGS` at a
-    temp file, so it no longer passes or fails with whatever is toggled on this box. Verified to
-    FAIL with the gate reverted.
+  - **The invariants worth not relearning:** an unrecognised connector id fails **closed**;
+    `execute()` re-checks so a switched-off tool is dead even if a caller skips the filter; the
+    disabled-connector sentence names only connectors with a usable tool behind them ("Web is off"
+    would imply switching it on would work). Schemas: `tools.json` v0.3.0, `settings.json` v0.3.0,
+    `status.json` v0.6.0 (the `tool` message). **System is the only connector defaulting on**,
+    asserted as a rule in `settings_check` so a new personal connector cannot quietly ship on.
+  - **Not yet seen on the box** — the pane has only been rendered and eyeballed offscreen.
   - **Owed (item 9) — the design pass on BOTH surfaces, Thomas.** The cards as built are
     functional, not designed: fixed 322px height (the Models card's) leaves visible dead space on
     the short ones, and the tool list is a tick plus a line of text. The running indicator has no

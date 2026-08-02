@@ -35,6 +35,18 @@ _ROLE_KEY = {
 }
 
 
+def _as_float(v) -> float | None:
+    """A temperature the adapter can use: a real number, or None. Tolerates the legacy STRING form
+    ('0.7') older profiles hold, and never lets a junk value ride onto the wire as a string —
+    CompatBrain expects float | None (compat.py)."""
+    if v is None or (isinstance(v, str) and not v.strip()):
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def resolve(role: str) -> dict | None:
     """The provider + dials the user configured for `role`, or None if unconfigured — no provider
     named, the named provider never added, its card switched off, or no model chosen. The caller
@@ -65,7 +77,13 @@ def resolve(role: str) -> dict | None:
         "effort": m.get("effort"),
         "thinking": m.get("thinking"),
         "endpoint": m.get("endpoint"),
-        "temperature": m.get("temperature"),
+        # Coerced to a float (or None): the sheet writes a number, but a profile written before the
+        # temperature control existed holds the string "0.7".
+        "temperature": _as_float(m.get("temperature")),
+        # How long a LOCAL server keeps the model in VRAM. Carried here because it can only be
+        # applied when Gemma starts the server — Ollama ignores `keep_alive` on the /v1 wire
+        # (tested 2026-08-02), so it rides in the environment at spawn, not on the request.
+        "keep_alive": m.get("keep_alive"),
     }
 
 
@@ -76,7 +94,8 @@ def signature(role: str):
     cfg = resolve(role)
     if cfg is None:
         return None
-    return (cfg["provider"], cfg["model"], cfg.get("endpoint"), cfg.get("effort"))
+    return (cfg["provider"], cfg["model"], cfg.get("endpoint"), cfg.get("effort"),
+            cfg.get("temperature"))
 
 
 def build_for_role(role: str):
@@ -86,7 +105,8 @@ def build_for_role(role: str):
     cfg = resolve(role)
     if cfg is None:
         return None
-    return build_brain(cfg["provider"], cfg["model"], cfg.get("endpoint"), effort=cfg.get("effort"))
+    return build_brain(cfg["provider"], cfg["model"], cfg.get("endpoint"),
+                       effort=cfg.get("effort"), temperature=cfg.get("temperature"))
 
 
 def _selfcheck() -> None:
@@ -111,7 +131,7 @@ def _selfcheck() -> None:
         settings.set("primary", "groq")
         cfg = resolve("assistant")
         assert cfg and cfg["provider"] == "groq" and cfg["model"] == "llama-3.3-70b-versatile", cfg
-        assert signature("assistant") == ("groq", "llama-3.3-70b-versatile", None, None)
+        assert signature("assistant") == ("groq", "llama-3.3-70b-versatile", None, None, None)
 
         # A card switched OFF, or with no model chosen, reads as unconfigured — the daemon must not
         # be pointed at a provider the user just disabled or never finished setting up.
@@ -149,9 +169,28 @@ def _selfcheck() -> None:
             "a blank override is not a model — fall back to the card"
         settings.set("cleanup_dictation_model", "")
 
+        # Temperature (local providers only): coerced to a float the adapter can use — a profile
+        # written before the control existed holds the STRING "0.7" — threaded through
+        # build_for_role to the B2 adapter, and part of the signature so a change rebuilds.
+        settings.set("models", {"ollama": {"on": True, "model": "qwen3:8b",
+                                           "endpoint": "127.0.0.1:11434", "temperature": "0.4"}})
+        settings.set("primary", "ollama")
+        assert resolve("assistant")["temperature"] == 0.4, "the legacy string must coerce to a float"
+        assert isinstance(resolve("assistant")["temperature"], float)
+        brain = build_for_role("assistant")
+        assert brain is not None and brain.temperature == 0.4, "temperature must reach the adapter"
+        _sig_warm = signature("assistant")
+        settings.set("models", {"ollama": {"on": True, "model": "qwen3:8b",
+                                           "endpoint": "127.0.0.1:11434", "temperature": 0.9}})
+        assert signature("assistant") != _sig_warm, "a temperature change must rebuild the adapter"
+        settings.set("models", {"ollama": {"on": True, "model": "m"}})   # absent -> None
+        assert resolve("assistant")["temperature"] is None, "no temperature set -> None, not a crash"
+        assert build_for_role("assistant").temperature is None
+
         # A changed pick changes the signature (so the orchestrator rebuilds), an identical one
         # does not (so it keeps the client).
         settings.set("primary", "groq")
+        settings.set("models", {"groq": {"on": True, "model": "m"}})
         sig1 = signature("assistant")
         assert signature("assistant") == sig1, "an unchanged config keeps its signature"
         settings.set("models", {"groq": {"on": True, "model": "other-model"}})

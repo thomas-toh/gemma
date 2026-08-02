@@ -109,7 +109,7 @@ Window {
     // Reset the peek only once the island has FULLY faded out (visible → false), so a dismiss fades
     // at the peek size instead of shrinking on screen first (the size-snap is then invisible). The
     // mid-turn case (a new capture, peekable→false above) DOES shrink on screen — that is wanted.
-    onVisibleChanged: if (!visible) peeking = false
+    onVisibleChanged: if (!visible) { peeking = false; bootLatch = false }  // fully hidden — reset
     // (The viewport starts at the very top of the window — y = 0 — so a scrolled-off line peeks
     // through above rather than being clipped. There was a `fadeTop` knob for a non-zero top
     // inset; it was always 0, so it is gone, U-02.)
@@ -174,15 +174,38 @@ Window {
     // `idle` from the daemon means the DAEMON is finished — not "blank". How long an answer
     // stays up is a fact about the reveal, and this is the only process that can see it. The
     // daemon owned this decision for two revisions and blanked answers mid-sentence both times.
+    // Startup (status.json v0.7.0): the daemon publishes `booting` until warm-up finishes, and the
+    // island shows a small circular loader — the SAME mark as the settings Test button (Spinner.qml)
+    // — with no status word. The doors are dropped meanwhile (the daemon gates them), so this is a
+    // pure "not ready yet" indicator, narrower than any other mode to match the little loader.
+    readonly property bool booting: st === "booting"
+    readonly property int bootW: 64
+    // `bootLatch` only EXTENDS the boot look through the fade-OUT: when warm-up ends the state goes
+    // `idle`, whose width is the compact pill and whose Gem is shown, so without it the loader
+    // briefly balloons to the wide pill and flashes Gem as it fades. It is set when booting begins
+    // and dropped once the pill is fully hidden, or the instant a real turn takes over.
+    property bool bootLatch: false
+    onBootingChanged: if (booting) bootLatch = true
+    // What the island DRAWS as a boot pill. Keyed on `booting` DIRECTLY (a value binding — correct
+    // on the very first frame, including when `booting` is the first state the overlay ever sees),
+    // ORed with the latch so it also covers the fade. Driving the visuals off the latch alone left
+    // the loader missing whenever the latch's change-handler had not run for the initial value.
+    readonly property bool bootShown: booting || bootLatch
     readonly property bool busy: st === "listening" || st === "thinking"
                                  || st === "speaking" || st === "error"
                                  || st === "transcribing" || st === "transforming"
+                                 || st === "booting"
     property bool hidden: false                     // dwell expired, or the user dismissed
     // Dictation's terminal confirmation (D2). `st` flips to `idle` the instant after `pasted`,
     // so this LATCH — not `st` — is what keeps the ✓ on screen for its short dwell; a new turn
     // (the next `busy`) clears it.
     property bool pasted: false
-    onStChanged: if (st === "pasted") pasted = true
+    onStChanged: {
+        if (st === "pasted") pasted = true
+        // Boot ends into `idle` (a hide) — keep the latch so the pill fades at its narrow size. Any
+        // OTHER state after boot is a real turn taking over, so drop the latch and render normally.
+        if (st !== "booting" && st !== "idle") bootLatch = false
+    }
     onBusyChanged: if (busy) { hidden = false; pasted = false }  // a new turn brings the island back
     // `hidden` outranks `busy` deliberately: pressing Esc while Gemma is still thinking must
     // take the island away THAT INSTANT. If this read `busy || …` the island would linger
@@ -245,7 +268,9 @@ Window {
     // grow and the panel is cut off. The frame stays fixed (no per-turn window resize; that tore).
     width: Math.max(openW, peekW) + 2 * flare
     height: Math.max(baseH + (maxLines - 1) * lineBox, peekMaxH)
-    readonly property int islandW: (peeking ? peekW : (open ? openW : compactW)) + 2 * flare
+    readonly property int islandW: (peeking ? peekW
+                                    : bootShown ? bootW
+                                    : (open ? openW : compactW)) + 2 * flare
     // A single line is ALWAYS exactly baseH, and each extra line adds exactly one whole line
     // box, so the bottom gap stays padBottom however many lines show. Growth stops at
     // maxLines; past that the text scrolls instead.
@@ -561,8 +586,25 @@ Window {
         sourceSize: Qt.size(root.gemPx, root.gemPx)
         smooth: false                          // nearest-neighbour: keep the cells crisp
         opacity: root.entrance                 // fades with the island, never on its own
-        visible: root.gemOn && !root.peeking   // the peek is its own surface (D27)
+        // Hidden during boot AND through the boot pill's fade-out (bootShown): startup shows the
+        // circular loader instead of Gem, and she must not flash in as the loader fades out (Thomas).
+        visible: root.gemOn && !root.peeking && !root.bootShown
         source: gemPlayer.source
+        z: 5
+    }
+
+    // The boot loader — the shared circular Spinner (Spinner.qml, the settings Test button's own
+    // mark), centred in the island. Shown only while the daemon is warming up; no word beside it.
+    Spinner {
+        objectName: "bootSpinner"              // reached by name from overlay_check
+        anchors.horizontalCenter: parent.horizontalCenter
+        y: Math.round(root.baseH / 2 - height / 2)
+        // bootShown = booting || latch: visible LIVE while booting (a value binding, so it shows on
+        // the first frame) and held through the fade-out (fading with the pill via `opacity`).
+        running: root.bootShown
+        visible: root.bootShown
+        tint: Theme.textPrimary
+        opacity: root.entrance
         z: 5
     }
 

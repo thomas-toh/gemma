@@ -8,15 +8,57 @@ history.
 
 ## GPU speech-to-text on Windows (RTX 5080)
 
-- `pip install -e ".[gpu-cuda]"` pulls cuBLAS/cuDNN/cudart; `listen.py` adds their DLL
-  directories to the search path at runtime — the pip `nvidia-*` packages drop DLLs
-  inside the `nvidia` package directory, which Windows does not search (Store-Python
-  quirk).
+- `pip install -e ".[gpu-cuda]"` pulls cuBLAS/cuDNN/cudart into the `nvidia` package
+  directory, which Windows does not search (Store-Python quirk).
+- **Adding the DLL directory is NOT enough, and this cost a silent regression**
+  (2026-08-01). `os.add_dll_directory()` is honoured by `ctypes` but **not by
+  ctranslate2**, so the directory was right, the DLL was demonstrably loadable, and every
+  transcribe still failed with `Library cublas64_12.dll is not found or cannot be loaded`
+  and fell back to CPU — 16 times in one log before anyone noticed, because the fallback
+  is by design and only logs a warning. Reordering the imports does not help (tested both
+  ways). The fix is to **preload each DLL by absolute path** (`ctypes.WinDLL`): Windows
+  keys loaded modules by base name, so ctranslate2's later `LoadLibrary` finds the copy
+  already in the process and never searches. `listen._load_cuda_dlls()` does both — the
+  preload and the directory add, since other loaders do respect the latter.
+- The tell that it is on CPU is latency, not an error: ~950 ms per utterance instead of
+  ~35 ms. If STT time is suspiciously flat and near a second, check for that warning.
 - Measured on `small.en`, 2 s synthetic clip: **CPU 887 ms vs GPU ~33 ms warm (~28×)**.
   Real-speech figures owed from the live mic test (STATE, Track G).
 - First GPU run pays a one-time Blackwell kernel JIT (~26 s); cached to disk afterwards.
 - macOS stays on CPU; a Metal engine (whisper.cpp / MLX) is added only if measured Mac
   CPU speed disappoints (spec/40).
+
+## Local model runners on Windows (Ollama)
+
+- **Never dial `localhost` — use `127.0.0.1`.** It resolves to IPv6 `::1` first and every
+  local runner binds IPv4, so the wasted attempt is paid on *every* call, not just
+  failures. Measured: **~2,065 ms to connect via `localhost` against 0.2 ms via
+  `127.0.0.1`** — a 10× swing on a whole cleanup turn (2.3 s → 0.2 s). `base_url()`
+  rewrites it, deliberately in the URL builder so it also repairs endpoints already
+  stored in a profile.
+- Even `127.0.0.1` takes ~2 s to report a *refused* connection here, where it should be
+  instant — something drops rather than refuses the packet (firewall). Hence local
+  providers get `max_retries=0` and a short connect budget: a refused loopback socket is
+  not a transient fault, and retrying it three times cost **9.66 s** inside the paste path.
+- **Ollama's `/v1` ignores three native fields** that its own API honours: `think`,
+  `num_ctx` and `keep_alive` (all tested 2026-08-02, v0.32.5). `reasoning_effort` IS
+  supported there and documented with a `none` value meaning thinking-off — that is the
+  only route to the thinking toggle from an OpenAI-compatible client. `keep_alive` is
+  therefore reachable only as `OLLAMA_KEEP_ALIVE` in the environment at spawn, so it
+  governs a server Gemma starts and cannot reach one the user started.
+- `num_ctx` sizes the KV cache **at load time** — changing it reloads the model (~3.4 s).
+  VRAM scales with it: qwen3:8b is 5.58 GB at 4096, 6.30 at 8192, 7.52 at 16384 and
+  ~11.2 GB at 128k. A large context is expensive for nothing when the prompt is ~850
+  tokens.
+- **Ollama reads GGUF, not ONNX.** An ONNX build of the same model is the wrong artefact twice
+  over: wrong format, and it targets ONNX Runtime GenAI, which is a *library* — B2 needs an
+  HTTP endpoint, which is what `ollama serve` is. (ONNX is right elsewhere here: wake word,
+  Kokoro TTS and the parked Parakeet STT path all use ONNX Runtime. Ears yes, brain no.)
+- **The tray icon is `ollama app.exe`; the server is `ollama.exe serve`** and has no GUI.
+  Disabling the app's autostart (Task Manager > Startup) leaves no tray and no server.
+- **Benchmark one model at a time, fully resident.** Cycling several over 16 GB changes
+  scores — partial CPU offload under memory pressure alters the numerics, and a model
+  that scores 8/9 isolated scored 7/9 in a combined run.
 
 ## torch does not install on this box
 
@@ -72,6 +114,9 @@ history.
   ctypes fallback on the HWND (the pure Qt flag is spotty on Windows).
 - The concave top-corner "flare" is a filled `Canvas` path (QML `border-radius` only rounds
   inward); bottom corners use normal radius. Reference shape: `sandbox/qml_spike/Overlay.qml`.
+- **Never bind `font.weight` to a state or selection.** A variable font's heavier cut has wider
+  advances, so the label visibly RE-SPACES as it changes — carry selection by shade or ink, never
+  by weight. Cross-cutting: it applies to any label that can be selected, active or current.
 
 ## Claude API content filtering (Track B, seen live 2026-07-22)
 

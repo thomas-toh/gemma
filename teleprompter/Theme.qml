@@ -104,9 +104,11 @@ QtObject {
     // which reads as a flash rather than a highlight. Same fault the Add-model button had.
     // These are the composited values (bone at 24% over surfaceSunk, at 10% over surfaceShell),
     // so they look identical at rest and no longer dip on the transition.
-    // The rule, for anything added later: a colour that is animated against an opaque one must
-    // be opaque. The rgba tokens above are safe because they animate against `transparent`,
-    // where fading up from nothing is the intended effect.
+    // The rule, for anything added later: **both ends of an animated colour must be opaque.**
+    // The rgba tokens above are only safe where they animate against `transparent` ON A DARKER
+    // GROUND — because Qt's `transparent` is transparent BLACK, so fading it up to a fill dips
+    // through dark grey. Over the island that is invisible; over a lifted track (the segmented
+    // pickers) it is a visible dark flash, which is why those animate track → selected instead.
     readonly property color uiEdgeHover:   "#525150"
     readonly property color uiTrackOff:    "#3b3b39"
 

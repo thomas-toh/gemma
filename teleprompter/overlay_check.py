@@ -296,6 +296,52 @@ def main() -> int:
         f"the pill re-appeared at animW={win.property('animW'):.0f}px and is animating down to "
         f"{compact_w:.0f} — its width must be set BEFORE it appears, not after (re-open bug)")
 
+    # --- boot island (status.json v0.7.0): a NARROW pill showing the shared circular loader
+    # (Spinner.qml, the settings Test button's own mark), no status word and no Gem, until the
+    # daemon clears `booting` when warm-up finishes. ---
+    boot_spin = win.findChild(QObject, "bootSpinner")
+    assert boot_spin is not None, "Overlay.qml lost the bootSpinner objectName"
+    model.apply({"type": "state", "state": "listening"})        # clear any leftover turn first
+    model.apply({"type": "state", "state": "booting"})
+    _pump(app, 500)                                             # let the narrow width settle
+    assert win.property("showing") and win.property("booting"), "booting must show the boot island"
+    assert boot_spin.property("visible") and boot_spin.property("running"), \
+        "the boot loader must be visible and spinning while booting"
+    boot_w = float(win.property("bootW")) + 2 * float(win.property("flare"))
+    assert abs(float(win.property("animW")) - boot_w) < 2, \
+        f"the boot island must be its narrow bootW, got animW={win.property('animW'):.0f}"
+    assert boot_w < compact_w, "the boot island must be narrower than the listening pill"
+    gem_item = win.findChild(QObject, "gem")
+    assert gem_item is None or not gem_item.property("visible"), \
+        "Gem must be hidden during boot — the circular loader replaces her"
+
+    # Warm-up done -> `idle` is a HIDE. WHILE STILL VISIBLE, the boot pill must fade AT ITS NARROW
+    # WIDTH and keep Gem hidden — it must NOT balloon to the compact pill and flash Gem on the way
+    # out (the boot-flash bug). The `bootLatch` holds the boot look through the fade; once fully
+    # hidden the width may snap to whatever is next (invisible, so it does not matter).
+    gem_out = win.findChild(QObject, "gem")
+    model.apply({"type": "state", "state": "idle"})
+    flashed = ""
+    for _ in range(40):
+        _pump(app, 8)
+        if float(win.property("entrance")) < 0.02:
+            break                                               # fully faded — later changes unseen
+        if float(win.property("animW")) > boot_w + 4:
+            flashed = f"grew to animW={win.property('animW'):.0f}px (boot is {boot_w:.0f}px)"
+            break
+        if gem_out is not None and gem_out.property("visible"):
+            flashed = "Gem became visible"
+            break
+    assert not flashed, f"the boot island flashed while fading out — {flashed}"
+    # ...once fully hidden the latch clears and the loader stops.
+    deadline_b = time.monotonic() + 1.0
+    while time.monotonic() < deadline_b and float(win.property("entrance")) > 0.02:
+        _pump(app, 20)
+    _pump(app, 20)
+    assert not win.property("booting") and not win.property("bootLatch"), \
+        "a fully-hidden boot island must clear booting and the latch"
+    assert not boot_spin.property("running"), "the loader must stop once the boot island is hidden"
+
     # --- both edges must move at the same rate, and the island must stay inside its frame ---
     # The island is centred in a FIXED window, so its centre is a constant no matter how wide
     # it is. Any drift means one edge is moving before the other — which is what a native
