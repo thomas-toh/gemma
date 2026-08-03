@@ -13,8 +13,9 @@ guarantees, both binding:
   user deletes to purge everything (spec/50 rule 3), so no separate purge action.
 
 Tiers (spec/30): 1 = read-only (no gate) · 2 = reversible (earcon announce) · 3 = destructive
-(propose-then-tap confirmation, D26). Only Tier 1 has backends today, and the Tier-3 gate renders
-on the Teleprompter (a separate surface), so `MAX_TIER` holds the ceiling at 1.
+(propose-then-tap confirmation, D26). Tier 2's gate is the orchestrator pinging `success` or
+`failure` as each such call returns; Tier 3's renders on the Teleprompter and does not exist yet,
+so `MAX_TIER` holds the ceiling at 2.
 
 Connectors (D38) are the SECOND, independent gate: a tier answers "may Gemma do this without
 asking?" — danger, the designer's judgement — while a connector answers "does this user want
@@ -26,6 +27,7 @@ connector on can never raise a tier.
 from __future__ import annotations
 
 import ctypes
+import difflib
 import json
 import logging
 import os
@@ -34,6 +36,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Callable
 
 from bridge.brains.base import ToolCall
@@ -48,10 +51,11 @@ log = logging.getLogger("gemma.tools")
 AUDIT_FILE = _log.LOG_DIR / "audit.jsonl"
 
 # The highest tier `execute()` will run and `tool_specs()` will offer. Raising it is how a tier
-# turns on, once its backend AND its gate exist. Tier 2 needs the announce earcon wired; Tier 3
-# needs the propose-then-tap confirmation on the Teleprompter (D26) — neither built.
+# turns on, once its backend AND its gate exist. Tier 2's gate is the announce earcon, now wired
+# (orchestrator._run_tool_seen); Tier 3 still needs the propose-then-tap confirmation on the
+# Teleprompter (D26), so the ceiling stops here.
 # ponytail: a single ceiling, not per-tier flags — split only if a tier needs enabling alone.
-MAX_TIER = 1
+MAX_TIER = 2
 
 CLIP_LIMIT = 2000  # matches the read_clipboard registry description
 
@@ -343,11 +347,315 @@ def _search_email(args: dict) -> str:
     return f"Inbox matches ({asked}), newest first:\n" + "\n".join(hits)
 
 
+# --- Tier 2: the reversible actions -----------------------------------------------------------
+#
+# Tier 2 is "Gemma may do this without asking, because you can undo it" — an app opened, a window
+# raised, a media key pressed. What keeps that safe is not the tier alone but the SHAPE of the
+# parameters: the model supplies a WORD, never a path and never a command. Each word is matched
+# against something that already exists on this machine — a Start Menu shortcut, the title of an
+# open window, a fixed key list read off the registry — so the worst a wrong guess can do is open
+# an app the user already has. There is no parameter here that can name something new.
+#
+# Each of these also ANNOUNCES itself: the orchestrator pings `success`/`failure` as any call at
+# Tier 2 or above returns (spec/30's tier table), so an action taken on your machine is never
+# entirely silent.
+
+_KEYEVENTF_KEYUP = 0x0002
+_SW_RESTORE = 9
+
+# The action names belong to the registry (hard rule 3); this only maps each to its Windows
+# virtual key code. The selfcheck asserts the two sets match exactly, so adding an action to the
+# schema without a key here fails offline instead of in front of the user.
+_MEDIA_KEYS = {
+    "play_pause": 0xB3,     # VK_MEDIA_PLAY_PAUSE
+    "next": 0xB0,           # VK_MEDIA_NEXT_TRACK
+    "previous": 0xB1,       # VK_MEDIA_PREV_TRACK
+    "volume_up": 0xAF,      # VK_VOLUME_UP
+    "volume_down": 0xAE,    # VK_VOLUME_DOWN
+    "mute_toggle": 0xAD,    # VK_VOLUME_MUTE
+}
+
+
+def _norm(s) -> str:
+    """Fold a name to bare lowercase alphanumerics, so 'Google Chrome', 'google-chrome' and
+    'googlechrome' are one key. Shared by the app matcher and the window matcher — spoken names
+    arrive without the punctuation the real thing was given."""
+    return re.sub(r"[^a-z0-9]+", "", str(s or "").lower())
+
+
+def _closest(asked, names) -> list[str]:
+    """The names closest to what was asked for, so a miss can offer real options instead of a bare
+    no. Compared case-folded and returned in their real spelling — a spoken name arrives all
+    lowercase and would otherwise score badly against 'Google Chrome'.
+
+    The 0.6 cutoff is deliberately strict: at 0.5, asking for an app this PC does NOT have
+    answered "the closest are: ReadMe, Camera" (measured for 'chrome'), which is worse than
+    saying nothing — it reads as a considered suggestion. Better an honest bare no than three
+    confident wrong ones. 'spotifi' -> 'Spotify' still clears it."""
+    real = {n.lower(): n for n in names}
+    return [real[n] for n in
+            difflib.get_close_matches(str(asked or "").lower(), list(real), n=3, cutoff=0.6)]
+
+
+_APPS_PS = r"""
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+Get-StartApps | ForEach-Object { "$($_.Name)`t$($_.AppID)" }
+"""
+
+
+_APPS_CACHE: list[tuple[str, str]] = []
+
+
+def _start_apps(refresh: bool = False) -> list[tuple[str, str]]:
+    """`(name, AppID)` for every app this PC's Start Menu shows, asked of Windows itself.
+
+    This IS open_app's vocabulary, and it is why nothing has to be configured: whatever is
+    installed is already listed, so "open spotify" works on a fresh machine. The user's alias
+    table (schemas/app_aliases.json) is for the exceptions, not the rule.
+
+    `Get-StartApps` rather than walking the Start Menu FOLDERS, which was the first cut and was
+    wrong: those folders hold only classic installers' `.lnk` files, so Notepad, Calculator,
+    Terminal and every Store app are missing from them — which is precisely the set a person is
+    most likely to ask for. Measured on this box: 110 shortcuts on disk against 139 apps Windows
+    actually lists.
+
+    Same PowerShell subprocess as the retrieval tools, for the same reason (spec/30 rule 3): a
+    sanctioned Windows backend, and pywin32 is not a dependency of this project.
+
+    **Cached for the life of the process, refreshed on a miss.** The ~0.7 s subprocess was
+    acceptable while it hid behind a model round; it is not once the deterministic path stops
+    calling one (ROADMAP #8), and Thomas reported the whole turn feeling slower than typing
+    (2026-08-03). Staleness has exactly one symptom — an app installed since we last looked is
+    not found — so `_open_app` refreshes and retries once when a name matches nothing, and a
+    newly installed app is found on the second look. Every hit stays free, and the only call that
+    pays twice is one that was already failing."""
+    global _APPS_CACHE
+    if _APPS_CACHE and not refresh:
+        return _APPS_CACHE
+    if sys.platform != "win32":
+        return []
+    try:
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", _APPS_PS],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20,
+            creationflags=subprocess.CREATE_NO_WINDOW,   # no console flash over the overlay
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.warning("open_app: could not list this PC's apps (%s)", exc)
+        return []
+    if proc.returncode:
+        log.warning("open_app: Get-StartApps failed (%s)", proc.stderr.strip()[:200])
+        return []
+    rows = [r.split("\t", 1) for r in proc.stdout.splitlines() if r.strip()]
+    _APPS_CACHE = [(n, a) for n, a in (r for r in rows if len(r) == 2) if n and a]
+    return _APPS_CACHE
+
+
+def _resolve_app(asked, apps=None, aliases=None):
+    """What a person called an app -> something launchable. Returns `(name, target, near)`: the
+    app's real name and either its Windows AppID (a string) or, for an alias pointing at a file,
+    a Path. Nothing matched gives `("", None, near)`, where `near` holds the closest real names
+    so the answer can offer them instead of a bare no.
+
+    Order: the user's alias table wins outright, then an exact name, then a prefix, then a
+    substring — shortest name first, so 'chrome' reaches 'Google Chrome' and not 'Google Chrome
+    Canary'. A malformed alias entry is skipped rather than thrown, as the word-replacement table
+    is: a hand-edited file must never break a tool."""
+    apps = _start_apps() if apps is None else apps
+    aliases = load_schemas()["app_aliases"]["aliases"] if aliases is None else aliases
+    want = _norm(asked)
+    if not want:
+        return "", None, []
+
+    by_norm: dict[str, tuple[str, str]] = {}
+    for name, app_id in apps:
+        by_norm.setdefault(_norm(name), (name, app_id))
+
+    for entry in aliases:
+        opens = str(entry.get("open") or "")
+        if opens and _norm(entry.get("say")) == want:
+            # An alias either names another Start Menu app ('spot' -> 'Spotify') or gives a full
+            # path, for something Windows does not list at all. The USER wrote this file — the
+            # model only ever supplies `say` — which is why a path is allowed here and nowhere
+            # else in Contract T.
+            if hit := by_norm.get(_norm(opens)):
+                return hit[0], hit[1], []
+            return Path(opens).stem, Path(opens), []
+
+    if want in by_norm:
+        return (*by_norm[want], [])
+    for pool in ([n for n in by_norm if n.startswith(want)],
+                 [n for n in by_norm if want in n]):
+        if pool:
+            return (*by_norm[min(pool, key=len)], [])
+    return "", None, _closest(asked, sorted({n for n, _ in apps}))
+
+
+def _open_app(args: dict) -> str:
+    if sys.platform != "win32":
+        # ponytail: macOS is `open -a "<Name>"`, with no Start Menu to ask (a D10 seam).
+        return "Opening apps needs Windows, which this machine is not running."
+    asked = str(args.get("app") or "").strip()
+    if not asked:
+        return "That request did not name an app to open."
+
+    name, target, near = _resolve_app(asked)
+    if target is None and _APPS_CACHE:
+        # The one thing a stale list can cause is a miss, so a miss is where we pay to re-look.
+        # An app installed since this process started is found on the second try.
+        name, target, near = _resolve_app(asked, apps=_start_apps(refresh=True))
+    if target is None:
+        if near:
+            return (f"There is no app called {asked!r} on this PC. The closest installed names "
+                    f"are: {', '.join(near)}.")
+        return f"There is no app called {asked!r} installed on this PC."
+
+    try:
+        if isinstance(target, Path):
+            os.startfile(target)     # only ever a path the USER put in the alias table
+        else:
+            # The AppsFolder shell namespace launches classic and Store apps alike from the one
+            # AppID. explorer.exe is handed an argument LIST, never a command line, and the AppID
+            # came out of Windows' own list — the model supplied a word and nothing more.
+            # Its exit code is not read: explorer returns 1 on a perfectly good launch.
+            subprocess.run(["explorer.exe", rf"shell:AppsFolder\{target}"], timeout=20,
+                           creationflags=subprocess.CREATE_NO_WINDOW)
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.warning("open_app %s: %s", name, exc)
+        return f"Windows would not open {name!r}: {exc}"
+    return f"Opened {name}."
+
+
+def _visible_windows() -> list[tuple[int, str]]:
+    """`(handle, title)` for every visible top-level window that has a title — focus_window's
+    vocabulary, and the only thing it can act on."""
+    from ctypes import wintypes
+
+    u = ctypes.windll.user32
+    u.IsWindowVisible.argtypes = [wintypes.HWND]
+    u.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+    u.GetWindowTextW.argtypes = [wintypes.HWND, ctypes.c_wchar_p, ctypes.c_int]
+
+    found: list[tuple[int, str]] = []
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+    def _each(hwnd, _lparam):
+        if u.IsWindowVisible(hwnd):
+            length = u.GetWindowTextLengthW(hwnd)
+            if length:
+                buf = ctypes.create_unicode_buffer(length + 1)
+                u.GetWindowTextW(hwnd, buf, length + 1)
+                if buf.value.strip():
+                    found.append((hwnd, buf.value))
+        return True                              # keep enumerating
+
+    u.EnumWindows(_each, 0)
+    return found
+
+
+def _match_window(query, windows: list[tuple[int, str]]):
+    """The best title match: an exact title first, then the SHORTEST title containing the query —
+    'mail' should reach a window titled 'Mail' before 'Mailchimp — Google Chrome'."""
+    want = _norm(query)
+    if not want:
+        return None
+    for hwnd, title in windows:
+        if _norm(title) == want:
+            return hwnd, title
+    hits = [w for w in windows if want in _norm(w[1])]
+    return min(hits, key=lambda w: len(w[1])) if hits else None
+
+
+def _to_foreground(hwnd) -> bool:
+    """Raise a window and give it the keyboard, around the foreground lock. Returns whether it
+    actually ended up in front — CHECKED, not assumed.
+
+    Windows only lets the process that already owns the foreground hand it on, and the daemon
+    never owns it, so a bare `SetForegroundWindow` quietly does nothing. Attaching our input
+    thread to the current foreground window's thread makes us that process for the length of the
+    call, and we detach immediately. The other published workaround — injecting a synthetic ALT
+    keypress — also works, but it lands in whatever app is in front and can pop its menu bar,
+    which is a side effect on a window nobody asked us to touch.
+
+    The verification is the point: a call that silently failed and reported success would be the
+    D36 failure again — a capability failure narrated as though it had happened."""
+    from ctypes import wintypes
+
+    u, k = ctypes.windll.user32, ctypes.windll.kernel32
+    for fn in (u.SetForegroundWindow, u.BringWindowToTop, u.IsIconic):
+        fn.argtypes = [wintypes.HWND]
+    u.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+    u.GetForegroundWindow.restype = wintypes.HWND
+    u.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.c_void_p]
+
+    if u.IsIconic(hwnd):
+        u.ShowWindow(hwnd, _SW_RESTORE)          # a minimised window cannot take the foreground
+    u.SetForegroundWindow(hwnd)
+    if u.GetForegroundWindow() == hwnd:
+        return True
+
+    theirs = u.GetWindowThreadProcessId(u.GetForegroundWindow(), None)
+    ours = k.GetCurrentThreadId()
+    if theirs and theirs != ours and u.AttachThreadInput(ours, theirs, True):
+        try:
+            u.BringWindowToTop(hwnd)
+            u.SetForegroundWindow(hwnd)
+        finally:
+            u.AttachThreadInput(ours, theirs, False)
+    return u.GetForegroundWindow() == hwnd
+
+
+def _focus_window(args: dict) -> str:
+    if sys.platform != "win32":
+        return "Bringing a window forward needs Windows, which this machine is not running."
+    asked = str(args.get("title_query") or "").strip()
+    if not asked:
+        return "That request did not say which window to bring forward."
+
+    windows = _visible_windows()
+    hit = _match_window(asked, windows)
+    if hit is None:
+        near = _closest(asked, [t for _, t in windows])
+        if near:
+            return f"No open window matches {asked!r}. Open right now: {', '.join(near)}."
+        return f"No open window matches {asked!r}."
+
+    hwnd, title = hit
+    if _to_foreground(hwnd):
+        return f"Brought {title!r} to the front."
+    return (f"I found the window {title!r}, but Windows would not bring it forward — it may be "
+            f"showing a dialog, or running as administrator.")
+
+
+def _media_control(args: dict) -> str:
+    """Press a media or volume key exactly as the keyboard's own would; Windows routes it to
+    whatever app currently owns media. That is also why the answer says the key was SENT rather
+    than that music is now playing — nothing reports back, and the stronger claim would be a
+    guess wearing a fact's clothes."""
+    if sys.platform != "win32":
+        return "The media keys need Windows, which this machine is not running."
+    action = str(args.get("action") or "")
+    vk = _MEDIA_KEYS.get(action)
+    if vk is None:
+        return f"{action!r} is not a media action I can send. I can do: {', '.join(_MEDIA_KEYS)}."
+    # ponytail: keybd_event, as bridge/paste.py uses for Ctrl+V — a couple of lines instead of a
+    # SendInput struct array, and adequate for one key. Move up only if an app ignores it.
+    ctypes.windll.user32.keybd_event(vk, 0, 0, 0)
+    ctypes.windll.user32.keybd_event(vk, 0, _KEYEVENTF_KEYUP, 0)
+    return f"Sent the {action.replace('_', ' ')} key."
+
+
 _BACKENDS: dict[str, Callable[[dict], str]] = {
     "system_status": _system_status,
     "read_clipboard": _read_clipboard,
     "find_document": _find_document,
     "search_email": _search_email,
+    "open_app": _open_app,
+    "focus_window": _focus_window,
+    "media_control": _media_control,
+    # set_timer is in the registry and within the tier, but has no backend: a timer FIRES outside
+    # any turn and Contract P has no message that can announce it (STATE, Track T). No backend =
+    # never offered and refused if called, which is the honest state of it.
 }
 
 
@@ -390,6 +698,13 @@ def label_of(name: str) -> str:
     tool name if it has none. What the island shows while the tool runs and what the connector
     card lists (D38); one wording, read from the schema by both (hard rule 3)."""
     return (_entry(name) or {}).get("label", "") or name
+
+
+def tier_of(name: str) -> int:
+    """A tool's tier from the registry, or 0 if it has none — so a caller asking "was that a
+    Tier-2 action?" about a refused unknown tool gets a plain no rather than an exception. What
+    the orchestrator reads to decide whether the call needs announcing (spec/30's tier table)."""
+    return (_entry(name) or {}).get("tier", 0)
 
 
 def implemented(entry: dict) -> bool:
@@ -488,10 +803,9 @@ def _audit(session, transcript, tool, args, outcome, duration_ms) -> None:
 def _selfcheck() -> None:
     # No network, no real audio: the logic worth guarding is the two GATES (a tool the model must
     # not see), dispatch, the refusal backstop, and that every path audits.
-    from pathlib import Path
     import tempfile
 
-    global AUDIT_FILE, _BACKENDS
+    global AUDIT_FILE, _BACKENDS, _APPS_CACHE
 
     reg = _registry()
     assert reg, "spec/schemas/tools.json must carry the starter tools"
@@ -510,16 +824,23 @@ def _selfcheck() -> None:
     # off until they are asked for (D38) — so Gemma answers and dictates and reaches nothing.
     assert {t["name"] for t in tool_specs()} == {"system_status"}, tool_specs()
 
-    # Every connector on. The four Tier-1 tools appear — and not one Tier-2 tool does, which is
-    # the point: consent cannot raise a tier, so the two gates are genuinely independent.
+    # Every connector on: every tool that has a backend AND sits within the ceiling appears.
     for k in keys:
         settings.set(k, True)
     offered = {t["name"] for t in tool_specs()}
-    assert offered == {"system_status", "read_clipboard", "find_document", "search_email"}, offered
+    assert offered == {"system_status", "read_clipboard", "find_document", "search_email",
+                       "open_app", "focus_window", "media_control"}, offered
     for t in reg:
         if t["tier"] > MAX_TIER:
             assert t["name"] not in offered, f"{t['name']}: tier {t['tier']} must not be offered"
+    # A tool the registry defines but nothing implements is NOT offered, even in tier and with
+    # its connector on — set_timer needs a surface that can announce it firing outside a turn.
+    # Being in the registry is a promise about the contract, not about this machine.
+    assert tier_of("set_timer") <= MAX_TIER and "set_timer" not in offered, offered
     assert all("tier" in t for t in tool_specs()), "specs carry the tier for the loop to read"
+    # The tier the orchestrator reads to decide whether a call needs announcing.
+    assert tier_of("open_app") == 2 and tier_of("system_status") == 1, "tiers come off the registry"
+    assert tier_of("no_such_tool") == 0, "an unknown tool must not look like a Tier-2 action"
     # ...and with everything on there is nothing to warn the brain about.
     assert disabled_note() == "", disabled_note()
 
@@ -547,9 +868,16 @@ def _selfcheck() -> None:
     # switching it on would work, and there is no web tool at all.
     note = disabled_note()
     assert "Files" in note and "switched off" in note, note
-    for absent in ("Web", "Apps & media", "MCP"):
+    for absent in ("Web", "MCP"):
         assert absent not in note, f"a connector with no live tool must not be named: {note}"
     settings.set("connector_files", True)
+
+    # Apps & media has live tools now, so switching it off is a thing the brain must be TOLD —
+    # the same rule that used to keep it unmentioned now requires naming it. Off is its default.
+    settings.set("connector_apps_media", False)
+    assert "Apps & media" in disabled_note(), disabled_note()
+    assert "open_app" not in {t["name"] for t in tool_specs()}, tool_specs()
+    settings.set("connector_apps_media", True)
 
     # find_document's trust boundary: the model's words end up inside a SQL string literal, so
     # everything that could close it or steer the query is dropped, and a bad date never lands.
@@ -577,6 +905,57 @@ def _selfcheck() -> None:
     # Each free-text word gets its own subject-OR-body clause, so word order never matters.
     assert _mail_filter({"query": "lease renewal"})[0].count("textdescription") == 2
 
+    # --- Tier 2's matchers, off the wire. Nothing below opens an app, moves a window or presses
+    # a key: the RESOLUTION is the logic, and it is pure once it is handed a list.
+    assert _norm("Google Chrome") == _norm("google-chrome") == "googlechrome"
+    assert _norm(None) == "" and _norm("  ") == ""
+
+    apps = [("Google Chrome", "Chrome.AppID"),
+            ("Google Chrome Canary", "Canary.AppID"),
+            ("Spotify", "SpotifyAB.SpotifyMusic_x!Spotify"),
+            ("Word", "Microsoft.Office.WINWORD.EXE.15")]
+    assert _resolve_app("word", apps, [])[:2] == ("Word", "Microsoft.Office.WINWORD.EXE.15")
+    assert _resolve_app("SPOTIFY", apps, [])[0] == "Spotify"
+    assert _resolve_app("google chrome", apps, [])[0] == "Google Chrome"
+    # Shortest match wins, so a spoken 'chrome' does not land on the Canary build.
+    assert _resolve_app("chrome", apps, [])[0] == "Google Chrome"
+    # A miss offers the closest REAL names rather than a bare no — and finds them despite the
+    # case difference, which is the whole reason _closest folds case.
+    name, target, near = _resolve_app("spotifi", apps, [])
+    assert target is None and near == ["Spotify"], (name, target, near)
+    assert _resolve_app("zzqx nosuch", apps, []) == ("", None, [])
+    assert _resolve_app("", apps, [])[1] is None, "an empty name matches nothing, not everything"
+    # The user's alias table wins outright, and may name another Start Menu app OR give a path.
+    assert _resolve_app("browser", apps, [{"say": "browser", "open": "Spotify"}])[0] == "Spotify"
+    assert _resolve_app("thing", apps, [{"say": "thing", "open": r"D:\t\thing.exe"}])[1] \
+        == Path(r"D:\t\thing.exe"), "a path in the alias table is the user's own, and is honoured"
+    # A malformed alias entry is SKIPPED and the lookup still answers — a hand-edited table must
+    # never break a tool (bridge/replace.py takes the same posture with its own).
+    assert _resolve_app("word", apps, [{"say": "word"}, {}, {"open": "x"}])[0] == "Word"
+    assert isinstance(load_schemas()["app_aliases"]["aliases"], list), "the shipped table loads"
+
+    # The app list is cached for the process — asking Windows costs ~0.7 s (measured), which is
+    # most of a deterministic launch once no model round is hiding it. Seeded by hand so this is
+    # deterministic off Windows too: a warm cache must be answered WITHOUT a subprocess, and
+    # removing the short-circuit fails here rather than quietly costing 0.7 s a turn again.
+    _APPS_CACHE = [("Sentinel App", "Sentinel.AppID")]
+    assert _start_apps() == [("Sentinel App", "Sentinel.AppID")], "a warm cache must not re-fetch"
+    assert _resolve_app("sentinel app")[1] == "Sentinel.AppID", "...and resolution reads it"
+    _APPS_CACHE = []
+
+    # focus_window: an exact title first, then the SHORTEST title containing the query.
+    wins = [(1, "Mailchimp — Google Chrome"), (2, "Mail"), (3, "Inbox — Outlook")]
+    assert _match_window("mail", wins) == (2, "Mail"), _match_window("mail", wins)
+    assert _match_window("outlook", wins) == (3, "Inbox — Outlook")
+    assert _match_window("mailchimp", wins) == (1, "Mailchimp — Google Chrome")
+    assert _match_window("photoshop", wins) is None and _match_window("", wins) is None
+
+    # media_control's key map must cover the registry's enum EXACTLY. The registry is the truth
+    # (hard rule 3); an action added there with no key here would be offered to the model and
+    # then fail in front of the user, which is exactly the shape this catches offline.
+    actions = _entry("media_control")["parameters"]["properties"]["action"]["enum"]
+    assert set(actions) == set(_MEDIA_KEYS), (sorted(actions), sorted(_MEDIA_KEYS))
+
     with tempfile.TemporaryDirectory() as tmp:
         AUDIT_FILE = Path(tmp) / "audit.jsonl"
 
@@ -587,18 +966,24 @@ def _selfcheck() -> None:
         # so the check touches none; system_status and find_document stay real (a local-time read
         # and an index query for a nonsense term — neither returns personal data). Each stubbed
         # backend's own degradation and trust boundary are proven directly above, off the wire.
+        # ...and the same for the three Tier-2 backends, which ACT: running them for real here
+        # would open an app, steal the foreground and change this machine's volume. Their
+        # resolution logic — the only part with a decision in it — is proven directly above.
         _real_backends = _BACKENDS
         _BACKENDS = {**_real_backends,
                      "read_clipboard": lambda a: "(clipboard not read during the selfcheck)",
-                     "search_email": lambda a: "(inbox not read during the selfcheck)"}
+                     "search_email": lambda a: "(inbox not read during the selfcheck)",
+                     "open_app": lambda a: f"(would open {a.get('app')!r})",
+                     "focus_window": lambda a: f"(would focus {a.get('title_query')!r})",
+                     "media_control": lambda a: f"(would send {a.get('action')!r})"}
 
         # An unknown tool is refused, not executed — the allowlist backstop behind the filter.
         content, outcome = execute(ToolCall("1", "no_such_tool", {}), session="s", transcript="hi")
         assert outcome == "refused:unknown_tool" and "not available" in content, (content, outcome)
 
-        # A Tier-2 tool that IS in the registry but has no backend is refused too (defence in
-        # depth: even if the filter were bypassed, execute() still says no).
-        content, outcome = execute(ToolCall("2", "open_app", {"app": "spotify"}))
+        # A tool that IS in the registry and in tier but has no backend is refused too (defence
+        # in depth: even if the filter were bypassed, execute() still says no).
+        content, outcome = execute(ToolCall("2", "set_timer", {"seconds": 60}))
         assert outcome == "refused:unknown_tool", (content, outcome)
 
         # A real Tier-1 tool runs and returns something the brain can read — including a UTC
@@ -646,10 +1031,23 @@ def _selfcheck() -> None:
         assert "switched off" in content, content
         settings.set("connector_clipboard", True)
 
-        # Every one of those nine calls left exactly one audit line, with the required fields —
-        # a refused call is audited exactly as a run one is (spec/30 rule 2).
+        # The three Tier-2 tools dispatch and come back `ok`, which is what the orchestrator
+        # turns into the announce earcon. A Tier-2 tool is refused when ITS connector is off,
+        # exactly as a Tier-1 one is — the two gates do not change shape with the tier.
+        for i, (name, a) in enumerate([("open_app", {"app": "spotify"}),
+                                       ("focus_window", {"title_query": "mail"}),
+                                       ("media_control", {"action": "play_pause"})], start=10):
+            content, outcome = execute(ToolCall(str(i), name, a))
+            assert outcome == "ok" and content.strip(), (name, content, outcome)
+        settings.set("connector_apps_media", False)
+        content, outcome = execute(ToolCall("13", "open_app", {"app": "spotify"}))
+        assert outcome == "refused:connector_apps_media", (content, outcome)
+        settings.set("connector_apps_media", True)
+
+        # Every one of those calls left exactly one audit line, with the required fields — a
+        # refused call is audited exactly as a run one is (spec/30 rule 2).
         lines = AUDIT_FILE.read_text(encoding="utf-8").splitlines()
-        assert len(lines) == 9, f"every call must audit once, got {len(lines)}"
+        assert len(lines) == 13, f"every call must audit once, got {len(lines)}"
         rec = json.loads(lines[0])
         assert set(rec) == {"ts", "session", "transcript_snippet", "tool", "args",
                             "outcome", "duration_ms"}, sorted(rec)
@@ -659,9 +1057,10 @@ def _selfcheck() -> None:
 
     settings_dir.cleanup()          # the settings temp dir was held open for the whole check
     os.environ.pop("GEMMA_SETTINGS", None)
-    print(f"tools selfcheck OK: {len(offered)} Tier-{MAX_TIER} tools offered with every "
-          f"connector on ({', '.join(sorted(offered))}); tier, connector and the allowlist each "
-          f"refuse on their own, and every call is audited")
+    print(f"tools selfcheck OK: {len(offered)} tools offered up to tier {MAX_TIER} with every "
+          f"connector on ({', '.join(sorted(offered))}); tier, connector, a missing backend and "
+          f"the allowlist each refuse on their own, the Tier-2 matchers resolve off the wire, "
+          f"and every call is audited")
 
 
 if __name__ == "__main__":

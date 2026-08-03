@@ -1,11 +1,10 @@
 # Spec 30 — Contract T: tools & safety tiers
 
-**Last reconciled: 2026-07-31** · Build progress: [STATE.md](../STATE.md) · Registry (executable): [schemas/tools.json](schemas/tools.json)
+**Last reconciled: 2026-08-03** · Build progress: [STATE.md](../STATE.md) · Registry (executable): [schemas/tools.json](schemas/tools.json)
 
-*(The executor and its Tier-1 backends now exist — `bridge/tools.py` (D31); see STATE, Track T
-for status. Tier 2's earcon announce and Tier 3's propose-then-tap gate are `planned, M1`, and the
-per-OS backends beyond Windows are a D10 seam. The registry file has been loaded by
-`bridge/config.py` since M0.)*
+*(The executor is `bridge/tools.py` (D31); see STATE, Track T for what it implements. Tier 3's
+propose-then-tap gate is `planned, M1`, and the per-OS backends beyond Windows are a D10 seam.
+The registry file has been loaded by `bridge/config.py` since M0.)*
 
 The registry file is the single source of truth for tool names, parameter schemas and
 tiers. The bridge loads it at startup; brains receive it (filtered) as their tool list;
@@ -16,7 +15,7 @@ the executor refuses any call not present in it. Code never hardcodes a tool def
 | Tier | Meaning | Gate | Log |
 |------|---------|------|-----|
 | 1 | Read-only | none | audit |
-| 2 | Reversible action | earcon announce (`success`/`failure`) | audit |
+| 2 | Reversible action | **announce** — one `success`/`failure` earcon as the call returns, refusals included (D42) | audit |
 | 3 | Destructive / consequential | **confirmation (D26)** — the action is rendered on the Teleprompter and a **keypress** confirms it (propose-then-tap, D20); the `failure` earcon sounds ("needs your view", D28) and, with speech on, saying "confirm" within 8 s is the equivalent gate. No confirmation → cancels. | audit |
 
 ## Rules (binding)
@@ -54,8 +53,13 @@ constants:
   implementation — above the ceiling, or unwanted — never reaches the model. `execute()` re-checks
   the same allowlist: the filter is convenience, the allowlist is the defence (spec/50 rule 1). An
   unknown, out-of-tier or disconnected call is refused, not run.
-- **The tier ceiling is one knob.** `MAX_TIER` holds at 1 until Tier 2's announce earcon and Tier
-  3's propose-then-tap confirmation (D26) are built; raising it is how a tier turns on.
+- **The tier ceiling is one knob.** `MAX_TIER` is raised only once the tier's GATE exists — Tier
+  2's announce, Tier 3's propose-then-tap confirmation (D26). Raising it is how a tier turns on,
+  and a tier whose gate is unbuilt is never offered however much its backends are ready.
+- **A tool in the registry is not a tool on this machine.** The registry is a promise about the
+  CONTRACT — this is the name, these are the parameters, this is the tier. Whether anything
+  implements it here is a separate question, answered by `implemented()`. A registered tool with
+  no backend is neither offered nor run; it is not a lie, it is a shape nothing fills yet.
 - **Tier and connector are orthogonal gates (D38).** A **tier** answers "may Gemma do this without
   asking?" — it is about danger, and it is the designer's judgement. A **connector** answers "does
   this user want Gemma reaching that at all?" — it is about consent, and it is the user's. A
@@ -90,6 +94,20 @@ constants:
   a result travels wherever that turn is routed, which is the `local_only` question, not this one.
   A retrieval tool that cannot reach its store (no index, no mail profile) answers "not available"
   in prose rather than raising, so a missing corpus degrades the turn instead of ending it.
+
+- **Acting tools take a WORD, and match it against what already exists here.** The Tier-2 tools
+  change something, so the binding constraint is on what the model may name. It supplies a plain
+  word — an app as a person says it, a fragment of a window title, one of a fixed list of media
+  keys — and never a path, a command line, or an identifier it composed. Each word is resolved
+  against a list this machine produced: the apps Windows itself reports, the titles of the windows
+  open right now, the key names the registry declares. So the worst a wrong guess reaches is
+  something the user already has, and there is no parameter through which a new thing can be
+  named. The *only* place a path is accepted is the user's own alias table
+  (`schemas/app_aliases.json`), which the model cannot write to and never reads from.
+
+  A resolution that matches nothing answers with the closest real names rather than a bare
+  refusal, and an action that Windows silently declined (the foreground lock) is reported as
+  declined — a capability failure narrated as one, never as work that was done.
 
 The multi-round loop that carries a tool result back to the brain is Contract B's, not Contract
 T's — see spec/20 "The tool loop".

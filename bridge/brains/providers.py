@@ -50,6 +50,23 @@ def wire(pid: str) -> str:
     return card(pid).get("wire", "")
 
 
+def wire_names(pid: str) -> dict[str, str | None]:
+    """What THIS provider calls each of Gemma's request knobs (D44, hard rule 3).
+
+    Gemma names a knob once — `max_output_tokens`, `effort`, `temperature` — and the catalogue
+    says how it is spelled on the way out. The wire supplies the default (it belongs to the
+    protocol, not to any one provider) and the card overrides only what it spells differently,
+    so ten providers sharing a dialect share one entry and the odd one out is a two-line card
+    edit rather than a branch in the adapter.
+
+    A `None` value means the provider HAS NO such knob and it is dropped deliberately; a name
+    missing altogether is a gap in the schema, which the adapter logs rather than guessing at.
+    """
+    names: dict[str, str | None] = dict(schema().get("wire_names", {}).get(wire(pid), {}))
+    names.update(card(pid).get("wire_names", {}) or {})
+    return names
+
+
 def base_url(pid: str, endpoint: str | None = None) -> str:
     """The provider's OpenAI-compatible base URL.
 

@@ -2,7 +2,7 @@
   "$comment": "Contract T tool registry — SINGLE SOURCE OF TRUTH (spec/30). The bridge loads this at startup; brains receive it as their tool list; the executor refuses calls not defined here. tier: 1=read-only, 2=reversible (earcon announce), 3=destructive (spoken confirmation required). Growth rule: adding a tool is tracked, not gated — STATE Track T records when each was built and whether it has been invoked in real use without misfiring.",
   "$comment_connector": "D38: every tool also declares the CONSENT card it sits under. Tier and connector are orthogonal gates — the tier says whether Gemma MAY (danger, the designer's judgement), the connector says whether the user WANTS it to (consent, theirs). Both must pass or the tool is not offered and is refused if called. The id is matched to a `connector` setting in schemas/settings.json, which holds the label, the default and what it reaches; a new tool joins an existing card by naming it here, with no UI work.",
   "$comment_label": "`label` is the tool said in a sentence a person would use, for the connector card to list — consent to a card has to be consent to something specific, and `description` is written for the model, not for a reader. It belongs here rather than in the window because the registry is the tool's own truth (hard rule 3); nothing in code or QML restates it.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "tools": [
     {
       "name": "system_status",
@@ -49,20 +49,20 @@
     {
       "name": "open_app",
       "tier": 2, "connector": "apps_media", "label": "Open an app",
-      "description": "Launch an application by its friendly name from the configured app map (e.g. 'spotify', 'word', 'chrome'). Fails with the list of known names if not found.",
+      "description": "Launch an application by the name a person would say for it (e.g. 'spotify', 'word', 'notepad'). Resolved against the apps this PC actually has; if the name matches nothing, the closest installed names come back so you can offer them instead of guessing again.",
       "parameters": {
         "type": "object",
-        "properties": { "app": { "type": "string", "description": "friendly app name, lowercase" } },
+        "properties": { "app": { "type": "string", "description": "what the app is called, in plain words — never a path or a command line" } },
         "required": ["app"], "additionalProperties": false
       }
     },
     {
       "name": "focus_window",
       "tier": 2, "connector": "apps_media", "label": "Bring a window to the front",
-      "description": "Bring the window whose title best matches the query to the foreground.",
+      "description": "Bring an already-open window to the front. Matches against the titles of the windows open right now; if none matches, the closest open titles come back. Use this to switch to something running — use open_app to start something that is not.",
       "parameters": {
         "type": "object",
-        "properties": { "title_query": { "type": "string" } },
+        "properties": { "title_query": { "type": "string", "description": "a distinctive word or two from the window's title, or the app's name" } },
         "required": ["title_query"], "additionalProperties": false
       }
     },

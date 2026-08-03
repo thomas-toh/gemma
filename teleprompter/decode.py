@@ -179,6 +179,10 @@ class OverlayState:
     # response message, shown in the peek footer.
     model: str = ""
     tokens: int = 0
+    # Which KIND of turn this was, so the island knows how long to leave it up (D43): "quick" for
+    # one that acted, "slow" for one that answered. Never a duration — the seconds are the user's
+    # setting. "slow" at rest, so anything unstamped keeps the readable dwell.
+    dwell: str = "slow"
     # Per-turn instrument readings (spec/40 targets: feedback < 1500 ms, first word < 4000 ms).
     # status.json calls these "not user-facing chrome by default", so the overlay only shows
     # them behind a toggle — but D13 wants them on screen for the M0 acceptance run.
@@ -194,6 +198,7 @@ class OverlayState:
         self.tool = ""
         self.done = False
         self.tokens = 0
+        self.dwell = "slow"
         self.feedback_ms = self.first_word_ms = 0.0
 
     def apply(self, msg: dict) -> None:
@@ -235,6 +240,10 @@ class OverlayState:
                     self.tokens = int(msg["tokens"])
                 except (TypeError, ValueError):
                     pass
+            # Only the two words the schema allows are honoured; anything else leaves the
+            # readable dwell in place. A malformed hint must not be able to blink an answer away.
+            if msg.get("dwell") in ("quick", "slow"):
+                self.dwell = str(msg["dwell"])
         elif t == "mic":
             try:
                 self.mic = float(msg.get("level"))
@@ -342,6 +351,20 @@ def _selfcheck() -> None:
     assert s.transcript == "what's the weather", "speaking must not clear the prompt"
     s.apply({"type": "response", "done": True, "model": "claude-opus-4-8", "tokens": 421})
     assert s.done and s.model == "claude-opus-4-8" and s.tokens == 421, (s.model, s.tokens)
+    # D43: an unstamped reply is an ANSWER. That default matters more than the stamped case — it
+    # is what an older daemon, or one that simply forgot, falls back to, and falling back to the
+    # SHORT dwell would blink an answer off the screen while it was being read. On its own state
+    # object, so this cannot disturb the sequence above.
+    d = OverlayState()
+    d.apply({"type": "response", "delta": "It is noon.", "done": True})
+    assert d.dwell == "slow", f"an unstamped reply must read as an answer, got {d.dwell!r}"
+    d.apply({"type": "response", "done": True, "dwell": "quick"})
+    assert d.dwell == "quick", d.dwell
+    for junk in ("fast", "", 3, None, "QUICK"):
+        d.apply({"type": "response", "done": True, "dwell": junk})
+        assert d.dwell == "quick", f"junk must leave the last good value alone, got {d.dwell!r}"
+    d.clear_turn()
+    assert d.dwell == "slow", "a new turn starts as an answer until told otherwise"
 
     # Tool activity (D38): named while it runs, gone the moment it stops. The label is latched
     # on the start message and cleared by its OWN done — never by a later state change, because

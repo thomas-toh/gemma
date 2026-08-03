@@ -14,8 +14,15 @@ why two processes beat a merge, which D39 considered and rejected.
 Shutdown ASKS before it insists. The daemon may now own a headless local model server (Ollama),
 and it can only stop that from its own cleanup path — so a bare `terminate()`, which on Windows is
 TerminateProcess and runs no cleanup at all, would strand the server every time. Children are
-started in their own process group and sent CTRL_BREAK first, which arrives as KeyboardInterrupt
-and lets `finally` run; terminate() and then kill() remain as the escalation.
+started in their own process group and sent CTRL_BREAK first; terminate() and then kill() remain
+as the escalation.
+
+The polite signal is only polite if the CHILD makes it so, and that holds on BOTH platforms.
+Python maps CTRL_C_EVENT/SIGINT to KeyboardInterrupt and nothing else, so CTRL_BREAK (Windows)
+and SIGTERM (POSIX) each terminate the process outright by default and no `finally` runs. The
+daemon converts whichever one applies (`orchestrator._catch_polite_stop`). This file asking
+politely is worthless without that handler on the other end: measured 2026-08-02 on Windows, a
+server Gemma had started was left running on every quit.
 
 ponytail: still no Windows Job-Object lifetime tie (launcher C2) — SIGKILL run.py and these
 children can orphan; Ctrl-C and normal exit are handled. Add it when orphans are seen.
@@ -29,7 +36,8 @@ import time
 
 # Windows: a child must be in its OWN process group to be sent CTRL_BREAK without the event also
 # hitting us. Both constants are Windows-only; off Windows the group flag is 0 and SIGTERM is the
-# polite signal, which already runs `finally`.
+# polite signal. SIGTERM does NOT unwind on its own either — the daemon has to catch it, exactly
+# as it catches SIGBREAK here (this comment used to claim otherwise, and it was wrong).
 _NEW_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 _POLITE = getattr(signal, "CTRL_BREAK_EVENT", signal.SIGTERM)
 GRACE_S = 8.0            # generous: the daemon may be waiting on a local server to stop

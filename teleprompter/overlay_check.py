@@ -21,6 +21,7 @@ the gate in Overlay.qml and this check fails loudly — that is the point of it.
 from __future__ import annotations
 
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -41,6 +42,7 @@ from PySide6.QtCore import QObject, QUrl  # noqa: E402
 from PySide6.QtGui import QFontDatabase, QGuiApplication  # noqa: E402
 from PySide6.QtQml import QQmlApplicationEngine  # noqa: E402
 
+from bridge import settings  # noqa: E402
 from teleprompter.decode import targets  # noqa: E402
 from teleprompter.model import OverlayModel  # noqa: E402
 from teleprompter.settings_model import SettingsModel  # noqa: E402
@@ -265,6 +267,48 @@ def main() -> int:
         "the island never hid itself after its dwell"
     assert float(win.property("entrance")) < 0.99, "the island did not begin fading out"
 
+    # --- two dwells, chosen by the daemon, timed by the user (D43) ---
+    # A turn that ACTED has nothing to read, so it goes quickly; one that ANSWERED stays long
+    # enough to walk back to the desk. The daemon sends the word, the seconds are the setting.
+    schema = settings.schema()["settings"]
+    for key in ("dwell_quick", "dwell_slow"):
+        for choice in schema[key]["choices"]:
+            # The island reads the number off the FRONT of the choice, so every choice must
+            # start with one. This is the guard that makes that shortcut safe: add "Never" to
+            # the schema and it fails HERE, not silently on someone's screen.
+            head = re.match(r"[\d.]+", choice)
+            assert head and float(head.group()) > 0, \
+                f"{key} choice {choice!r} must start with a duration the island can read"
+
+    def _dwell_ms(kind):
+        model.apply({"type": "state", "state": "listening"})     # clear the last turn
+        model.apply({"type": "response", "delta": "Opening Spotify."})
+        model.apply({"type": "response", "done": True, "dwell": kind})
+        _pump(app, 120)
+        return int(dwell.property("interval"))
+
+    was_q, was_s = cfg.values.get("dwell_quick"), cfg.values.get("dwell_slow")
+    cfg.set("dwell_quick", "1.5 s")
+    cfg.set("dwell_slow", "40 s")
+    _pump(app, 60)
+    assert _dwell_ms("quick") == 1500, f"an action must take the quick dwell: {_dwell_ms('quick')}"
+    assert _dwell_ms("slow") == 40000, f"an answer must take the slow dwell: {_dwell_ms('slow')}"
+    # An unstamped reply is an ANSWER. This is the direction that must never fail open: a daemon
+    # that forgot to stamp, or an older one that cannot, keeps the readable dwell.
+    model.apply({"type": "state", "state": "listening"})
+    model.apply({"type": "response", "delta": "It is noon."})
+    model.apply({"type": "response", "done": True})
+    _pump(app, 120)
+    assert int(dwell.property("interval")) == 40000, "an unstamped reply must dwell as an answer"
+    # ...and a setting that cannot be read falls back to the shipped default rather than to zero,
+    # which would blink the island away the instant the text landed.
+    cfg.set("dwell_quick", "not a duration")
+    _pump(app, 60)
+    assert _dwell_ms("quick") == 2500, f"a junk setting must fall back: {_dwell_ms('quick')}"
+    cfg.set("dwell_quick", was_q)
+    cfg.set("dwell_slow", was_s)
+    _pump(app, 60)
+
     # --- Esc dismisses locally, without waiting for the daemon (D24) ---
     model.apply({"type": "state", "state": "thinking"})
     model.apply({"type": "transcript", "text": "what's the weather"})
@@ -384,18 +428,25 @@ def main() -> int:
     # --- U-01: the native filter routes WM_SETTINGCHANGE to the reduced-motion re-query ---
     # Pure Win32 message dispatch, no window needed. Proves the live-update wiring survives an
     # edit that (e.g.) re-adds an `if not armed: return` guard and silently kills settings.
-    from ctypes import addressof, wintypes
+    # Windows-only: `ctypes.wintypes` RAISES on import elsewhere, so an unguarded import here
+    # takes the whole check down on any other platform — and everything above this line is
+    # portable and is the valuable part. macOS has no WM_SETTINGCHANGE; its reduced-motion
+    # signal is a different one and wants its own check (D10). Printed, not skipped silently.
+    if sys.platform == "win32":
+        from ctypes import addressof, wintypes
 
-    from teleprompter.__main__ import _WM_SETTINGCHANGE, DismissKey
-    settings_hits: list[int] = []
-    filt = DismissKey(lambda: None, on_settings=lambda: settings_hits.append(1))
-    sc = wintypes.MSG(); sc.message = _WM_SETTINGCHANGE
-    handled, _ = filt.nativeEventFilter(b"windows_generic_MSG", addressof(sc))
-    assert settings_hits == [1], "WM_SETTINGCHANGE must reach the re-query even while Esc is disarmed"
-    assert handled is False, "a settings change must not be consumed — every window needs it"
-    other = wintypes.MSG(); other.message = 0x0000
-    filt.nativeEventFilter(b"windows_generic_MSG", addressof(other))
-    assert settings_hits == [1], "only WM_SETTINGCHANGE should trigger the re-query"
+        from teleprompter.__main__ import _WM_SETTINGCHANGE, DismissKey
+        settings_hits: list[int] = []
+        filt = DismissKey(lambda: None, on_settings=lambda: settings_hits.append(1))
+        sc = wintypes.MSG(); sc.message = _WM_SETTINGCHANGE
+        handled, _ = filt.nativeEventFilter(b"windows_generic_MSG", addressof(sc))
+        assert settings_hits == [1], "WM_SETTINGCHANGE must reach the re-query even while Esc is disarmed"
+        assert handled is False, "a settings change must not be consumed — every window needs it"
+        other = wintypes.MSG(); other.message = 0x0000
+        filt.nativeEventFilter(b"windows_generic_MSG", addressof(other))
+        assert settings_hits == [1], "only WM_SETTINGCHANGE should trigger the re-query"
+    else:
+        print(f"SKIPPED on {sys.platform}: WM_SETTINGCHANGE dispatch (Win32-only, D10 seam)")
 
     # --- expanded view / peek (D27) ---
     # A settled answer is peekable; peeking grows the island to the peek size, pauses the dwell,
@@ -480,25 +531,33 @@ def main() -> int:
     # The load-bearing gate: with no answer to peek, the island must NEVER eat a click — it sits
     # over a live app's tab strip. Testable headless because the not-peekable branch returns before
     # any GetWindowRect; a tiny stub stands in for the QML window.
-    from teleprompter.__main__ import _HTTRANSPARENT, _WM_NCHITTEST, IslandHitTest
+    # Windows-only, same reason as the block above. macOS has no WM_NCHITTEST at all, so the
+    # island's click-through there is a different mechanism (D10) — and until it exists, the
+    # frame swallows every click over the top-centre of the screen. Its own check comes with it.
+    if sys.platform == "win32":
+        from ctypes import addressof, wintypes
 
-    class _StubWin:
-        def __init__(self, peekable, peeking):
-            self._props = {"peekable": peekable, "peeking": peeking}
-        def property(self, name):
-            return self._props.get(name, 0)
-        def width(self):
-            return 100
-        def height(self):
-            return 100
+        from teleprompter.__main__ import _HTTRANSPARENT, _WM_NCHITTEST, IslandHitTest
 
-    ht = IslandHitTest(_StubWin(False, False)); ht.set_hwnd(0x1234)
-    m = wintypes.MSG(); m.message = _WM_NCHITTEST; m.hWnd = 0x1234; m.lParam = (10 << 16) | 10
-    assert ht.nativeEventFilter(b"windows_generic_MSG", addressof(m)) == (True, _HTTRANSPARENT), \
-        "a non-peekable island must return HTTRANSPARENT — fully click-through over a live app"
-    other_win = wintypes.MSG(); other_win.message = _WM_NCHITTEST; other_win.hWnd = 0x9999
-    assert ht.nativeEventFilter(b"windows_generic_MSG", addressof(other_win)) == (False, 0), \
-        "the hit-test must ignore messages for other windows"
+        class _StubWin:
+            def __init__(self, peekable, peeking):
+                self._props = {"peekable": peekable, "peeking": peeking}
+            def property(self, name):
+                return self._props.get(name, 0)
+            def width(self):
+                return 100
+            def height(self):
+                return 100
+
+        ht = IslandHitTest(_StubWin(False, False)); ht.set_hwnd(0x1234)
+        m = wintypes.MSG(); m.message = _WM_NCHITTEST; m.hWnd = 0x1234; m.lParam = (10 << 16) | 10
+        assert ht.nativeEventFilter(b"windows_generic_MSG", addressof(m)) == (True, _HTTRANSPARENT), \
+            "a non-peekable island must return HTTRANSPARENT — fully click-through over a live app"
+        other_win = wintypes.MSG(); other_win.message = _WM_NCHITTEST; other_win.hWnd = 0x9999
+        assert ht.nativeEventFilter(b"windows_generic_MSG", addressof(other_win)) == (False, 0), \
+            "the hit-test must ignore messages for other windows"
+    else:
+        print(f"SKIPPED on {sys.platform}: IslandHitTest click-through (Win32-only, D10 seam)")
 
     # --- dictation states (D2): the island is a pure status indicator, no reply body ---
     # Recording reuses `listening` (covered above); these are the three states after it. The

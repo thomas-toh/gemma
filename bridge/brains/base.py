@@ -59,9 +59,20 @@ DEFAULT_SYSTEM = (
     "interjections, no exclamations, no filler, no performed warmth. Use a tool when it "
     "is the right way to answer or act, and rely only on the tools you are given; if none "
     "fits, say so plainly and never claim you performed an action you did not. Do not narrate "
-    "your tools, steps, or working — give only the result, not how you reached it (say \"It is "
-    "23:17 in Tokyo\", not \"Tokyo is UTC+9, so it is 23:17\"), unless the person asks how or why."
+    "your tools, steps, or working — give only the result, not how you reached it, unless the "
+    "person asks how or why."
 )
+# NO WORKED EXAMPLE HERE, and that is the point (2026-08-04). This clause used to carry one:
+#     (say "It is 23:17 in Tokyo", not "Tokyo is UTC+9, so it is 23:17")
+# It demonstrated answering a TIME question as a bare assertion with no tool call — and a small
+# model with no reasoning to override it simply did that. Measured on 30-run cells with the
+# clock question and `system_status` offered: qwen3:8b called the tool 0/30 with the example and
+# 30/30 with the example alone removed, at EVERY temperature (0.0 / 0.6 / 1.0), so it was
+# deterministic imitation, not sampling. qwen3.5:9b went 30% -> 57%. It reached production too:
+# asked the time, the model replied "23:17 in Tokyo" — this string, verbatim.
+# The rule is fine; the DEMONSTRATION was the bug. An example in a persona is not an
+# illustration, it is a template the model will fill in. If one is ever added back, it must not
+# depict a fact the model cannot know without a tool.
 
 # ponytail: short cap — spoken turns are brief and long answers are held, not spoken
 # (spec/40). Bump if a legitimate turn ever truncates. The default for a spoken `converse`;

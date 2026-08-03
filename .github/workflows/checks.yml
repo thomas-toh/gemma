@@ -53,13 +53,15 @@ jobs:
       # D15 word-replacement (spec/60): the whole-word, case-insensitive, literal find-and-replace
       # run before dictation cleanup, plus that the shipped table loads. No network.
       - run: python -m bridge.replace
-      # Contract T (spec/30): the Tier-1 tool executor — the filter (only implemented, in-tier
-      # tools reach the brain), dispatch, the refusal backstop, and that every call is audited to
+      # Contract T (spec/30): the tool executor — the filter (only implemented, in-tier tools
+      # reach the brain), dispatch, the refusal backstop, and that every call is audited to
       # logs/audit.jsonl. No network; degrades gracefully with no clipboard on a headless runner.
       # find_document and search_email included: the shared term sanitiser and the DASL builder
       # (their SQL/DASL trust boundaries) are checked directly, and each call must answer in prose
       # whether or not the runner has a Search index or an Outlook mail profile — neither is
-      # required here.
+      # required here. The Tier-2 tools ACT, so their backends are stubbed for dispatch and the
+      # part with a decision in it — resolving a spoken name to an app or a window — is checked
+      # directly instead: nothing here opens an app, moves a window or presses a key.
       - run: python -m bridge.tools --selfcheck
       # The Teleprompter's Qt-free half: NDJSON framing + the reducer (imports no Qt).
       - run: python -m teleprompter.decode --selfcheck

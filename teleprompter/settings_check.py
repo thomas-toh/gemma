@@ -434,8 +434,30 @@ def check() -> None:
     settle()
     # Capability-driven rows: the pane must not offer a control the provider lacks.
     caps = cfg.catalog["anthropic"]["capabilities"]
-    assert "effort" in caps and caps.get("thinking") is True, "Claude should offer both rows"
+    assert "effort" in caps, "Claude should offer the effort row"
+
+    # Effort is a WORDS dropdown reading its labels from the schema (2026-08-03) — it was a dot
+    # cluster, which was hard to read and drew `none` as one dot, i.e. "a little effort" when on
+    # Ollama's wire it is the OFF switch. Every level any card offers must have a word, or the
+    # picker prints a wire token at the user.
+    labels = cfg.effortLabels
+    assert labels, "effort_labels missing from the schema"
+    for pid, card_ in cfg.catalog.items():
+        for level in (card_.get("capabilities") or {}).get("effort") or []:
+            assert level in labels, f"{pid} offers effort {level!r} with no word in effort_labels"
+    assert labels.get("xhigh") == "Extra" and labels.get("none") == "None", labels
     assert not cfg.catalog["groq"]["capabilities"], "Groq offers neither — its card is one row"
+
+    # A CAPABILITY IS A PROMISE THAT SOMETHING SENDS IT (2026-08-03). `thinking` was declared on
+    # five cards and consumed by NOTHING in bridge/ — the window drew a live toggle that no
+    # adapter could act on, on every provider that declared it. Removed rather than relabelled,
+    # the same ruling the dead `context` capability got. This asserts the rule, not the absence:
+    # re-adding `thinking` to a card is fine the day an adapter reads it, and fails until then.
+    for pid, card_ in cfg.catalog.items():
+        declared = (card_.get("capabilities") or {}).get("thinking")
+        assert not declared, (
+            f"{pid} declares capabilities.thinking, but nothing in bridge/ reads it — either wire "
+            f"a consumer or drop the declaration (spec/20; the `context` precedent)")
 
     cfg.addProvider("ollama")                      # local: the second group appears
     settle()
@@ -591,6 +613,17 @@ def check() -> None:
         f"evaluating (an unguarded null read is the usual cause):\n  "
         + "\n  ".join(sorted(set(runtime_errors))))
 
+    # Destroy the engine HERE, while `cfg` and `overlay` are still alive. Left to Python, this
+    # function's locals are freed in arbitrary order — the context objects went first, and every
+    # binding that reads one re-evaluated against null on the way down: 53 TypeErrors printed
+    # AFTER the assertions above had passed, so the check announced "no QML warnings" while a
+    # wall of them scrolled by. Measured 53 -> 0, with the check still passing.
+    #
+    # `shiboken6.delete`, NOT `deleteLater()`: deleteLater only POSTS a deferred-delete event,
+    # and by this point there is no event loop left to process it — it is a silent no-op here
+    # (measured: still 53). shiboken6.delete runs the C++ destructor immediately.
+    import shiboken6
+    shiboken6.delete(engine)
     os.environ.pop("GEMMA_SETTINGS", None)
     print(f"settings_check OK: window built from {len(schema['settings'])} declared settings, "
           f"{len(pane_ids)} panes, {len(schema['providers'])} providers; "

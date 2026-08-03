@@ -1,6 +1,6 @@
 # Spec 70 — Settings & configuration
 
-**Last reconciled: 2026-07-31** · Build progress: [STATE.md](../STATE.md) · Decisions: [spec/00](00_overview.md)
+**Last reconciled: 2026-08-03** · Build progress: [STATE.md](../STATE.md) · Decisions: [spec/00](00_overview.md)
 
 > The **window is built** (D29, 2026-07-27) and renders from `spec/schemas/settings.json` — the
 > executable truth for panes, defaults and the provider catalogue (hard rule 3). §2's architecture
@@ -65,6 +65,15 @@ types / defaults / validation:
   renders (D29, 2026-07-27) — profile, preferences, the model roster and triggers, from
   `settings.json`. STT / wake / TTS-voice and the word-replacement table below are not surfaced
   yet; types/validation for those still to spec.
+- **How long the island stays up (LANDED 2026-08-03, D43):** two settings in **General >
+  Preferences** — `dwell_quick` (a confirmation, default 2.5 s) and `dwell_slow` (an answer,
+  default 20 s). The daemon says which kind of turn it was; these say for how long (spec/40).
+  Both are **`enum`, not a free number**: a dropdown of sensible durations reuses the existing
+  WORDS-class control (§2), adds no schema type, and cannot be set to zero or to something
+  absurd. The overlay reads the number off the front of the chosen string, so **every choice
+  must begin with one** — asserted in `overlay_check`, because a choice like "Never" would
+  otherwise fail silently on screen rather than loudly offline. An unreadable value falls back
+  to the shipped default, never to zero.
 - **Brain (Contract B), adapter-aware:** B1 Claude → model · effort · thinking · persona;
   B2 local → model · temperature. *(Now: model via `GEMMA_BRAIN_MODEL`; thinking hardcoded
   off; effort unwired — see the 2026-07-12 adapter-shape note in STATE.)*

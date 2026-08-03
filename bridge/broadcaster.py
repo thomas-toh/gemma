@@ -85,12 +85,15 @@ def m_transcript(text: str, final: bool = True) -> dict:
     return {"type": "transcript", "text": text, "final": final}
 
 
-def m_response(delta: str = "", done: bool = False, model: str = "", tokens: int = 0) -> dict:
+def m_response(delta: str = "", done: bool = False, model: str = "", tokens: int = 0,
+               dwell: str = "") -> dict:
     msg = {"type": "response", "delta": delta, "done": done}
     if model:                       # stamped only on the 'done' message; streaming deltas stay lean (D34)
         msg["model"] = model
     if tokens:
         msg["tokens"] = tokens
+    if dwell:                       # 'quick' for a turn that acted; absent means 'slow' (D43)
+        msg["dwell"] = dwell
     return msg
 
 

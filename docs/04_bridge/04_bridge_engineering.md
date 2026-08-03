@@ -1,6 +1,6 @@
 # Project Gemma — Bridge Engineering
 
-> Superseded in part: secrets handling by spec/50 §10 (OS credential store — not env vars as §5 says); repo layout, module names and STT model by spec/00 + spec/40 + the `bridge/` tree as built.
+> Superseded in part: secrets handling by spec/50 §10 (OS credential store — not env vars as §5 says); repo layout, module names and STT model by spec/00 + spec/40 + the `bridge/` tree as built; §6's `open_app` app map and `focus_window`/`media_control` implementations by spec/00 §D42 + spec/30 § The executor.
 
 **Doc 04 of the project series** · *Status: draft for discussion · July 2026*
 

@@ -163,6 +163,15 @@ class SettingsModel(QObject):
         like a config file. Constant because the catalogue is (hard rule 3: it is the schema)."""
         return {pid: p.get("name", pid) for pid, p in self.catalog.items()}
 
+    @Property("QVariant", constant=True)
+    def effortLabels(self) -> dict:
+        """Effort wire value -> the word to SHOW (`xhigh` -> `Extra`), from the schema.
+
+        Same reasoning as `providerNames`: the values are wire words a provider chose and print
+        like a config file. Constant because the schema is. A value with no entry falls through
+        to the raw word in `Dropdown.shown()`, so a new level renders readably on day one."""
+        return providers.schema().get("effort_labels", {})
+
     @Slot(str, result="QVariant")
     def providersFor(self, where: str) -> list:
         """Catalogue ids for one side of the Add flow: `cloud` or `local`."""
@@ -308,6 +317,25 @@ class SettingsModel(QObject):
         with self._lock:
             live = self._live.get(pid)
         return live or self.catalog.get(pid, {}).get("models", [])
+
+    @Slot(str, str, result=bool)
+    def modelMissing(self, pid: str, model: str) -> bool:
+        """Is `model` absent from a list this provider ACTUALLY gave us?
+
+        Closes the loop a deleted model opened: the turn fails with `no_model` and tells the user to
+        check settings, and settings then shows the stale name looking perfectly configured
+        (commonest cause — `ollama rm` on a model a role was pointed at).
+
+        The gate is `ok`, not "the list is empty". Before any fetch the cache is empty for every
+        provider, so treating that as missing would flag the whole roster on every open — an alarm
+        that fires when nobody has asked yet is worse than the silence it replaces. So: we asked, we
+        got a list, this is not in it.
+        """
+        if not pid or not model:
+            return False
+        with self._lock:
+            status, live = self._status.get(pid), self._live.get(pid)
+        return status == "ok" and bool(live) and model not in live
 
     @Property(str, notify=changed)
     def localTwoModelNote(self) -> str:
@@ -569,8 +597,8 @@ if __name__ == "__main__":
         assert [g["id"] for g in m.groupsFor("general")] == ["profile", "preferences"]
         assert m.groupsFor("triggers") == [], "a flat pane declares no groups"
         assert m.rowsInGroup("general", "preferences") == \
-            ["theme", "language", "pings", "listen_for_me", "tts", "gem_in_island",
-             "local_server_stop_on_quit"], \
+            ["theme", "language", "pings", "listen_for_me", "tts", "dwell_quick", "dwell_slow",
+             "gem_in_island", "local_server_stop_on_quit"], \
             m.rowsInGroup("general", "preferences")
         # Every row of a grouped pane must land in a group, or it renders nowhere.
         grouped = sum(len(m.rowsInGroup("general", g["id"])) for g in m.groupsFor("general"))
@@ -797,6 +825,20 @@ if __name__ == "__main__":
         settings.set("primary", "ollama"); settings.set("cleanup_dictation", "ollama")
         settings.set("cleanup_dictation_model", "qwen3:14b")
         assert n.localTwoModelNote == "", "a switched-off card is not in play"
+
+        # A stored model the provider no longer lists (`ollama rm`). The gate is a SUCCESSFUL
+        # fetch: before one, every provider's list is empty and flagging them all would be noise.
+        assert not n.modelMissing("ollama", "qwen3:8b"), "nobody has asked yet — must not flag"
+        with n._lock:
+            n._status["ollama"] = "ok"
+            n._live["ollama"] = ["qwen3.5:9b"]
+        assert n.modelMissing("ollama", "qwen3:8b"), "asked, answered, and it is not in the list"
+        assert not n.modelMissing("ollama", "qwen3.5:9b"), "a model that IS listed is fine"
+        assert not n.modelMissing("ollama", ""), "no model chosen is a different fault (no_model)"
+        with n._lock:
+            n._status["ollama"] = "unreachable"
+        assert not n.modelMissing("ollama", "qwen3:8b"), \
+            "a dead server tells us nothing about which models exist"
 
     os.environ.pop("GEMMA_SETTINGS", None)
     providers.probe = _saved_probe

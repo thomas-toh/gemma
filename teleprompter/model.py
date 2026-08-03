@@ -103,6 +103,12 @@ class OverlayModel(QObject):
         """The turn's total input+output tokens — shown beside the model in the peek footer (D34)."""
         return self._s.tokens
 
+    @Property(str, notify=changed)
+    def dwell(self) -> str:
+        """"quick" if this turn ACTED, "slow" if it answered (D43). The island turns the word
+        into seconds using the user's own setting — the daemon never names a duration."""
+        return self._s.dwell
+
     @Property(float, notify=changed)
     def mic(self) -> float:
         return self._s.mic

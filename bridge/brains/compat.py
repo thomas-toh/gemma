@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import sys
 from typing import Any, AsyncIterator
 
@@ -31,7 +32,15 @@ from .base import (
     ToolSpec,
     ssl_context,
 )
-from .providers import base_url, card, credential_for
+from .providers import base_url, card, credential_for, wire_names
+
+log = logging.getLogger("gemma.compat")
+
+# Gemma's OWN name for every request knob this adapter can send. What each provider CALLS them is
+# the catalogue's business (`wire_names`, D44) — this adapter must never spell one itself, because
+# it serves ten providers that share a wire and not a dialect. The selfcheck asserts every name
+# here is spelled in the schema, so adding a knob without teaching the catalogue fails offline.
+KNOBS = ("max_output_tokens", "effort", "temperature")
 
 # OpenAI's client requires an Authorization header to exist even when the server ignores it,
 # so a local runner (Ollama / LM Studio / llama.cpp) gets this rather than None.
@@ -193,12 +202,12 @@ class CompatBrain:
         if utterance:
             messages.append({"role": "user", "content": utterance})
 
-        kwargs: dict[str, Any] = dict(
-            model=self.model,
-            max_tokens=session.max_tokens or MAX_TOKENS,   # transform lifts this for long text
-            messages=messages,
-            stream=True,
-        )
+        # Structure — the shape of the wire itself, which is what this adapter IS. Below it, the
+        # KNOBS, named in Gemma's vocabulary and spelled by the catalogue on the way out (D44).
+        kwargs: dict[str, Any] = dict(model=self.model, messages=messages, stream=True)
+        knobs: dict[str, Any] = {
+            "max_output_tokens": session.max_tokens or MAX_TOKENS,   # transform lifts this
+        }
         if not self.local:
             # Local servers vary on whether they accept this and a rejection costs the whole
             # turn, so usage (a latency-log nicety) is asked for only where it is reliable.
@@ -211,17 +220,60 @@ class CompatBrain:
         # isn't told, and may think — spec/20 calls that a degradation, not an error.
         efforts = (self.card.get("capabilities", {}) or {}).get("effort")
         efforts = list(efforts) if isinstance(efforts, (list, tuple)) else []
-        if session.thinking is False and "none" in efforts:
-            kwargs["reasoning_effort"] = "none"          # beats the adapter's own effort
+        # Some providers REQUIRE a particular effort on any round that offers tools, and the card
+        # names the value. OpenAI's reasoning models on /v1/chat/completions want `none`, and
+        # OMITTING the parameter is not enough — the model reasons at its own default and the
+        # request is rejected exactly the same way (measured 2026-08-03, with the request log:
+        # we sent no `reasoning_effort` at all and still got "Function tools with reasoning_effort
+        # are not supported"). Read the provider's own message literally: *set* it to none.
+        #
+        # Deliberately independent of `capabilities.effort`: that list is what the USER may pick,
+        # and this is a value the PROVIDER demands. OpenAI's list has no "none" in it and should
+        # not gain one — nobody should be able to choose this from the settings window.
+        forced = self.card.get("tool_round_effort") if tools else None
+        if forced is not None:
+            knobs["effort"] = forced
+        elif session.thinking is False and "none" in efforts:
+            knobs["effort"] = "none"                     # beats the adapter's own effort
         elif self.effort and efforts:
-            kwargs["reasoning_effort"] = self.effort
+            knobs["effort"] = self.effort
         # A per-call temperature (transform's determinism) overrides the adapter's own default.
+        # Whether the provider HAS this knob is not asked here: `_spell` drops any knob the card
+        # marks absent, which is how OpenAI — whose current models take no temperature — stops
+        # receiving the stale `0.7` a stored profile still holds for it (found 2026-08-03).
+        # Deliberately NOT gated on `capabilities.temperature`: that field drives which providers
+        # show the CONTROL, and only the three local ones declare it, so gating here would have
+        # silently taken deterministic cleanup away from Groq, which relies on temperature 0.
         temperature = session.temperature if session.temperature is not None else self.temperature
         if temperature is not None:
-            kwargs["temperature"] = temperature
+            knobs["temperature"] = temperature
         if tools:
             kwargs["tools"] = _tools_for_api(tools)
+        kwargs.update(self._spell(knobs))
         return kwargs
+
+    def _spell(self, knobs: dict[str, Any]) -> dict[str, Any]:
+        """Gemma's knob names -> what THIS provider calls them (D44).
+
+        Three outcomes, and the difference between the last two is the point:
+        - a name: send it under that name;
+        - `None` in the card: this provider HAS NO such knob, so drop it — a deliberate silence;
+        - absent from the catalogue: a gap in `settings.json`, dropped and LOGGED. Guessing the
+          neutral name would send an invented parameter, and a wrong parameter is rejected
+          server-side and costs the whole turn — which is the exact failure this exists to end.
+          Dropping degrades (the provider uses its own default); sending junk does not.
+        """
+        names = wire_names(self.provider)
+        out: dict[str, Any] = {}
+        for knob, value in knobs.items():
+            if knob not in names:
+                log.warning("%s: no wire name for %r in the catalogue — sending the request "
+                            "without it (spec/schemas/settings.json > wire_names)",
+                            self.provider, knob)
+                continue
+            if names[knob] is not None:
+                out[names[knob]] = value
+        return out
 
     async def converse(
         self,
@@ -251,8 +303,9 @@ class CompatBrain:
         calls: dict[int, dict[str, str]] = {}
         usage: dict[str, int] | None = None
 
+        sent = self._kwargs(session, utterance, tools)
         try:
-            stream = await client.chat.completions.create(**self._kwargs(session, utterance, tools))
+            stream = await client.chat.completions.create(**sent)
             async for chunk in stream:
                 if chunk.usage is not None:
                     usage = {
@@ -291,6 +344,15 @@ class CompatBrain:
                 yield ToolCall(slot["id"], slot["name"], parsed)
             yield Done(usage=usage)
         except Exception as exc:  # noqa: BLE001 - map every provider error to Error
+            # SAY WHAT WE SENT. Three request-shape bugs in one night (max_tokens, temperature,
+            # reasoning_effort) each cost a round of guessing because the log recorded the
+            # provider's complaint and nothing about our own request. Names and scalar values
+            # only — never `messages`, which is the user's speech, and never `tools`, which is
+            # long and unchanging. Cheap, and only on the path that already failed.
+            log.warning("%s/%s rejected the request; we sent: %s",
+                        self.provider, self.model,
+                        {k: v for k, v in sent.items() if k not in ("messages", "tools")}
+                        | ({"tools": len(sent["tools"])} if "tools" in sent else {}))
             yield Error(_error_kind(exc, offered_tools=bool(tools)),
                         str(getattr(exc, "message", exc)))
 
@@ -420,6 +482,48 @@ def _selfcheck() -> None:
     assert k["stream_options"] == {"include_usage": True}, "cloud turns should report usage"
     assert "tools" not in k, "no tools key at all when the list is empty"
     assert "reasoning_effort" not in k, "effort must not be sent unasked"
+
+    # D44 — this adapter serves ten providers that share a wire and not a dialect, so it names
+    # knobs in Gemma's vocabulary and the catalogue spells them. Every knob it can emit must be
+    # spelled for the wire, or a request silently goes out missing it.
+    from .providers import schema as _settings_schema
+    _wire_default = _settings_schema().get("wire_names", {}).get("openai", {})
+    for _knob in KNOBS:
+        assert _knob in _wire_default, \
+            f"{_knob!r} has no wire name — add it to settings.json > wire_names.openai"
+    assert k["max_tokens"] == MAX_TOKENS, "the classic spelling is the wire's default"
+
+    # ...and OpenAI, which renamed it. This is the bug that produced the rule: `max_tokens` was
+    # sent to everybody and every assistant turn on gpt-5.6-sol was rejected outright.
+    oai = CompatBrain("openai", model="m", api_key="x", temperature=0.7)
+    ko = oai._kwargs(Session(id="t"), "q", [])
+    assert ko["max_completion_tokens"] == MAX_TOKENS and "max_tokens" not in ko, sorted(ko)
+    # `null` in a card means the provider HAS NO such knob — dropped, not renamed. OpenAI's
+    # current models take no temperature, and a stored profile still holds 0.7 for it.
+    assert "temperature" not in ko, "a knob a card marks absent must not go out"
+    assert "temperature" in CompatBrain("groq", model="m", api_key="x", temperature=0.7)._kwargs(
+        Session(id="t"), "q", []), "...but the providers that DO have it must still get it"
+    # A knob nobody spelled is dropped and logged, never guessed: an invented parameter is
+    # rejected server-side and costs the whole turn, which is what this rule exists to stop.
+    assert oai._spell({"no_such_knob": 1}) == {}, "an unspelled knob must not be guessed at"
+
+    # A card may DEMAND a particular effort on any round offering tools. OpenAI's reasoning models
+    # want "none" there, and omitting the parameter is not the same thing — the model reasons at
+    # its own default and the request is rejected identically. Only on tool rounds: a plain answer
+    # keeps the user's dial.
+    _tool = [{"name": "t", "description": "d", "parameters": {"type": "object", "properties": {}}}]
+    oe = CompatBrain("openai", model="m", api_key="x", effort="high")
+    assert oe._kwargs(Session(id="t"), "q", [])["reasoning_effort"] == "high", "kept without tools"
+    assert oe._kwargs(Session(id="t"), "q", _tool)["reasoning_effort"] == "none", \
+        "a tool round must SET the demanded effort, not omit the parameter"
+    # The demanded value is NOT in the card's `capabilities.effort` and must not need to be —
+    # that list is the user's menu, this is the provider's requirement.
+    assert "none" not in (card("openai").get("capabilities", {}) or {}).get("effort", []), \
+        "'none' must stay out of the picker's choices for OpenAI"
+    # ...and a provider that demands nothing is untouched by the rule.
+    og = CompatBrain("ollama", model="m", effort="high")
+    assert og._kwargs(Session(id="t"), "q", _tool)["reasoning_effort"] == "high", \
+        "only the cards that demand an effort override it on a tool round"
     assert groq._kwargs(Session(id="t", system="custom"), "q", [])["messages"][0]["content"] == \
         "custom", "a session system prompt must win over the default"
 
@@ -531,7 +635,8 @@ def _selfcheck() -> None:
         assert CompatBrain(pid, model="m", api_key="x").base_url, f"{pid}: no reachable base URL"
 
     print(f"selfcheck OK: {len(served)} providers on one adapter, tool translation drops `tier`, "
-          "system-as-message, effort gated by capability, error mapping by type/status, "
+          "system-as-message, effort gated by capability, every knob spelled by the catalogue "
+          "and none by this adapter (D44), error mapping by type/status, "
           "client built once with the long read timeout intact")
 
 

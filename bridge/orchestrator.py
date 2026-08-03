@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import math
 import os
 import re
 import threading
@@ -46,7 +47,9 @@ from bridge.brains.base import (
     DEFAULT_SYSTEM, Done, Error, Session, TextDelta, ToolCall, transform,
 )
 from bridge.brains.claude import ClaudeBrain
-from bridge.brains.providers import build_brain, ensure_local_server, stop_local_servers
+from bridge.brains.providers import (
+    build_brain, card, ensure_local_server, list_models, stop_local_servers,
+)
 from bridge.brains import router
 from bridge.broadcaster import (
     Broadcaster, m_error, m_latency, m_mic, m_response, m_state, m_tool, m_transcript,
@@ -54,7 +57,9 @@ from bridge.broadcaster import (
 from bridge.hotkeys import Hotkeys
 from bridge.log import setup_logging
 from bridge.paste import paste_text
-from bridge.tools import disabled_note, execute as run_tool, label_of as tool_label, tool_specs
+from bridge.tools import (
+    disabled_note, execute as run_tool, label_of as tool_label, tier_of as tool_tier, tool_specs,
+)
 from bridge.replace import apply as apply_replacements  # aliased: `replace` is dataclasses.replace here
 from bridge import settings
 
@@ -224,6 +229,32 @@ def _start_local_servers() -> None:
             log.exception("could not start the %s server — carrying on without it", cfg["provider"])
 
 
+def _warn_missing_models() -> None:
+    """Log any role pointed at a LOCAL model the runner does not have.
+
+    The turn already fails honestly (`no_model`) and the settings window flags the row — this is
+    the third copy, and it is the one that makes "why did cleanup stop working" a grep instead of a
+    puzzle. Local only, deliberately: listing a local runner's models is free, while asking every
+    cloud provider on every boot would spend quota to answer a question nobody asked.
+    """
+    seen: set[tuple[str, str]] = set()
+    for role in ("assistant", "cleanup_dictation", "cleanup_prompts"):
+        cfg = router.resolve(role)
+        if not cfg or not cfg.get("model"):
+            continue
+        pid, model = cfg["provider"], cfg["model"]
+        if card(pid).get("where") != "local" or (pid, model) in seen:
+            continue
+        seen.add((pid, model))
+        try:
+            available = list_models(pid, cfg.get("endpoint"))
+        except Exception:                      # a probe must never be able to stop a boot
+            continue
+        if available and model not in available:
+            log.warning("%s is set to %r, which %s does not have — pull it or pick another "
+                        "(available: %s)", role, model, pid, ", ".join(sorted(available)[:8]))
+
+
 def _stop_local_servers() -> None:
     """Quit-time counterpart. Only servers WE started are candidates at all (providers.py); this
     setting decides whether even those are stopped, since leaving one running makes the next start
@@ -361,6 +392,12 @@ async def _collect(brain, session: Session, utterance: str, on_delta=None,
             continue
         if err or malformed:
             return "", (err or "malformed_tool_call")
+        # ponytail: an EMPTY round (no tool call, no text) currently falls through here and ends
+        # the turn as `unknown` — "Something went wrong on my end." A one-shot retry was written
+        # and REVERTED on 2026-08-03 (Thomas): the resample came back empty too, so it cured
+        # nothing and only hid a fault we do not yet understand. A model returning literally
+        # nothing is not sampling noise — inference would return *something*. Leave the bug
+        # visible until the cause is known; STATE, Track T carries the open investigation.
         if not calls:
             if on_delta and text:
                 on_delta(text)                        # only the ANSWER reaches the overlay
@@ -450,6 +487,9 @@ class Orchestrator:
         self.fed_back = True                    # has this turn recorded perceptible feedback?
                                                 # True at rest so a stray mark before any turn
                                                 # cannot publish; reset to False per turn.
+        self.acted = False                      # did a Tier-2 tool succeed this turn? (D43) —
+                                                # False at rest, so a turn that never acted keeps
+                                                # the readable dwell, which is the safe default.
         self.t_eos = time.perf_counter()        # spec/40 clock: VAD declared the turn over
         self._loop: asyncio.AbstractEventLoop | None = None   # see _run_async()
         self.pump: OutputPump | None = None
@@ -657,21 +697,43 @@ class Orchestrator:
         return DEFAULT_SYSTEM + disabled_note()
 
     def _run_tool_seen(self, call, transcript: str) -> tuple[str, str]:
-        """Run one tool with the island told, before and after (D38). The `finally` is the point:
-        the 'done' message has to go out on the refused and errored paths too, or a failed call
-        leaves the indicator naming work that stopped — and an indicator that can lie about
-        reaching your mail is worse than none (spec/50 rule 4's posture, applied to tools)."""
+        """Run one tool with the island told, before and after (D38), and ANNOUNCED at Tier 2.
+
+        The `finally` is the point: the 'done' message has to go out on the refused and errored
+        paths too, or a failed call leaves the indicator naming work that stopped — and an
+        indicator that can lie about reaching your mail is worse than none (spec/50 rule 4's
+        posture, applied to tools).
+
+        The announce is Tier 2's gate (spec/30's tier table). A Tier-1 tool only reads, so it
+        needs no sound; a Tier-2 tool CHANGED something without being asked twice, and one ping
+        is what stops that being entirely silent. A refusal pings `failure` alongside a fault:
+        from where the user is sitting, an action that did not happen is the one event, however
+        it failed to happen. Tier 1 stays quiet, so nothing about the existing turn changes."""
         self.bc.publish(m_tool(call.name, tool_label(call.name)))
+        outcome = "error"                       # if run_tool somehow raises, that IS the outcome
         try:
-            return run_tool(call, session=self.session.id, transcript=transcript)
+            content, outcome = run_tool(call, session=self.session.id, transcript=transcript)
+            return content, outcome
         finally:
             self.bc.publish(m_tool(call.name, done=True))
+            if tool_tier(call.name) >= 2:
+                ok = outcome == "ok"
+                # This turn DID something, which is what earns it the short dwell (D43). Only on
+                # a real success: a REFUSED action produces a sentence explaining why, and that
+                # is something to read, not something you watched happen.
+                self.acted = self.acted or ok
+                # ponytail: gated on 'pings' like every other earcon, so a quiet mode really is
+                # quiet. That leaves a Tier-2 action with no cue at all while the tool indicator
+                # is unbuilt (STATE, Track P) — the reason it is written down rather than solved
+                # here is that the fix is the INDICATOR, not a second sound the toggle ignores.
+                self._ping("success" if ok else "failure")
 
     def _turn(self, audio):
         """THINKING → SPEAKING, or held (shown, not spoken), for one utterance. Returns the
         next utterance's audio — only a barge-in produces one now — or None to end the chain,
         after which the answer stays on the island until the overlay hides it (D24)."""
         self.fed_back = False
+        self.acted = False                      # set by a Tier-2 tool that succeeds (D43)
         self._ev("thinking", show="[thinking]")
         self._feedback("overlay thinking")      # D25: the screen is the feedback now (D23) —
                                                 # near-instant, and finally credited
@@ -713,8 +775,14 @@ class Orchestrator:
             return None      # TTS off: the fault MESSAGE shows on the overlay (as no_transcript does)
         # Reply complete: stamp the model that produced it + the turn's total tokens, so the peek
         # footer can name them (D34). getattr — a replay/fake brain may carry no `.model`.
+        # ...and how long the island should keep it (D43). "quick" needs BOTH halves: the turn
+        # acted, AND there is nothing to read. A turn that opened Spotify and then answered a
+        # question in the same breath still has an answer in it, so it keeps the full dwell —
+        # `sentences()` is the same one-line test the speak/hold split already uses.
+        quick = self.acted and sentences(reply) <= 1
         self.bc.publish(m_response(done=True, model=getattr(self.brain, "model", "") or "",
-                                   tokens=usage_box["tokens"]))
+                                   tokens=usage_box["tokens"],
+                                   dwell="quick" if quick else ""))
         # History is committed inside _collect now (it must persist tool rounds mid-turn, and only
         # on success), so there is no post-turn append here any more.
         # The hold survives; the "say 'read it'" escape hatch does not. Holding is what stops
@@ -1000,6 +1068,7 @@ class Orchestrator:
                 # Here rather than on the critical path for the same reason as the models — the
                 # doors should not wait on it.
                 _start_local_servers()
+                _warn_missing_models()          # after the server is up, or it has nothing to ask
                 transcribe(np.zeros(SAMPLE_RATE // 2, dtype=np.float32))   # whisper + GPU warm
                 # Kokoro is NOT preloaded: `tts` is off by default (D23), so this was loading
                 # a model and discarding its audio on most starts. synth() lazy-loads on first
@@ -1174,6 +1243,21 @@ def _selfcheck() -> None:
                                     tools=tool_specs(), execute=lambda c: ("", "ok")))
     assert (reply, err) == ("recovered.", None) and mo.n == 2, (reply, err, mo.n)
 
+    # An EMPTY round (no tool call, no text) ends the turn in ONE round — it is not retried.
+    # A retry was tried and reverted 2026-08-03: the resample came back empty too. Guarding the
+    # current behaviour so a future retry has to be a deliberate change, not an accident.
+    class _AlwaysEmpty:
+        def __init__(self): self.n = 0
+        @staticmethod
+        def record_tool_round(*a): pass
+        async def converse(self, session, utterance, tools):
+            self.n += 1
+            yield Done()
+    ae = _AlwaysEmpty()
+    reply, err = asyncio.run(_drive(ae, Session(id="e2"), "q",
+                                    tools=tool_specs(), execute=lambda c: ("", "ok")))
+    assert (reply, err) == ("", None) and ae.n == 1, f"empty round ends the turn (rounds={ae.n})"
+
     # A model that never stops calling tools is capped, not looped forever (spec/30).
     class _AlwaysTool:
         @staticmethod
@@ -1258,6 +1342,25 @@ def _selfcheck() -> None:
     assert spoken_error("no_model") != spoken_error("unknown"), \
         "no_model needs its own sentence, or the whole kind is pointless"
 
+    # run.py's polite stop must reach our shutdown, not the OS default (which kills the process
+    # and runs no `finally`, stranding a local model server we started — measured live on Windows
+    # 2026-08-02). run.py's shutdown is worthless without this handler; nothing else proves the
+    # two agree. Deliberately NOT gated on the platform: this block used to run only where
+    # SIGBREAK exists, so it skipped silently off Windows — which is exactly why the POSIX half
+    # stayed broken with every other check green.
+    import signal as _sig
+    _polite = getattr(_sig, "SIGBREAK", _sig.SIGTERM)   # the same pick run.py makes (`_POLITE`)
+    _catch_polite_stop()
+    _h = _sig.getsignal(_polite)
+    assert callable(_h) and _h not in (_sig.SIG_DFL, _sig.SIG_IGN), \
+        f"{_polite!r} must be handled, or run.py's polite stop is a hard kill"
+    try:
+        _h(_polite, None)
+    except KeyboardInterrupt:
+        pass                                      # exactly what main()'s finally needs to see
+    else:
+        raise AssertionError("the polite-stop handler must raise KeyboardInterrupt")
+
     # latency table: two turns — one full (wake->listen, thinking feedback, speak), one speak-only
     tbl = latency_table([(0.0, "wake", ""), (0.1, "earcon", "listening"), (1.0, "eos", ""),
                          (1.05, "thinking", ""), (3.5, "speak", ""),
@@ -1315,6 +1418,52 @@ def _selfcheck() -> None:
         settings.set("pings", True)
         pg._ping("failure")
         assert pg.pump.n == 1, "pings on must play the earcon"
+
+        # spec/30's tier table: a Tier-2 tool ANNOUNCES itself as it returns; a Tier-1 one does
+        # not. That announce is the whole of Tier 2's gate — without it, "Gemma may act without
+        # asking" would mean acting with no cue at all. The tier is read from the registry, so
+        # this also proves the orchestrator asks rather than keeping its own list of names.
+        # run_tool is stubbed: the real one would open an app and move a window.
+        global run_tool
+        _real_run_tool, outcome_box = run_tool, {"v": "ok"}
+        run_tool = lambda call, session="", transcript="": ("done", outcome_box["v"])  # noqa: E731
+
+        tt = Orchestrator(brain=object(), broadcaster=_Rec())
+        tt.pump, tt.fed_back = _Pump(), True
+        earcons = lambda: [d for _, e, d in tt.trace if e == "earcon"]                 # noqa: E731
+
+        tt._run_tool_seen(ToolCall("a", "system_status", {}), "hi")
+        assert earcons() == [], f"a Tier-1 tool only reads — it must stay silent: {earcons()}"
+        assert tt.acted is False, "reading is not acting (D43)"
+
+        tt._run_tool_seen(ToolCall("b", "open_app", {"app": "x"}), "hi")
+        assert earcons() == ["success"], earcons()
+        assert tt.acted is True, "a Tier-2 tool that succeeded DID act (D43)"
+
+        # A refusal announces too, as a failure: from where the user is sitting, an action that
+        # did not happen is one event however it failed to happen. But it did NOT act — its reply
+        # explains why not, and that is something to read, so the turn keeps the long dwell.
+        tt.acted = False
+        outcome_box["v"] = "refused:connector_apps_media"
+        tt._run_tool_seen(ToolCall("c", "open_app", {"app": "x"}), "hi")
+        assert earcons() == ["success", "failure"], earcons()
+        assert tt.acted is False, "a REFUSED action must not shorten the dwell (D43)"
+
+        # The dwell hint itself: 'quick' needs both halves, and anything else must fall back to
+        # the readable dwell. This is the expression _turn stamps onto the done message.
+        for acted, reply, want in [(True, "Opening Spotify.", True),
+                                   (True, "Opening Spotify. It has three albums queued.", False),
+                                   (False, "It is noon.", False)]:
+            assert (acted and sentences(reply) <= 1) is want, (acted, reply)
+        assert m_response(done=True, dwell="quick")["dwell"] == "quick"
+        assert "dwell" not in m_response(done=True), "an unstamped reply means 'slow' by absence"
+
+        # ...and the quiet mode really is quiet, tools included.
+        settings.set("pings", False)
+        tt._run_tool_seen(ToolCall("d", "open_app", {"app": "x"}), "hi")
+        assert earcons() == ["success", "failure"], f"pings off must silence the announce: {earcons()}"
+        settings.set("pings", True)
+        run_tool = _real_run_tool
     os.environ.pop("GEMMA_SETTINGS", None)
 
     # --- dictation (Track D, spec/60): dispatch by door, and the cleanup-fallback pipeline ---
@@ -1358,6 +1507,32 @@ def _selfcheck() -> None:
         assert _phrase in DICTATION_CLEANUP, f"list command missing from the prompt: {_phrase}"
     assert "numbered list to the contract" in DICTATION_CLEANUP, \
         "the mention-vs-command guard (the D37 failure mode) must stay in the prompt"
+
+    # The latency suite reports the TAIL, so its percentiles have to be right — a p95 that quietly
+    # averaged would hide exactly the rare spike the suite exists to find. Nearest-rank, so every
+    # figure is an OBSERVED value, never an interpolation between two runs that never happened.
+    _line = _spread([float(i) for i in range(1, 101)])
+    for _want in ("n= 100", "min   1.00", "p50  50.00", "p95  95.00", "p99  99.00", "max 100.00"):
+        assert _want in _line, f"percentile drift: {_want!r} not in {_line!r}"
+    # One spike in four must SURFACE at p95 and in the spread, not be smoothed away.
+    _spike = _spread([1.0, 1.0, 1.0, 14.58])
+    assert "p95  14.58" in _spike and "spread 13.58" in _spike, _spike
+    assert _spread([2.0]).count("2.00") >= 4, "a single sample is its own min/median/max"
+
+    # The live tool-call suite (`--check-tools`) needs a model, so what is checkable offline is
+    # that its cases are ANSWERABLE: every tool it names exists, every parameter it expects is
+    # one that tool actually takes, and every enum value it wants is in the enum. Without this a
+    # renamed tool or parameter reads as nine model failures rather than a stale test.
+    from bridge.config import load_schemas as _schemas
+    _reg = {t["name"]: t for t in _schemas()["tools"]["tools"]}
+    for _said, _want, _arg, _why in _TOOL_CASES:
+        assert _want == "" or _want in _reg, f"_TOOL_CASES names an unknown tool: {_want!r}"
+        if _arg:
+            _props = _reg[_want]["parameters"]["properties"]
+            assert _arg[0] in _props, f"{_want} takes no parameter {_arg[0]!r}"
+            _enum = _props[_arg[0]].get("enum")
+            assert _enum is None or _arg[1] in _enum, \
+                f"{_want}.{_arg[0]} has no value {_arg[1]!r} (it allows {_enum})"
 
     # _dictate: transcribe -> clean -> paste, with the whole pipeline faked (no whisper, no
     # network, no Win32). The load-bearing behaviours: the cleaned text is delivered; a cleanup
@@ -1465,6 +1640,7 @@ def _selfcheck() -> None:
 
     print("selfcheck OK: speak/hold split, capture endpoint, barge-in counter, error lines, "
           "latency table + targets, feedback credits the screen (D25), pings toggle gates earcons, "
+          "Tier 2 announces and Tier 1 stays silent (spec/30), "
           "dictation dispatch + cleanup-fallback-to-raw + the tidy toggle (spec/60), "
           "the persona names switched-off connectors (D38), "
           "D37 list commands declared in the cleanup prompt + case-insensitive scoring")
@@ -1554,14 +1730,257 @@ def _check_format() -> None:
     print(f"\nformat check OK: {len(_FORMAT_CASES)} cases, including the two mention cases")
 
 
+# Contract T, LIVE: does the BRAIN pick the right tool for a plain request? That is the one thing
+# no offline check can reach — `bridge.tools --selfcheck` proves the executor, and the backends were
+# driven by hand, but "a model decided to call this" is the empty column in STATE's tool ledger.
+#
+# `want_arg` is (parameter, substring), matched case-insensitively, because a model may reasonably
+# say "Spotify" or "spotify" and either is right. `want_tool = ""` means NO tool should be called —
+# over-eager tool use is a real failure mode and needs a case, not an assumption.
+_TOOL_CASES = [
+    ("open Spotify",                  "open_app",      ("app", "spotify"),      "the plain case"),
+    ("launch Notepad for me",         "open_app",      ("app", "notepad"),      "a different verb"),
+    ("bring File Explorer to the front", "focus_window", ("title_query", "explorer"),
+     "switching to something already open is NOT open_app"),
+    ("pause the music",               "media_control", ("action", "play_pause"), "a media key"),
+    ("turn the volume up",            "media_control", ("action", "volume_up"),  "...and a volume key"),
+    ("mute the sound",                "media_control", ("action", "mute_toggle"), "...and mute"),
+    ("what time is it",               "system_status", None,
+     "a READ must stay a read — asking the time must never open or move anything"),
+    ("what did I just copy",          "read_clipboard", None,   "the other read"),
+    ("how are you today",             "",              None,
+     "no tool fits, so none should be called (the over-eager failure)"),
+]
+
+
+def _check_tools() -> None:
+    """Contract T, LIVE: put each `_TOOL_CASES` utterance to the real assistant brain with the
+    real tool list and check WHICH tool it asks for.
+
+    Nothing is executed. `_one_round` surfaces the tool calls and never runs them, which is what
+    makes this safe to run repeatedly — it will not open nine apps or change your volume.
+
+    Connectors are read, never written: a case whose tool the user has switched off is SKIPPED and
+    said so. Consent is the user's, and a test that flips it to make itself pass is worse than a
+    test that admits it could not run.
+    """
+    import asyncio
+
+    offered = {t["name"] for t in tool_specs()}
+    print(f"tools offered to the brain: {', '.join(sorted(offered)) or '(none)'}")
+    missing = {c[1] for c in _TOOL_CASES if c[1]} - offered
+    if missing:
+        print(f"NOT offered, so their cases will skip: {', '.join(sorted(missing))}\n"
+              f"  (turn the matching connector on in Settings > Connectors — Apps & media is off "
+              f"by default)")
+
+    _start_local_servers()          # so this runs without the daemon up, if the role is local
+    brain = router.build_for_role("assistant") or build_brain(None, DAEMON_MODEL)
+    system = DEFAULT_SYSTEM + disabled_note()
+    rows, failures, skipped = [], 0, 0
+
+    # Printed as each case LANDS, not batched at the end: every case is a full model round, so a
+    # silent run looks hung for a minute or two on a local model (seen 2026-08-03).
+    for n, (said, want_tool, want_arg, why) in enumerate(_TOOL_CASES, start=1):
+        head = f"[{n}/{len(_TOOL_CASES)}] {said!r}"
+        if want_tool and want_tool not in offered:
+            print(f"skip {head}\n       {want_tool} is not switched on", flush=True)
+            rows.append(("skip", said, f"{want_tool} is not switched on", why))
+            skipped += 1
+            continue
+        print(f"...  {head}", end="\r", flush=True)      # overwritten by the verdict below
+        session = Session(id="toolcheck", system=system,
+                          history=[{"role": "user", "content": said}])
+        text, calls, err, malformed, _usage = asyncio.run(_one_round(brain, session, tool_specs()))
+        if err and not malformed:
+            print(f"SKIPPED — the assistant brain is unavailable ({err})")
+            return
+        got = calls[0].name if calls else ""
+        args = dict(calls[0].input or {}) if calls else {}
+
+        if malformed:
+            verdict, detail = "FAIL", "the model produced a malformed tool call"
+        elif got != want_tool:
+            verdict = "FAIL"
+            detail = f"called {got or '(nothing)'}, wanted {want_tool or '(nothing)'}"
+            if not got:
+                # What it said INSTEAD is the whole diagnosis. "I can't know that" is an honest
+                # miss; inventing a time is a lie; saying nothing at all is a broken turn. Three
+                # very different faults that all print as "called nothing" without this.
+                detail += f" — it said {(text.strip() or '(nothing at all)')[:140]!r}"
+        elif want_arg and want_arg[1] not in str(args.get(want_arg[0], "")).lower():
+            verdict = "FAIL"
+            detail = f"{want_tool}({args}) — {want_arg[0]} should contain {want_arg[1]!r}"
+        else:
+            verdict = "ok"
+            detail = f"{got}({args})" if got else "answered without a tool"
+        failures += verdict == "FAIL"
+        rows.append((verdict, said, detail, why))
+        print(f"{verdict:4} {head}\n       {detail}\n       ({why})", flush=True)
+
+    ran = len(_TOOL_CASES) - skipped
+    print(f"\ntool-call check: {ran - failures}/{ran} run, {skipped} skipped, "
+          f"model {getattr(brain, 'model', '?')}")
+    if failures:
+        raise SystemExit(f"{failures} case(s) FAILED")
+
+
+# The latency suite (ROADMAP, 2026-08-03). Built for VOLUME and reported at the TAIL, because the
+# fault it exists to catch is rare: one run in thirty took 14.58 s with reasoning already off, and
+# a median hides that completely. It times the two stages a user actually waits on — speech-to-text
+# and one brain round — because a slow tail in STT feels identical to a slow tail in the brain and
+# nothing has ever been able to tell them apart (STT's numbers exist only as single observations
+# scattered through the log).
+LATENCY_UTTERANCE = "what time is it"
+
+
+def _spread(times: list[float]) -> str:
+    """One line of distribution. Percentiles, never a mean: the mean is exactly the statistic that
+    hides a rare spike, which is the only thing this suite is looking for."""
+    s = sorted(times)
+    n = len(s)
+
+    def pct(p):                       # nearest-rank, so p95 is always an OBSERVED value
+        return s[min(n - 1, max(0, math.ceil(p / 100 * n) - 1))]
+
+    return (f"n={n:4}  min {s[0]:6.2f}  p50 {pct(50):6.2f}  p95 {pct(95):6.2f}  "
+            f"p99 {pct(99):6.2f}  max {s[-1]:6.2f}  (spread {s[-1] - s[0]:.2f} s)")
+
+
+def _check_latency(runs: int) -> None:
+    """Time speech-to-text and one brain round, many times, and report the tail.
+
+    Runs default LOW for a cloud provider and high for a local one: a sweep worth having is
+    hundreds of calls, and hundreds of calls carrying the full tool list is real money on a
+    metered key. The estimate is printed before anything is spent.
+    """
+    import time as _t
+    from pathlib import Path
+
+    import numpy as np
+
+    print(f"utterance: {LATENCY_UTTERANCE!r}\n")
+
+    # --- speech-to-text: the same real WAV, repeatedly. Never measured as a distribution before.
+    wav = Path(__file__).resolve().parent.parent / "tests" / "replay" / "wav" / "key_short.wav"
+    if not wav.exists():
+        print(f"STT   skipped — no {wav.name} (the replay WAVs are Thomas's voice, gitignored)")
+    else:
+        import wave as _w
+        with _w.open(str(wav), "rb") as w:
+            pcm = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
+        audio = pcm.astype("float32") / 32768.0
+        transcribe(audio)                        # warm the model out of the measurement
+        times, texts = [], set()
+        for _ in range(runs):
+            t0 = _t.perf_counter()
+            texts.add(transcribe(audio))
+            times.append(_t.perf_counter() - t0)
+        print(f"STT   {_spread(times)}")
+        # Same audio in, same words out — a wobble here would mean the timing above is comparing
+        # different work, not the same work at different speeds.
+        print(f"      {len(texts)} distinct transcript(s): {sorted(texts)[0][:60]!r}")
+
+    # --- one brain round, through the router, exactly as a turn builds it.
+    cfg = router.resolve("assistant")
+    brain = router.build_for_role("assistant") or build_brain(None, DAEMON_MODEL)
+    where = card(cfg["provider"]).get("where", "?") if cfg else "?"
+    tools = tool_specs()
+    est = runs * 2000                            # ~2k input tokens a round, tool list included
+    print(f"\nbrain: {cfg}\n       {where}, {len(tools)} tools, ~{est:,} input tokens for {runs} runs"
+          + ("  <-- METERED" if where == "cloud" else ""))
+
+    r = latency_sweep(brain, tools, DEFAULT_SYSTEM + disabled_note(), runs)
+    print(f"\nbrain {_spread(r['times'])}")
+    print(f"      tool call {r['tooled']}/{runs} · answered WITHOUT a tool {len(r['answered'])}"
+          f"/{runs} · empty {r['empty']}/{runs} · errors {r['failed']}/{runs}")
+    if r["answered"]:
+        # For a question only a tool can answer, answering without one IS the failure — and the
+        # samples are the evidence, because "it answered" and "it answered correctly" look the
+        # same in a latency table.
+        print(f"      answered-without-a-tool samples: {r['answered'][0][:90]!r}")
+        print(f"                                       {r['answered'][-1][:90]!r}")
+
+
+def latency_sweep(brain, tools, system: str, runs: int) -> dict:
+    """`runs` rounds of LATENCY_UTTERANCE through `brain`. Returns timings AND what it did.
+
+    Separated from the command so a measurement session can drive it across a matrix of models
+    without going through the settings window between each — and so timing and correctness are
+    always collected together. A suite that timed 200 rounds beautifully while never noticing the
+    model was inventing the answer would be measuring the wrong thing precisely (2026-08-04).
+    """
+    import time as _t
+
+    out = {"times": [], "tooled": 0, "empty": 0, "failed": 0, "answered": []}
+    for _ in range(runs):
+        session = Session(id="lat", system=system,
+                          history=[{"role": "user", "content": LATENCY_UTTERANCE}])
+        t0 = _t.perf_counter()
+        text, calls, err, _malformed, _usage = _run_one(brain, session, tools)
+        out["times"].append(_t.perf_counter() - t0)
+        if err:
+            out["failed"] += 1
+        elif calls:
+            out["tooled"] += 1
+        elif text.strip():
+            out["answered"].append(text.strip())
+        else:
+            out["empty"] += 1
+    return out
+
+
+def _run_one(brain, session, tools):
+    """One round, synchronously — `_one_round` is async and this suite is a script."""
+    import asyncio
+    return asyncio.run(_one_round(brain, session, tools))
+
+
+def _catch_polite_stop() -> None:
+    """Make run.py's polite stop signal behave like Ctrl-C, so shutdown code actually runs.
+
+    Python installs a KeyboardInterrupt handler for `CTRL_C_EVENT`/SIGINT and NOTHING ELSE. The
+    signal run.py actually asks with keeps its default action, which terminates the process
+    outright — no `except`, no `finally`, no cleanup. Measured on Windows 2026-08-02: without
+    this handler a `finally` did not run; with it, exit 0 and it did.
+
+    That signal differs per platform, and run.py picks it the same way (`_POLITE`):
+    Windows sends CTRL_BREAK, which arrives as SIGBREAK (exit 0xC000013A); POSIX sends SIGTERM.
+    Both default to terminating, so both need the handler — the comment that used to sit here
+    claimed "non-Windows: SIGTERM already unwinds cleanly" and that was simply wrong.
+
+    This is what run.py's shutdown depends on. It asks politely before it insists with
+    terminate(), precisely so the daemon can stop a local model server it started — and without
+    the handler the asking WAS the killing, so a server Gemma launched was left running on every
+    quit. Verified live on Windows: the log showed `starting ollama headless` and never the
+    matching stop.
+    """
+    import signal
+
+    def _raise(_signum, _frame):
+        raise KeyboardInterrupt
+
+    signal.signal(getattr(signal, "SIGBREAK", signal.SIGTERM), _raise)
+
+
 def main() -> None:
     setup_logging()
+    _catch_polite_stop()
     ap = argparse.ArgumentParser(description="Gemma orchestrator — the M0 loop (Track G step 6)")
     ap.add_argument("--selfcheck", action="store_true",
                     help="verify decision logic without mic, models or network, then exit")
     ap.add_argument("--check-format", action="store_true",
                     help="D37: run the spoken list commands through the live cleanup model, then "
                          "exit (needs the cleanup key; skips without one)")
+    ap.add_argument("--check-latency", nargs="?", type=int, const=0, default=None,
+                    metavar="RUNS",
+                    help="time speech-to-text and one brain round many times and report the TAIL "
+                         "(p95/p99/max, never the mean), then exit. Default 200 runs on a local "
+                         "provider, 20 on a metered one; pass a number to override")
+    ap.add_argument("--check-tools", action="store_true",
+                    help="Contract T: ask the live assistant model to pick a tool for each of "
+                         "nine plain requests, then exit. Nothing is executed — no app opens. "
+                         "~2k tokens a case, so budget for it on a metered key")
     ap.add_argument("--silence-ms", type=int, default=SILENCE_MS,
                     help=f"end-of-speech silence in ms (default {SILENCE_MS}); tune by ear")
     ap.add_argument("--voice", default=VOICE, help=f"Kokoro voice (default {VOICE})")
@@ -1575,6 +1994,18 @@ def main() -> None:
         return
     if args.check_format:
         _check_format()
+        return
+    if args.check_tools:
+        _check_tools()
+        return
+    if args.check_latency is not None:
+        _start_local_servers()                   # so it runs without the daemon up
+        runs = args.check_latency
+        if not runs:
+            cfg = router.resolve("assistant")
+            local = bool(cfg) and card(cfg["provider"]).get("where") == "local"
+            runs = 200 if local else 20          # hundreds locally; a metered key is not free
+        _check_latency(runs)
         return
     orch = Orchestrator(args.silence_ms, args.voice, args.model, auto_end=args.auto_end)
     try:

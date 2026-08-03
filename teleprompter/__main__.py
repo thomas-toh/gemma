@@ -545,8 +545,13 @@ def main() -> int:
         # set on the old HWND dies with it — which is why the corners sometimes went square on a
         # reopen. The overlay re-stamps its own native styles on this same signal, for the same
         # reason (restamp). Wired once here; it covers the reuse paths above without repeating.
+        # Take the emitted bool EXPLICITLY. `visibleChanged` carries one, and Qt fills a slot's
+        # first parameter with it — so `lambda w=win_:` had the signal's True/False land in `w`,
+        # shadowing the default, and every reopen raised AttributeError before it could re-stamp.
+        # `connect(restamp)` two hundred lines up is fine because a zero-arity callable makes Qt
+        # drop the argument; a lambda with a default is arity 1, so it does not.
         win_.visibleChanged.connect(
-            lambda w=win_: round_corners(w) if w.isVisible() else None)
+            lambda visible, w=win_: round_corners(w) if visible else None)
         settings_win["win"] = win_
         win_.show()
         round_corners(win_)          # after show(): winId only exists once there is a window
@@ -560,7 +565,18 @@ def main() -> int:
         log.warning("no system tray available — no way to quit but Ctrl-C")
 
     log.info("teleprompter up — subscribing to %s:%d", args.host, args.port)
-    return app.exec()
+    rc = app.exec()
+    # Destroy the QML engine — and with it every window and binding — BEFORE main()'s other
+    # locals. Left to Python, these are freed in arbitrary order: `model`, `cfg` and `gemPlayer`
+    # went first, so every binding that reads a context property re-evaluated against null on the
+    # way down and printed a TypeError. That was ~80 lines of noise on every quit, which is worse
+    # than untidy — a real shutdown error would have been invisible in it.
+    # `shiboken6.delete`, NOT `deleteLater()`: deleteLater only posts a deferred-delete event, and
+    # app.exec() has already returned, so nothing is left to process it — a silent no-op.
+    # Verified in teleprompter.settings_check, which reproduces the same teardown: 53 -> 0.
+    import shiboken6
+    shiboken6.delete(engine)
+    return rc
 
 
 if __name__ == "__main__":

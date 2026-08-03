@@ -1,6 +1,6 @@
 # Spec 40 — Interaction model
 
-**Last reconciled: 2026-07-31** · Build progress: [STATE.md](../STATE.md) (Tracks G · P) · Earcon ids: [schemas/earcons.json](schemas/earcons.json)
+**Last reconciled: 2026-08-03** · Build progress: [STATE.md](../STATE.md) (Tracks G · P) · Earcon ids: [schemas/earcons.json](schemas/earcons.json)
 
 ## State machine (orchestrator: `bridge/orchestrator.py`)
 
@@ -29,6 +29,17 @@ It pastes at the caret and shows no reply, so `transcribing` / `transforming` / 
   for two revisions and could only estimate the island's typing rate; both estimates blanked
   long answers mid-sentence. The dwell is only the walked-away backstop — dismissal (Esc, owned
   by the overlay) is the intended exit, and a new turn supersedes it.
+- **Two dwells, because acting and answering are not the same event (D43).** A turn that ACTED —
+  it opened an app, raised a window — leaves nothing to read: you watched it happen, and the
+  island is then sitting on top of the thing it just opened. A turn that ANSWERED has to survive
+  long enough to walk back to the desk. So the reply carries which kind of turn it was (`dwell`
+  on the Contract P `response` message, `quick` or `slow`) and the overlay times it.
+  **The daemon names the kind and never the duration** — the seconds are the user's setting
+  (spec/70), and the split of responsibility is the same one D24 drew: the daemon knows what
+  happened, only the overlay knows what is on screen.
+  `quick` requires BOTH that the turn acted and that there is nothing to read, so a turn that
+  acted *and* answered in one breath keeps the readable dwell. Anything unstamped is `slow`:
+  the failure that matters is an answer vanishing mid-read, so the default fails that way round.
 - **Binding: opening a capture window clears the previous turn** — whichever entrance opens it
   (wake · ask key · barge-in · a keypress mid-reply), the island must never show the mic bars
   over a stale answer. Since D24 the `listening` state **is** that clear
@@ -292,8 +303,9 @@ Architecture (D13, spec/00):
 
 Custom wake phrase (replace the `hey_jarvis` stand-in) + false-accept testing (D8) ·
 end-of-speech silence threshold (1 s start, `--silence-ms` to tune live) · pre-roll
-length · answer-dwell length (`Theme.durationAnswerDwell`, and the prompt's handover hold
-`durationPromptHold` — both overlay-side since D24).
+length · the prompt's handover hold (`Theme.durationPromptHold`, overlay-side since D24).
+*(Answer-dwell length stopped being a tuning item at D43 — it is two user settings now, and the
+Theme constants are only the fallbacks.)*
 
 **End-of-speech: semantic endpointing (planned, M1).** A fixed silence timer can't be
 both pause-tolerant and snappy — a long tolerance delays *every* reply. The proper fix,

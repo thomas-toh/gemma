@@ -61,8 +61,15 @@ QtObject {
     // because the daemon was estimating this side's typing speed — it guessed 0.45 s a word
     // and still blanked long answers mid-sentence. Measured from the right clock, a constant
     // is enough, and "N seconds after it finishes appearing" is a knob you can reason about.
+    //
+    // Since D43 the ANSWER dwell is two numbers, not one, and both are the user's to set
+    // (General > Preferences). What is here are the FALLBACKS — used if the setting cannot be
+    // read, and they are the shipped defaults, so a normal run and a fallback run look the same.
+    // The daemon says which of the two a turn wants ("quick" once it has acted, "slow" once it
+    // has answered); it never names a duration, because the seconds belong to the user.
     readonly property int durationPromptHold: 700     // prompt sits before the reply takes over
-    readonly property int durationAnswerDwell: 20000  // answer sits before the island hides
+    readonly property int durationAnswerDwell: 20000  // an ANSWER sits before the island hides
+    readonly property int durationActionDwell: 2500   // ...a CONFIRMATION, which has nothing to read
     readonly property int durationPasteDwell: 2500    // dictation's "Pasted ✓" beat before hiding (D2)
 
     // ── settings window (D29, re-cut by D40) ────────────────────────────────

@@ -58,6 +58,47 @@ per-track *sub-steps* live in `STATE.md`; the frozen M0 build order is in docs/0
 | Security posture | [50_security](50_security.md) | cross-cutting | always (BINDING) |
 | Dictation (hotkey → transform → paste) | [60_dictation](60_dictation.md) | `orchestrator._dictate` + `bridge/paste.py` | D1 built (2026-07-25); D2/D3 owed |
 
+## Anatomy of a turn (2026-08-03)
+
+What actually happens between a keypress and an answer, across every contract. Each stage names
+the spec that owns it; nothing here restates their rules. **Measured on the box, opening Spotify
+on `claude-opus-4-8`** — the numbers are one real turn, kept because the SHAPE is the point, not
+the arithmetic.
+
+```
+ask key ─┬─ capture          mic → RAM, never disk (spec/50 r3)      free
+         ├─ transcribe       whisper, local, GPU (spec/40)           ~50–300 ms   free
+         ├─ word-replace     deterministic table (D15, spec/60)      ~0 ms        free
+         ├─ router.resolve   role → provider+model (spec/20, D33)    ~0 ms        free
+         ├─ build adapter    reused unless signature changed         ~0 ms        free
+         │
+         ├─ ROUND 1   system + tools + history + utterance  ────────▶ 1568 in / 49 out
+         │            ← the model asks for a tool (spec/20 tool loop)
+         ├─ execute   Contract T: tier + connector gates, audit      local        free
+         │            Tier ≥ 2 announces (spec/30)
+         ├─ ROUND 2   ...the same system + tools + history + result ▶ 1630 in /  9 out
+         │            ← the model composes the reply
+         └─ display   Contract P → island; TTS if on (spec/40)
+```
+
+**Three properties worth stating outright, because they drive every cost decision:**
+
+- **A tool turn is TWO model calls, not one.** The second exists to turn a tool's result into
+  something to say, and to decide whether more tools are needed. It is not always earning that —
+  see the owed item below.
+- **The prompt is almost entirely fixed cost.** ~3,200 input tokens for a five-token request:
+  the tool list dominates, the persona follows, the user's words are a rounding error. Adding a
+  tool raises the price of *every* assistant turn, including ones that use no tools at all —
+  which is the real argument behind spec/30 rule 4's growth ledger.
+- **Everything before the first round is free and fast.** Capture, speech-to-text, the
+  replacement table and the router together cost less than either model call. Deterministic work
+  is not merely cheaper, it is off the cost curve entirely — the through-line the ROADMAP calls
+  deterministic-first, and the reason the skills layer sits where it does.
+
+*Owed, and recorded here so the flow above is not read as settled: whether ROUND 2 can be skipped
+when a tool's own output already stands as the reply, and the deterministic command-matcher that
+would remove BOTH rounds for a fixed phrase (ROADMAP #8). Both are STATE items.*
+
 ## Milestones
 
 Definitions only — live progress per track is in [STATE.md](../STATE.md).
@@ -1047,4 +1088,122 @@ screen said Gemma was starting at all. Both halves are fixed here.
   now drop a press until `_ready` rather than attempting a turn.
 
 Build status: STATE, Track P.
+
+**D42 (2026-08-03): Tier 2 turns on — Gemma acts, and says so.** Until now every tool only READ
+(spec/30 Tier 1) and `MAX_TIER` held at 1 because Tier 2's gate did not exist. Three of the four
+Tier-2 tools are now built and the ceiling moves to 2. The fourth, `set_timer`, deliberately does
+not — see below. This is the first item of Stage 1 ("Gemma acts", ROADMAP).
+
+- **The gate is an announce, and it is one earcon.** A Tier-2 tool changed something without being
+  asked twice, so the orchestrator pings `success` or `failure` as any call at Tier 2 or above
+  returns — refusals included, because from where the user is sitting an action that did not happen
+  is a single event however it failed to happen. Tier 1 stays silent: reading needs no sound, and
+  nothing about the existing turn changes. The tier comes from the registry, so a tool's noise
+  follows its declared danger with nothing to keep in step by hand.
+- **The announce obeys the `pings` toggle**, like every other earcon (D28). The consequence is
+  stated plainly rather than worked around: with pings off and the tool-activity indicator still
+  unbuilt, a Tier-2 action has no cue at all. The fix for that is the INDICATOR (D38's parked
+  half), not a second sound that ignores the user's quiet mode — a toggle that some sounds honour
+  and others do not is worse than either answer.
+- **An acting tool takes a WORD, never a path.** The safety property is not the tier but the shape
+  of the parameters: the model names an app the way a person says it, or a fragment of a window
+  title, or one of a fixed list of media keys — and every one is resolved against a list this
+  machine produced. There is no parameter through which the model can name something the user does
+  not already have. Written into spec/30 as a constraint on acting tools generally, not as a note
+  about these three.
+- **App names resolve from Windows' own list, not a configured map — reversing docs/04 §6.**
+  docs/04 specified a name→path map "in config", and the first cut walked the Start Menu folders
+  instead. Both are wrong for the same reason, found by measuring: those folders hold only classic
+  installers' `.lnk` files, so **Notepad, Calculator, Terminal and every Store app are missing**
+  — 110 shortcuts on disk against the 139 apps Windows actually lists on this box, and the
+  missing ones are exactly what a person asks for first. `Get-StartApps` returns the real list, and
+  `shell:AppsFolder\<AppID>` launches classic and Store apps alike. The decisive argument against
+  the config map is not effort but **first run**: a map is empty until it is filled, so "open
+  spotify" would fail on a fresh install for a reason the user cannot see. A small alias table
+  (`schemas/app_aliases.json`) survives for the exceptions, ships empty, and is the one place a
+  path is accepted — the user writes it, the model never sees it.
+- **`set_timer` is deferred, and the reason is a missing surface, not effort.** A timer FIRES
+  outside any turn, and Contract P has no message that can announce something with no turn behind
+  it — the same gap as D20's two owed surfaces. Building it sound-only would make a timer that can
+  fail to tell you anything (pings off, and it is silent and invisible). It stays in the registry,
+  unimplemented, which under spec/30's registry-is-a-contract rule means it is never offered and is
+  refused if called.
+- **Consent follows.** `apps_media` was dimmed in the connectors pane because its tools were out of
+  tier; it is now a live card, off by default like every connector that is not System, and named to
+  the brain in prose when off (D38) so "open Spotify" answers "that is switched off" rather than
+  improvising.
+
+Build status: STATE, Track T.
+
+**D43 (2026-08-03): two dwells — an action leaves nothing to read.** The island held every
+finished turn for a flat 20 s. That number was chosen for an ANSWER, with the walked-away case in
+mind, and D42 immediately broke it: "open Spotify" now leaves a two-word confirmation sitting on
+top of the app it just opened, for twenty seconds. The fix is not a better single number — the two
+cases genuinely want different ones.
+
+- **The daemon names the KIND, the overlay times it.** The `response` message gains `dwell`
+  (`quick` | `slow`, `status.json` v0.8.0), stamped on the `done` message beside `model` and
+  `tokens`. It never carries a duration: the seconds are a user setting, and the daemon has no
+  business knowing them. This is D24's split held to — the daemon knows what happened, only the
+  overlay knows what is on screen.
+- **`quick` needs both halves: the turn acted, AND there is nothing to read.** A Tier-2 tool that
+  *succeeded* sets the first (a refused one does not — its reply explains why not, which is
+  something to read). The second is the same one-line `sentences()` test the speak/hold split
+  already uses, so a turn that opened Spotify *and* answered a question keeps the readable dwell.
+- **Unstamped means `slow`, deliberately.** The failure that matters is an answer blinking away
+  mid-read; a confirmation lingering too long is merely annoying. So every default — an absent
+  field, an unparseable setting, a value outside the enum — lands on the long dwell.
+- **Both durations are user settings** (General > Preferences, spec/70): `dwell_quick` (2.5 s,
+  matching dictation's "Pasted ✓" beat) and `dwell_slow` (20 s, exactly today's behaviour). They
+  are **dropdowns of durations rather than a number box** — no new control, no new schema type,
+  and unsettable to zero. The overlay reads the number off the front of the choice, which is a
+  shortcut made safe by asserting in `overlay_check` that every choice in the schema begins with
+  one; a choice like "Never" fails there rather than on someone's screen.
+- **Amends D24.** D24 gave the overlay the dwell and made it a single constant, because the
+  daemon had twice tried to estimate the island's typing rate and twice blanked long answers. That
+  still holds — the *clock* stays overlay-side, started when the reveal finishes. What moves back
+  across the seam is one word about what kind of turn it was, which the daemon is the only side
+  that knows.
+
+Build status: STATE, Track P.
+
+**D44 (2026-08-03): "OpenAI-compatible" is a shape, not a vocabulary — the catalogue spells the
+knobs.** B2 serves ten providers and sent OpenAI's own classic `max_tokens` to all of them, while
+its docstring called it provider-agnostic. That held until OpenAI's current models began rejecting
+the spelling: on 2026-08-03 **every assistant turn on `gpt-5.6-sol` failed** — the assistant was
+wholly broken on OpenAI, and it took building a tool-call test suite to notice, because the local
+model was fine. Full rule: spec/20 § An adapter never spells a provider's knob.
+
+- **The adapter names a knob; `settings.json` spells it.** Neutral names (`max_output_tokens`,
+  `effort`, `temperature`) map through `wire_names`, keyed by **wire** for the default and
+  overridden per card. The alternative — a branch on the provider id — fixes the symptom and keeps
+  the disease: the next divergence is a second branch, and the adapter is a pile of provider names
+  again.
+- **`null` means the provider has no such knob**, dropped deliberately; a name missing altogether
+  is a schema gap, dropped and **logged**, never guessed. An invented parameter is rejected
+  server-side and costs the whole turn; an omitted one merely degrades.
+- **Three faults of one family, found in one night.** (1) `max_tokens` → `max_completion_tokens`.
+  (2) A stored profile still carried `temperature: 0.7` for OpenAI from before temperature was a
+  real control, and it went out on every call — marked `null` on that card. Deliberately NOT gated
+  on `capabilities.temperature`: that field governs which providers show the *control*, and only
+  the three local runners declare it, so gating the wire on it would have silently taken
+  deterministic cleanup away from Groq, which relies on `temperature: 0`. (3) OpenAI's reasoning
+  models reject tools combined with reasoning — and **omitting** the effort was not the fix, because
+  the model then reasons at its own default and the request is rejected identically. A card may now
+  DEMAND a value on a tool round (`tool_round_effort: "none"`), which is a different thing from
+  declaring one available. `capabilities` is what the USER may set; `wire_names` and
+  `tool_round_effort` are what the PROVIDER requires.
+- **The consequence is accepted, not hidden:** an OpenAI tool turn does not reason at all. The
+  other route OpenAI names is `/v1/responses` — a third wire shape beside `anthropic` and
+  `openai`, and parked.
+- **Say what we SENT.** Each of the three cost a round of guessing, because the log recorded the
+  provider's complaint and nothing about our own request. A rejected request now logs its outgoing
+  parameter names and scalar values — never `messages`, which is the user's speech, and never the
+  tool bodies. It found the third fault on its first run, by showing a parameter we were *not*
+  sending in an error that named it.
+- **Guarded offline.** `compat.py` declares `KNOBS`, the complete list of what it can emit, and
+  asserts every one is spelled for its wire — so forgetting the schema fails a check rather than
+  silently dropping a parameter at runtime.
+
+Build status: STATE, Track B.
 

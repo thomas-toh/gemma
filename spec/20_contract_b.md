@@ -1,6 +1,6 @@
 # Spec 20 — Contract B: brain adapters
 
-**Last reconciled: 2026-08-02** · Build progress: [STATE.md](../STATE.md) · Rationale: docs/02 §3
+**Last reconciled: 2026-08-03** · Build progress: [STATE.md](../STATE.md) · Rationale: docs/02 §3
 
 *(Interface contract. Build status + the standalone B1 API smoke test
 (`scripts/b1_smoke.py`) live in STATE, Tracks G & B.)*
@@ -137,6 +137,44 @@ per-turn what it could hold for a session:
 Neither is a change to the `converse()` signature, so no adapter needs updating; B1 takes
 advantage of both.
 
+## An adapter never spells a provider's knob (binding, D44)
+
+A request has two halves, and only one of them belongs to the adapter.
+
+**The SHAPE is the adapter's** — that a system prompt is the first message on the OpenAI wire and
+a separate parameter on Anthropic's, that tool results thread back as `tool` messages one side and
+content blocks the other. That *is* the wire, and it is why there are two adapters and not one.
+
+**The KNOBS are the catalogue's.** An adapter names each one in Gemma's own vocabulary —
+`max_output_tokens`, `effort`, `temperature` — and `spec/schemas/settings.json` → `wire_names`
+says how that name is spelled on the way out. Defaults are keyed by **wire**, because the dialect
+belongs to the protocol; a card overrides only what it spells differently.
+
+The rule exists because "OpenAI-compatible" describes a shape and not a vocabulary. B2 serves ten
+providers, and it sent OpenAI's own classic `max_tokens` to all of them while calling itself
+provider-agnostic — which held until OpenAI's current models began rejecting that spelling
+outright. A branch on the provider id would have fixed the symptom and reproduced the disease: the
+next divergence would be a second branch, and the adapter would be a pile of provider names again.
+
+Three outcomes when a knob goes out, and the last two must stay distinct:
+
+- **a name** → sent under it;
+- **`null` in the card** → this provider has no such knob, dropped deliberately (OpenAI's current
+  models take no `temperature`);
+- **absent from the catalogue** → a gap in the schema. Dropped and **logged**, never guessed.
+  Sending an invented parameter is rejected server-side and costs the whole turn; omitting one
+  degrades instead, and degradation over failure is the same ruling `effort` already gets.
+
+`capabilities` answers a different question and the two must not be conflated: it says what the
+**user** may set (it drives which providers show a control), while `wire_names` says what the
+**provider** has. Gating the wire on `capabilities` would have taken deterministic cleanup away
+from Groq, which relies on `temperature: 0` and declares no capability at all.
+
+Adding a knob means teaching the catalogue first — `bridge/brains/compat.py` asserts offline that
+every knob it can emit is spelled for its wire, so the omission fails a check rather than silently
+dropping a parameter at runtime. B1 has an entry for completeness but consults none of this: it
+serves exactly one provider, so it has no dialect to vary.
+
 ## Adapters
 
 | Id | Backend | Notes | Maturity |
@@ -161,8 +199,24 @@ written-but-unread and the orchestrator hardcoded Claude. The orchestrator appli
 (`DAEMON_MODEL` on B1) / the Groq cleanup default when a role resolves to `None`, so an unconfigured
 profile still answers. An **injected** brain (replay/selfcheck) bypasses the router entirely.
 
+**"The router" is an umbrella over several subsystems** (named 2026-08-03; `planned` until built).
+One name is fine — the parts are what matter, and they differ in risk and schedule, so they are
+listed rather than blurred:
+
+| Subsystem | Question it answers | Status |
+|-----------|--------------------|--------|
+| **Role routing** | which provider + model serves this role? | BUILT (D33) |
+| **Task routing** | which model suits this utterance's *shape*? | planned — no disambiguation, low risk |
+| **Skills** | does this need a model **at all**? | planned — deterministic, and where the risk is |
+
+Skills carry one binding constraint, settled before design: **precision over recall.** A matcher
+that fires on "I was going to open Spotify but didn't" has acted against the speaker's intent,
+which is worse than being slow — so it never fires unless certain and falls through to the model
+when unsure. A skill and a Contract T tool share one deterministic backend and are two doors to it,
+never two implementations (spec/30).
+
 **Not in v1 (Layer 2, later):** several instances per provider + the roles/routes redesign
-(spec/70); per-task-type routing ("short → cheap") and its classifier; `local_only` policy mapping
+(spec/70); task routing and skills per the table above; `local_only` policy mapping
 (a `local_only` session forcing a local B2). v1 is role → instance; the orchestrator seam
 (`build_for_role`) does not change when Layer 2 lands — only the data the router reads. B1's
 effort/extended-thinking are still unwired (M0.5), so `effort` reaches only the B2 wire for now;

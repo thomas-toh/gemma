@@ -668,77 +668,6 @@ Window {
 
     // Mutually exclusive, equally weighted choices shown at once rather than hidden behind a
     // dropdown. Words or glyphs; `glyphs` switches which the model is read as.
-    // Effort as DOTS, not words (Thomas): one dot, two, a pyramid, a square, two-over-
-    // three — a cluster that grows, in the same tight box the theme picker uses. Recovered
-    // from D29 rather than rewritten.
-    component EffortDots: Rectangle {
-        id: eff
-        property var options: []
-        property string value: ""
-        signal picked(string v)
-        readonly property int cell: Theme.iconMd + 12       // the same cell the theme picker uses
-        implicitWidth: options.length * cell + Math.max(0, options.length - 1) * 2 + 4
-        implicitHeight: cell + 4
-        radius: 9
-        color: Theme.surfaceLift
-        border.width: 1
-        border.color: Theme.hairline
-        // dots per row for a cluster of n: 1 · 2 · pyramid · square · 2-over-3
-        function rows(n) {
-            switch (n) {
-            case 1: return [1]
-            case 2: return [2]
-            case 3: return [1, 2]
-            case 4: return [2, 2]
-            case 5: return [2, 3]
-            }
-            return [n]
-        }
-        Row {
-            anchors.fill: parent
-            anchors.margins: 2
-            spacing: 2
-            Repeater {
-                model: eff.options
-                delegate: Rectangle {
-                    id: seg
-                    required property string modelData
-                    required property int index
-                    readonly property bool active: modelData === eff.value
-                    width: eff.cell
-                    height: parent.height
-                    radius: 7
-                    color: active ? Theme.surfaceCard : Theme.surfaceLift
-                    Behavior on color { ColorAnimation { duration: root.t } }
-                    Column {
-                        anchors.centerIn: parent
-                        spacing: 2
-                        Repeater {
-                            model: eff.rows(seg.index + 1)
-                            delegate: Row {
-                                required property int modelData
-                                anchors.horizontalCenter: parent.horizontalCenter
-                                spacing: 2
-                                Repeater {
-                                    model: modelData
-                                    delegate: Rectangle {
-                                        width: 4; height: 4; radius: 2
-                                        color: seg.active ? Theme.uiText : Theme.uiTextFaint
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    MouseArea {
-                        anchors.fill: parent
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: eff.picked(seg.modelData)
-                    }
-                }
-            }
-        }
-    }
-
     component CheckBox: Item {
         id: cb
         property bool checked: false
@@ -1606,9 +1535,16 @@ Window {
         Text {
             x: Math.round(mr.width * root.colKeyF)
             anchors.verticalCenter: parent.verticalCenter
-            text: mr.cat.auth === "key" ? (cfg.keys[mr.pid] === "stored" ? "Stored" : "No key")
-                                        : "N/A"
-            color: Theme.uiTextFaint
+            // A stored model the provider no longer lists says so HERE, in the key column, because
+            // it is the same kind of fact as "No key": something this row needs and does not have.
+            // Without it the turn fails with "check the model in settings" and settings then shows
+            // the stale name looking perfectly configured — commonly after `ollama rm`.
+            readonly property bool gone: cfg.modelMissing(mr.pid, mr.st.model !== undefined
+                                                                  ? mr.st.model : "")
+            text: gone ? "Not installed"
+                       : (mr.cat.auth === "key"
+                          ? (cfg.keys[mr.pid] === "stored" ? "Stored" : "No key") : "N/A")
+            color: gone ? Theme.danger : Theme.uiTextFaint
             font.family: fontFamily; font.pixelSize: Theme.fontSmall
         }
         Toggle {
@@ -2056,8 +1992,15 @@ Window {
                         // Whether ANY capability row (effort / thinking / temperature) will render
                         // — so the row above the first of them drops its divider when none do, and
                         // no hairline floats alone above the sheet foot.
+                        // A separate thinking toggle is shown ONLY where thinking is genuinely its
+                        // own knob. Where the effort scale already carries `none`, the OFF end of
+                        // that dial IS the thinking switch (Ollama), so a second control would be
+                        // two names for one wire parameter — which is exactly what made this card
+                        // read as if they were independent (Thomas, 2026-08-03).
+                        readonly property bool showThinking: caps.thinking === true
+                            && (caps.effort === undefined || caps.effort.indexOf("none") < 0)
                         readonly property bool hasDials: caps.effort !== undefined
-                            || caps.thinking === true || caps.temperature === true
+                            || showThinking || caps.temperature === true
 
                         Row_ {
                             visible: root.addEditing
@@ -2154,18 +2097,27 @@ Window {
                         }
                         Row_ {
                             visible: formCol.ready && formCol.caps.effort !== undefined
-                            divider: formCol.caps.thinking === true || formCol.caps.temperature === true
+                            divider: formCol.showThinking || formCol.caps.temperature === true
                             label: "Effort"
-                            EffortDots {
+                            // A dropdown of the provider's own words, not a dot cluster (Thomas,
+                            // 2026-08-03): the dots were hard to read, and worse, they rendered
+                            // `none` as one dot — "a little effort", when on Ollama's wire it is
+                            // the OFF switch. Words cannot lie about that. This is also the
+                            // standardised control: spec/70 §2 says a dropdown shows either WORDS
+                            // or a machine value, and an effort level is words. Labels come from
+                            // the schema (hard rule 3), so `xhigh` reads "Extra" everywhere.
+                            Dropdown {
+                                alignRight: true
                                 options: formCol.caps.effort !== undefined ? formCol.caps.effort : []
+                                labels: cfg.effortLabels
                                 value: root.addEffort
                                 onPicked: function (v) { root.addEffort = v }
                             }
                         }
                         Row_ {
-                            visible: formCol.ready && formCol.caps.thinking === true
+                            visible: formCol.ready && formCol.showThinking
                             divider: formCol.caps.temperature === true
-                            label: "Extended thinking"
+                            label: "Thinking"
                             Toggle {
                                 on: root.addThinking
                                 onToggled: function (v) { root.addThinking = v }

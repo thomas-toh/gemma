@@ -224,8 +224,13 @@ def _fallback_to_cpu():
 
 
 def _run(model, audio_f32) -> str:
-    # ponytail: beam_size=1 (greedy) for latency; raise it if accuracy needs it.
-    segments, _ = model.transcribe(audio_f32, language="en", beam_size=1)
+    # beam_size=5 is faster-whisper's own default. It was 1 (greedy) for latency until
+    # 2026-08-03, when accuracy needed it — the condition the old ponytail note named.
+    # Greedy commits to the top token at every step and cannot reconsider, which is exactly
+    # the shape of the errors seen: "Edge" -> "itch", a short low-context word whose
+    # acoustic neighbour won one step. Costs ~2-3x on the DECODE half of a ~35 ms transcribe,
+    # invisible against cleanup's 240-450 ms. Raise it further only with a measurement.
+    segments, _ = model.transcribe(audio_f32, language="en", beam_size=5)
     return "".join(s.text for s in segments).strip()
 
 

@@ -8,7 +8,7 @@ start, update it in the same commit as the work · when a step closes, collapse 
 entry to one or two lines — durable knowledge moves out (behaviour → spec · run
 instructions → README · findings → NOTES.md · decisions → a D-number in spec/00).
 
-Last updated: 2026-07-31
+Last updated: 2026-08-03
 
 ## Handoff — start here (2026-07-28)
 
@@ -17,6 +17,13 @@ feedback < 1.5 s, ×10 consecutively, B1, zero tools) passed and was measured on
 The **"M0-close gate" is RETIRED** (Thomas, 2026-07-28): it was bolted on after the fact, was never
 part of spec/00's M0 criterion, and "the settings window is up to par" is not a testable bar. The
 quality it stood for is real and now has its own section — **Config & routing**, below.
+
+**Staged roadmap (2026-08-02):** the current build sequencing lives in [ROADMAP.md](ROADMAP.md) → *Stages* (1 "Gemma acts" · 1.5 absent knobs · 2 conversation model · 3 TTS); the per-track checklist and concurrent-build ledger are there too.
+**Stage 1 started 2026-08-03** with Tools v2 (D42), the two dwells (D43) and the wire-name rule (D44).
+**Next, agreed 2026-08-03 and starting 2026-08-04: the ROUTER**, per the five-phase plan in
+[ROADMAP.md](ROADMAP.md) → *The plan for the router* — measure the premise · latency suite ·
+task routing · skills (design session first) · the round-2 skip last. The router is an umbrella
+over three subsystems; the breakdown is in spec/20 § Routing.
 
 **Build sequence (Thomas) — do in this order:**
 1. **Config & routing** — the router v1 landed (D33); what remains is the settings window being
@@ -60,7 +67,13 @@ one case looping to 71k tokens and never answering). Findings in **NOTES § GPU 
   defaults and validation for each · the word-replacement **table editor**, which is a repeating
   from→to grid, not a row control, and so has no precedent in the window yet · whether STT model is
   per-mode (D12 says dictation is the stricter test) or one process-wide value, since the code holds
-  one constant today. Note the window's other named gaps live above (AddCard dashed border, roster
+  one constant today · **and how a model GETS onto the machine** (Thomas, 2026-08-03): download on
+  demand, ship it bundled, or point at a file already on disk. Gemma's posture says the user picks
+  the model, as they already do for brains; VoiceInk makes the opposite call and hardwires a
+  Parakeet download. The reason this is not just another picker: a brain is a **URL and a
+  credential**, an STT model is **weights on disk** — so it owes a size, a download progress state,
+  a cache location and a part-downloaded failure mode that no provider card has ever needed.
+  Note the window's other named gaps live above (AddCard dashed border, roster
   reorder) and are *not* part of this.
 - [ ] **Router v2 (Layer 2) + its dependent design.** Several **named instances per provider**: one
   API key, several models, so a user exposes Opus 5 and Sonnet 5 but never Fable. Roles then target
@@ -88,9 +101,14 @@ one case looping to 71k tokens and never answering). Findings in **NOTES § GPU 
   **Stood up 2026-08-01.** Ollama v0.32.5 on the 5080, reached through B2 with no adapter work —
   `qwen3:8b` · `qwen3:14b` · `qwen3.5:9b` pulled and measured (scoreboard in Track D). The runner's
   quirks — the three fields `/v1` ignores, `num_ctx` VRAM figures, GGUF-not-ONNX, the two binaries —
-  are in NOTES § Local model runners. The one thing that is a REPO fault rather than a fact about
-  Ollama: the **`"context": true` capability on the three local cards is read by nothing** and is
-  unimplementable as declared, since context cannot be set through `/v1`. Remove it or redefine it.
+  are in NOTES § Local model runners. The dead **`context` capability was deleted 2026-08-02**
+  (Thomas): Gemma cannot set it, so declaring it invited a knob that does nothing. The schema now
+  carries a don't-re-add note.
+  - [ ] **Owed — a README section on local models.** README has no local-models content at all, so a
+    user standing up Ollama has nothing to read. It should say at least: install Ollama · pull a
+    model (CLI — Gemma deliberately does not) · Gemma prefills the endpoint and starts the server
+    headless if it declares one · **context length is set in Ollama, not in Gemma** (Thomas,
+    2026-08-02) · the tray comes from `ollama app.exe`, not the server.
   - [x] **DONE 2026-08-02 — headless Ollama, started and stopped by Gemma.**
     `providers.ensure_local_server()` starts it with no window when a role resolves to a provider
     declaring a **`serve` argv in its card** and nothing is listening; keep-alive 30 min via
@@ -404,6 +422,21 @@ recorded in spec/00 §D25 and `spec/schemas/targets.json`).
 
 ## Track P — Teleprompter (Contract P) — built and live; in polish
 
+- **DONE 2026-08-03 (D43) — two dwells: a confirmation goes in 2.5 s, an answer stays 20 s.**
+  Full account in spec/00 D43; the behaviour is spec/40 § state machine, the settings spec/70 §3.
+  `status.json` v0.8.0 (`response.dwell`). Guarded in `overlay_check` (**verified to FAIL** when
+  the selection is reverted to one interval) · `decode` · `orchestrator`. Three things worth not
+  relearning:
+  - **The daemon sends a WORD, never a duration.** `quick`/`slow`, and the overlay turns it into
+    seconds using the user's setting. Putting milliseconds on the wire would have quietly moved
+    the user's preference into the daemon, which cannot see the screen — the D24 mistake again.
+  - **Every default lands on the LONG dwell.** Absent field, junk setting, value outside the enum:
+    all `slow`. An answer blinking away mid-read is the failure that matters; a confirmation
+    overstaying is merely annoying, and Esc already dismisses it.
+  - **A REFUSED Tier-2 call does not count as acting.** It announces (a `failure` ping) but its
+    reply explains why nothing happened, and that is something to read.
+  - [ ] **Owed — unseen live.** Both dwells have only run headless, where the timer's interval is
+    read rather than watched. Wants one "open Spotify" and one ordinary question, side by side.
 - **DONE 2026-08-02 (D41) — the boot island**: a `booting` state (status.json v0.7.0) drawn as a
   narrow pill with the shared `Spinner.qml`, and door presses **dropped** until warm-up finishes.
   Full account in spec/00. Guarded in `overlay_check` · `decode` · `orchestrator` (the gate defaults
@@ -496,6 +529,21 @@ recorded in spec/00 §D25 and `spec/schemas/targets.json`).
   turn yields a clean `Error("unknown", "no model chosen…")`. The daemon's fallback lives in
   `orchestrator.DAEMON_MODEL` (env-overridable), not in an adapter. spec/20 records the rule. Model
   choice is now the router's job (D33 — see Config & routing).
+- **DONE 2026-08-03 (D44) — the catalogue spells every wire knob; no adapter does.** Full account
+  in spec/00 D44, rule in spec/20. Three faults of one family in one night, all on OpenAI:
+  `max_tokens` → `max_completion_tokens` · a stale stored `temperature: 0.7` going out to models
+  that take none · tools+reasoning rejected. **The third is the one to remember**: dropping
+  `reasoning_effort` did NOT fix it — the model reasons at its own default when the parameter is
+  absent, and the request is rejected identically. The card must *set* `tool_round_effort: "none"`.
+  The provider's error message said so from the first log; two guesses were spent not reading it
+  literally.
+  - **The diagnostic that ended it: log what we SENT on a rejection.** Parameter names and scalars,
+    never `messages` or the tool bodies. It found fault three on its first run by showing a
+    parameter we were *not* sending inside an error that named it. Worth keeping forever.
+  - [ ] **Owed — live-verify OpenAI once more.** Fixed in source and green offline; the box has
+    never seen a successful OpenAI tool turn. Anthropic, Groq and Ollama all pass end to end.
+  - **Accepted consequence:** an OpenAI tool turn does not reason. `/v1/responses` is the route
+    that would restore it — a third wire beside `anthropic` and `openai`, parked.
 - **Owed — the first-token re-measure.** The recorded **1817 ms** ran with `chunks=1` (the whole
   short reply in one chunk, so first ≈ total) — really "time to full short response", cold, and well
   above the ~300–900 ms ballpark in `b1_smoke.py`. Re-run with a longer streamed output; it feeds
@@ -696,6 +744,105 @@ recorded in spec/00 §D25 and `spec/schemas/targets.json`).
   checks the profile registry keys, because asking Outlook for a mailbox with no profile can raise
   a modal *create-a-profile* dialog — a hang with no way to answer it behind a voice assistant. A
   false "no profile" is the failure mode to watch if an older Outlook (pre-16.0) ever turns up.
+- **BASELINE 2026-08-03 — `--check-tools`, the live tool-selection suite.** Nine plain requests
+  put to the real assistant brain with the real tool list; it reads the tool call the model
+  produces and **executes nothing**, so it is safe to re-run. Connectors are read, never written —
+  a case whose connector is off skips and says so. Guarded offline (the case table must name real
+  tools, parameters and enum values, or a rename reads as nine model failures).
+  **`ollama/qwen3.5:9b`: 8/9, no skips, repeated identically.** Every action and read case picked
+  the right tool with sensible arguments — `focus_window` (not `open_app`) for "bring File Explorer
+  to the front", all three media keys mapped correctly — and "how are you today" correctly called
+  nothing with six tools available.
+  - ⚠️ **The one failure is an EMPTY ROUND — intermittent, measured at 1 in 12.** Asked "what time
+    is it", the model occasionally returns no tool call and no text at all. `_collect` returns
+    `("", None)`, `_turn` reads `not reply`, and the user hears **"Something went wrong on my
+    end."** — the generic apology, for a model that simply did not answer.
+    **Correction, and the lesson is the lesson:** this was first written up as *deterministic*
+    because the suite hit it twice in a row and I inferred a fixed property from two samples.
+    Thomas contradicted it from real use, `logs/audit.jsonl` settled it in seconds (three real
+    `'What time is it?'` turns, all `system_status ok`), and a 12-run sweep put the true rate at
+    **1/12**. Punctuation and casing were also ruled out — all four phrasings call the tool.
+    The cause is sampling: the router hands Ollama no temperature, so it runs at the runner's own
+    default and the output varies run to run.
+  - [ ] **OPEN — the empty round is NOT understood, and a retry was tried and REVERTED.**
+    A one-shot resample (D36's cure) was written and pulled the same night: the retry came back
+    empty too (`04:45:04→06` empty, retry `04:45:07→08` empty). It cured nothing and would have
+    hidden an unexplained fault behind a longer wait — a patch over an error, which hard rule 2
+    forbids. The bug stays visible until the cause is known (Thomas).
+    **Thomas's argument, and it reframes the whole search:** a model returning *literally nothing*
+    is not sampling noise — inference would return SOMETHING. So temperature and effort are the
+    wrong tree. Two observations that fit "structural, not statistical": the immediate resample
+    failed too (~0.6% likely if it were an 8% independent coin flip), and the failing round is
+    FAST (1–2 s) rather than a long think.
+    **This is the ASK path, not dictation** — the dictation-path determinism finding does not
+    transfer, and citing it was a mistake.
+    - **ROOT CAUSE FOUND 2026-08-03 by capturing the raw wire — it is REASONING.** Ollama's `/v1`
+      streams a **`reasoning`** field beside `content` and `tool_calls`; `compat.py` reads only
+      the latter two, which is correct. On the failing round the wire carried **360 characters of
+      reasoning, zero content, no tool call, `finish_reason: stop`**. The model reasoned its way
+      to the right answer and then said nothing:
+      *"The user is asking for the current time. I have access to system_status which can report
+      local date/time with UTC offset. This directly answers their question without needing
+      additional tools or narration about how I'm…"* — note it deliberating about **not
+      narrating**, which the persona explicitly instructs. It talked itself into silence.
+      **Not** a connection fault, not a field we fail to read, not sampling noise in the usual
+      sense: the wire genuinely carries nothing actionable.
+    - **Reasoning also IS the latency spread.** `reasoning` was populated on **30/30** rounds, and
+      time tracks its length (110 chars → 1.2 s, 978 chars → 5.5 s). Measured over 30 runs of the
+      same utterance on one reused connection:
+
+      | config | range | spread | median | empty |
+      |--------|-------|--------|--------|-------|
+      | as shipped | 1.18–5.00 s | 3.81 s | 1.99 s | **2/30** |
+      | `effort=none` | 0.59–3.08 s | 2.49 s | **0.68 s** | **0/30** |
+
+      Reasoning off removes the empty round entirely and cuts the median **2.9×**. Tool selection
+      is **unchanged at 8/9** — no accuracy is bought by the reasoning.
+    - ⚠️ **But the failure MOVES rather than vanishing, and it moves to a worse place.** With
+      reasoning off, the clock case failed by **inventing an answer** — *"It is 16:05 UTC+8 (Hong
+      Kong)"*, roughly twelve hours out and a city from nowhere — instead of going silent. A
+      confident lie is worse than a shrug. **One sample; not a conclusion** (that inference error
+      was already made once tonight and corrected). It wants repeating before it is trusted.
+    - **RESOLVED for the empty round, 2026-08-03 — reasoning off, set from the settings window.**
+      Thomas set Ollama's Effort to **None**; the router resolves `effort: "none"` and the wire
+      carries it. Two further 30-run sweeps: **EMPTY 0/30 and 0/30, `reasoned` 0/30 both times** —
+      with the earlier sweep that is **0/90 at effort=none against 2/30 and 1/12 with reasoning
+      on**. Median fell to **0.60 s / 0.81 s** from 1.99 s, i.e. inside the bar. No code change
+      was needed: `effort` was already wired end to end and only the CONTROL was illegible.
+    - ⚠️ **OPEN — rare transient latency spikes, and the tail is now the whole problem.** One run
+      of 30 hit **14.58 s** with reasoning OFF, so it cannot be deliberation (`reasoned` was 0/30
+      in that very run). Two sweeps of the IDENTICAL config gave spreads of 14.07 s and 3.21 s, so
+      the tail is **rare and random, not systematic**. Candidates, none tested: model eviction and
+      reload (the cold load measured ~9 s, uncomfortably close), GPU contention from another
+      process, Ollama queueing. **One sample proves nothing** — that inference error was made and
+      corrected earlier the same night.
+      **This needs HUNDREDS of calls, not tens** (Thomas): a 1-in-30 event cannot be characterised
+      by a 30-run sweep, and the median hides it entirely. Sample size is the whole point — the
+      queued latency suite (ROADMAP) should be built for volume and report the tail, not the mean.
+      **The same argument applies to STT**, which has never been measured this way at all: its
+      figures are single observations scattered through the log (44 ms · 61 ms · 182 ms · 687 ms
+      cold), never a distribution. A slow tail there would feel identical to a slow tail in the
+      brain and is currently indistinguishable from one.
+    - **Noticed in passing:** the router now resolves `temperature: 0.7` for Ollama where it
+      resolved `None` earlier the same night — populated by the card edit. Harmless-looking, but a
+      stale stored temperature on the OpenAI card was one of D44's three bugs, so it is written
+      down rather than assumed.
+    - [ ] **Owed decision (Thomas): `tool_round_effort: "none"` on the Ollama card?** The mechanism
+      exists (D44, built for OpenAI). The catch: on the assistant path `tool_specs()` is never
+      empty, so *every* round is a tool round — this would mean **the local assistant never
+      reasons at all**. That mirrors the `transform`-never-thinks invariant dictation already has,
+      and the evidence says reasoning buys nothing here and costs a total failure now and then.
+      It is still a policy change, not a bug fix, so it is not made unilaterally.
+  - **Latency on identical input ranged 1.5 s – 4.6 s across those 12 runs**, and 2 s – 9 s across
+    two suite runs. The local assistant path is not merely slow, it is ERRATIC, which is worse for
+    a voice product: you can design around a predictable delay, not around an unpredictable one.
+    A latency suite is queued (ROADMAP, after #8).
+  - **It is also the case ROADMAP #8 already names as its first skill** ("world-time + live
+    clock"). The evidence and the plan agree without being made to: the one thing this model will
+    not fetch is the one thing a deterministic answer gets right instantly and for free.
+  - [ ] **Owed — run it on Groq and on Anthropic.** Free and fast on Groq; ~20k input tokens on a
+    cloud model. Tells us whether a small cheap model holds 9/9, which is also the per-task-type
+    routing question (#8's other half).
 - **The tool ledger (spec/30 rule 4).** Growth is tracked, not gated: nothing waits on a clock, but
   no tool is assumed good until it has misfired-free invocations in real use behind it. Evidence is
   `logs/audit.jsonl` (rule 2 already logs every call's outcome); this table is the human read of it,
@@ -707,12 +854,46 @@ recorded in spec/00 §D25 and `spec/schemas/targets.json`).
   | `read_clipboard` | 1 | 2026-07-27 (D31) | **not yet** — same |
   | `find_document` | 1 | 2026-07-28 | **not yet** — backend verified live against real documents, but never through a brain turn |
   | `search_email` | 1 | 2026-07-28 | **once, 2026-07-30** — driven by a brain end to end (D36), but it answered "no mail profile"; the retrieval itself has still never run |
+  | `open_app` | 2 | 2026-08-03 (D42) | **yes, 2026-08-03** — "Open Spotify" driven end to end by FOUR brains (Anthropic · OpenAI · Groq · Ollama); each picked `open_app` with the right argument and the app opened. No misfires seen |
+  | `focus_window` | 2 | 2026-08-03 (D42) | **not through a brain** — backend driven by hand 2026-08-03: a real window raised and confirmed in front |
+  | `media_control` | 2 | 2026-08-03 (D42) | **not through a brain** — backend driven by hand 2026-08-03: a net-zero volume down/up pair sent |
 
   *Update the right-hand column when a tool has been invoked by the brain, in a real turn, several
   times without misfiring — that is the column the rule exists for.*
-- **Not built:** Tier 2 (`open_app` · `focus_window` · `media_control` · `set_timer` — need backends
-  plus the announce earcon) and Tier 3 (propose-then-tap confirmation, D26, on the Teleprompter). No
-  raw shell below Tier 3 (spec/30 rule 1).
+- **DONE 2026-08-03 (D42) — Tier 2 is on: `open_app` · `focus_window` · `media_control`.** Full
+  account in spec/00 D42; the trust boundary for acting tools is spec/30 § The executor. `MAX_TIER`
+  is 2, the announce earcon fires from `_run_tool_seen`, and `apps_media` is a live connector card
+  (off by default, like every connector but System). Four things worth not relearning:
+  - **The Start Menu FOLDERS are not the app list.** The first cut walked `%ProgramData%` and
+    `%APPDATA%` for `.lnk` files and could not find Notepad, Calculator, Terminal or any Store app
+    — 110 shortcuts on disk against the **139** Windows itself reports. `Get-StartApps` gives the
+    real list (~0.7 s, uncached) and `shell:AppsFolder\<AppID>` launches classic and Store apps
+    alike; the AppsFolder launch is **verified live** (Calculator opened and closed again).
+  - **A fuzzy suggestion list needs a strict cutoff.** At difflib's 0.5, asking for an app this PC
+    does not have answered *"the closest are: ReadMe, Camera"* (measured, for "chrome") — three
+    confident wrong answers read worse than an honest bare no. 0.6 drops them and still gets
+    `spotifi` → Spotify.
+  - **`SetForegroundWindow` silently does nothing** from a process that does not already own the
+    foreground, which the daemon never does. `_to_foreground` attaches our input thread to the
+    foreground window's thread and detaches immediately, then **verifies** with
+    `GetForegroundWindow` — the alternative workaround (a synthetic ALT keypress) lands in whatever
+    app is in front and can pop its menu bar. **Proven live 2026-08-03**: a real Calculator window
+    raised and confirmed in front.
+  - **The announce obeys `pings`.** Deliberate, and it leaves a hole: pings off + the tool indicator
+    unbuilt = a Tier-2 action with no cue at all. Recorded rather than patched, because the fix is
+    the indicator (parked, Config & routing), not a sound that ignores a user's quiet mode.
+  - [ ] **Owed — none of the three has run through a BRAIN.** All three backends were driven by
+    hand on the box on 2026-08-03 and all three worked (Calculator opened, then raised; a
+    volume down/up pair sent; a miss and a bad action both answering in prose). The selfcheck
+    stubs them, because a check that really opens an app and moves a window is not one you want in
+    CI. What has never happened is a *model* deciding to call one — that is the ledger's column
+    below, and it is the only thing still missing.
+  - [ ] **Owed — `set_timer` needs a Contract P surface.** Deferred at design time (Thomas): a timer
+    FIRES outside any turn and no `status.json` message can carry that — the same gap as D20's two
+    owed surfaces. It stays in the registry with no backend, so it is never offered and is refused
+    if called. Sound-only was rejected: with pings off it would be silent AND invisible.
+- **Not built:** Tier 3 (propose-then-tap confirmation, D26, on the Teleprompter). No raw shell
+  below Tier 3 (spec/30 rule 1).
 - **Fixed (D36, 2026-07-30) — a rejected tool call now retries.** `search_email`'s first live outing
   narrated "Something went wrong on my end"; the tool never ran. groq/llama-3.3-70b glued the
   arguments onto `function.name` and Groq rejected it server-side. **Measured: ~1 round in 3 fails
@@ -757,12 +938,15 @@ recorded in spec/00 §D25 and `spec/schemas/targets.json`).
     nothing proves `_turn` still attaches it, because `_turn` has no offline harness (it wants a
     fake brain, broadcaster and router). Same shape as D37's prompt-side check.
 - **In flight:** —
-- **Next:** ① D38's design pass (item 9) — the connector cards and the tool-activity indicator;
-  Thomas's, and the indicator is what makes the `tool` message visible at all. ② live-verify a tool
-  turn end to end (Claude asks `system_status`, then answers) **with a connector switched off too**,
-  so the "file search is off" answer is seen rather than assumed: `search_email` has been driven by
-  a brain (D36) but the ledger's column is otherwise still empty. ③ `search_email` against a
-  complete mailbox — see the retrieval note below. Tier 2 backends when a tool is genuinely wanted.
+- **Next:** ① **live-verify the Tier-2 three** — say "open Notepad", hear the announce, see it
+  open; then a window raise, which is the one with a real chance of failing (the foreground lock).
+  Switch `apps_media` on first: it is off by default. ② D38's design pass (item 9) — the connector
+  cards and the tool-activity indicator; Thomas's, and the indicator is what makes the `tool`
+  message visible at all, and what closes D42's pings-off hole. ③ live-verify a Tier-1 tool turn end
+  to end (Claude asks `system_status`, then answers) **with a connector switched off too**, so the
+  "file search is off" answer is seen rather than assumed. ④ `search_email` against a complete
+  mailbox — see the retrieval note below. Tier 3 (D26) is the next tier, and needs the overlay
+  confirmation before any backend.
 - **Blocked, not broken — `search_email` retrieval (2026-07-31).** Repeated live searches return
   nothing, and the cause is **not** the tool: it queries `\\<account>\Inbox` correctly and returns
   hits for terms that are present (verified against "Amazon"). Classic Outlook has downloaded only
@@ -786,8 +970,14 @@ recorded in spec/00 §D25 and `spec/schemas/targets.json`).
   reachability as schema truth) · **D31** (the Tier-1 tool executor and the brain's tool loop) ·
   **D32** (Gem the mascot, first surfaces) · **D33** (the per-role router v1) · **D34** (the model
   + token footer) · **D35** (sprite kit v3) · **D36** (a rejected tool call retries) · **D37**
-  (spoken formatting commands) · **D38** (connectors). Schemas current: `status.json` v0.6.0 ·
-  `settings.json` v0.3.0 · `tools.json` v0.3.0 · `earcons.json` v0.4.0 · `targets.json` v1.0.0.
+  (spoken formatting commands) · **D38** (connectors) · **D39** (one app, lifetimes tied) · **D40**
+  (the settings window re-cut) · **D41** (the boot island) · **D42** (Tier 2 turns on) · **D43**
+  (two dwells). Schemas
+  current: `status.json` v0.8.0 · `settings.json` v0.3.0 · `tools.json` v0.4.0 ·
+  `app_aliases.json` v0.1.0 · `earcons.json` v0.4.0 · `targets.json` v1.0.0.
+  *(D42 bumped `tools.json` because two tools' model-facing descriptions changed; `settings.json`
+  did NOT — a connector's `built` flag flipping is a value edit inside an existing entry, the same
+  as the Engine card on 2026-07-28.)*
 - **Reconciled 2026-07-28** (a sweep against what had actually shipped): **spec/00 D32** corrected
   on two points the tray had outgrown — the theme source is `SystemUsesLightTheme` (the taskbar),
   not the app setting, and idle no longer rests on a single frame; both carry an inline amendment

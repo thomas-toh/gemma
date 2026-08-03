@@ -213,10 +213,26 @@ Window {
     // to remove, and it would be longest exactly when the daemon is wedged.
     readonly property bool showing: !hidden && (busy || bodyText !== "" || pasted)
 
+    // How long finished text stays put, in milliseconds, read off the user's own choice
+    // (General > Preferences, D43). The setting is a WORD like "2.5 s" rather than a number: a
+    // dropdown of sensible durations needs no new control and cannot be set to zero. `parseFloat`
+    // reads the number off the front and stops at the space; anything unparseable falls back to
+    // the Theme constant, which is also the shipped default — so a hand-broken setting looks
+    // exactly like an untouched one instead of freezing the island on screen.
+    function dwellMs(choice, fallback) {
+        var s = parseFloat(choice)
+        return (isFinite(s) && s > 0) ? Math.round(s * 1000) : fallback
+    }
+
     Timer {                                   // the answer's dwell — the walked-away backstop
         id: answerDwell
         objectName: "answerDwell"             // reached by name from the self-check
-        interval: Theme.durationAnswerDwell
+        // A turn that ACTED has nothing to read — you watched it happen — so it goes quickly.
+        // A turn that ANSWERED stays long enough to walk back to the desk. The daemon decides
+        // which; the two durations are the user's.
+        interval: overlay.dwell === "quick"
+                  ? root.dwellMs(cfg.values.dwell_quick, Theme.durationActionDwell)
+                  : root.dwellMs(cfg.values.dwell_slow, Theme.durationAnswerDwell)
         // Restarts on every newly revealed word, so the count only ever runs from the moment
         // the last of the text actually appeared.
         running: !root.busy && !root.hidden && root.bodyText !== "" && root.revealDone && !root.peeking
