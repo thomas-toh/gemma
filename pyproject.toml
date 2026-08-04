@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "gemma-bridge"
 version = "0.0.0"
-description = "The Gemma daemon: audio pipeline, orchestrator, and swappable LLM brains for a UI-first desk voice assistant. See spec/ and docs/04."
+description = "The Gemma daemon: audio pipeline, orchestrator, and swappable LLM llm for a UI-first desk voice assistant. See spec/ and docs/04."
 requires-python = ">=3.12"
 # ponytail: only what the code imports today. TTS deps land when step 4 (docs/04
 # §8) needs them, not speculatively.
@@ -24,7 +24,7 @@ dependencies = [
     "openwakeword",
     "onnxruntime",
     # step 3: STT. VAD needs no new dep -- we run the Silero VAD ONNX model that
-    # openWakeWord already ships, via onnxruntime (no torch; see bridge/audio/listen.py).
+    # openWakeWord already ships, via onnxruntime (no torch; see backend/audio/listen.py).
     "faster-whisper",
     # step 4: TTS out. Kokoro on onnxruntime (no torch); espeakng-loader (pulled in)
     # bundles the espeak-ng phonemiser, so no manual install. Earcons need no dep.
@@ -33,7 +33,7 @@ dependencies = [
     # carries the answer, and D20's propose-then-tap has nowhere to render without it.
     # Needs Windows Long Paths enabled; Qt's QML module trees nest past 260 chars and the
     # install otherwise HALF-COMPLETES SILENTLY (import works, QtQuick is missing). See
-    # teleprompter/__main__.py, which checks for that at startup and says so loudly.
+    # frontend/__main__.py, which checks for that at startup and says so loudly.
     "PySide6",
 ]
 
@@ -44,15 +44,16 @@ dependencies = [
 gpu-cuda = ["nvidia-cublas-cu12", "nvidia-cudnn-cu12", "nvidia-cuda-runtime-cu12"]
 
 [tool.setuptools]
-packages = ["bridge", "teleprompter"]
+packages = ["backend", "frontend", "shared"]
 
 # The QML, its qmldir, the bundled font, and the peek action icons are loaded from disk relative
 # to the package, so a non-editable install has to carry them too. `qmldir` has no extension, so
-# the *.qml glob misses it — without it, `import teleprompter` (the Theme singleton) dies with
+# the *.qml glob misses it — without it, `import frontend` (the Theme singleton) dies with
 # "module not installed" off an editable install. CI's `pip install -e .` masks it, so name each
 # explicitly (D27 added icons/, PeekPanel.qml is covered by *.qml).
 # `fonts/*.txt` + `fonts/*.md` are the font licences, not documentation: OFL 1.1 and Apache 2.0
 # both require the licence to travel with the font, so a wheel that carried the .ttf without them
-# would be the distribution that breaches. See teleprompter/fonts/ATTRIBUTION.md.
+# would be the distribution that breaches. See frontend/fonts/ATTRIBUTION.md.
 [tool.setuptools.package-data]
-teleprompter = ["*.qml", "qmldir", "fonts/*.ttf", "fonts/*.txt", "fonts/*.md", "icons/*.svg"]
+frontend = ["*.qml", "qmldir", "fonts/*.ttf", "fonts/*.txt", "fonts/*.md", "icons/*.svg"]
+shared = ["schemas/*.json"]

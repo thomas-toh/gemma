@@ -16,7 +16,7 @@ dist/
 
 # Replay fixtures are Thomas's voice — kept out of the (private) remote by choice;
 # copied to the Mac clone by hand. cases.json (text) IS committed.
-tests/replay/wav/
+eval/replay/wav/
 
 # Scratch space for throwaway mockups/experiments — never committed.
 sandbox/
@@ -27,3 +27,6 @@ _to_delete/
 
 # Local logs (spec/50: transcripts land here; delete the folder to purge in one action)
 logs/
+
+# Archived documents
+spec/docs/archived/

@@ -43,8 +43,8 @@ _POLITE = getattr(signal, "CTRL_BREAK_EVENT", signal.SIGTERM)
 GRACE_S = 8.0            # generous: the daemon may be waiting on a local server to stop
 
 CHILDREN = {
-    "daemon": [sys.executable, "-m", "bridge.orchestrator"],   # voice loop + Contract P feed
-    "overlay": [sys.executable, "-m", "teleprompter"],         # subscribes to the feed
+    "daemon": [sys.executable, "-m", "backend.orchestrator"],   # voice loop + Contract P feed
+    "overlay": [sys.executable, "-m", "frontend"],         # subscribes to the feed
 }
 
 
