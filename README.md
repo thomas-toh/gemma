@@ -9,7 +9,7 @@ faster-whisper uses CUDA).
 TTS is currently handled by Kokoro and not satisfactory, so I've made it **off** by default.
 It can be turned on in the settings panel. 
 
-# Repo breakdown
+## Repo breakdown
 
 _tbc_
 
@@ -18,9 +18,7 @@ _tbc_
 You'd need `Python 3.12+`. I recommended that you use an isolated environment (`.venv`) so
 installs do not touch the system Python.
 
-### First time: 
-
-First, **enable Long Paths first**, because PySide6 (which drives the UI) nests QML module
+First, **enable `Long Paths`**, because PySide6 (which drives the UI) nests QML module
 trees exceeding 260 characters. The install currently silently fails without it. After install,
 run `python -m teleprompter` to check for this at startup.
 
