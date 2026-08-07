@@ -131,18 +131,32 @@ history.
 - Diagnosing this needed the daemon's console, which at the time went only to stderr — in a
   Claude Code background-task file nobody would ever find. Hence `logs/gemma.log`.
 
-## Font tooling (2026-08-01)
+## Font tooling (2026-08-01, revised 2026-08-07)
 
-Swapping the icon font needed `fonttools` (+ `brotli`), installed into the system Python by hand.
-They are **build-time only** and deliberately NOT in `pyproject.toml` — nothing at runtime reads
-a font's tables; the app just loads the .ttf. Reach for them again only when the bundled font
-changes, e.g.:
+Swapping the icon font used to need `fonttools` (+ `brotli`) to dump a `.ttf`'s cmap. Lucide ships
+its own name→codepoint map, so nothing needs to read the font's tables and neither library should
+go back into `pyproject.toml`:
 
-    python -c "from fontTools.ttLib import TTFont; \
-      print({n: hex(c) for c, n in TTFont('teleprompter/fonts/MaterialSymbolsOutlined.ttf').getBestCmap().items()})"
+    npm pack lucide-static     # package/font/{lucide.ttf,codepoints.json} + package/LICENSE
 
-**The trap that cost time:** Material *Symbols* and the older Material *Icons* map the same glyph
-NAMES to different codepoints (`check` E5CA vs E668, `close` E14C vs E5CD, `edit` E150 vs F097,
-`cloud` E2BD vs F15C). The bundled subset came from the older mapping, so swapping in the full
-Symbols font meant re-mapping every existing glyph, not just adding new ones — otherwise
-known-good icons silently become different pictures rather than failing.
+**The trap that cost time, twice:** icon fonts map the same glyph NAMES to different codepoints.
+Material *Symbols* and the older Material *Icons* disagreed (`check` E5CA vs E668, `close` E14C vs
+E5CD); Lucide shares nothing with either. Swapping the font means re-mapping every existing glyph,
+not just adding the new ones, or known-good icons silently become different pictures rather than
+failing. Checked rather than remembered since the Lucide swap: `settings_check` asserts every
+codepoint in `Theme.ico` resolves to a real glyph.
+
+## Gem sprite kit — the v2.3 export (2026-08-07)
+
+Design's v2.3 changes exactly one state: `working` goes from `typing` / `laptop-open` /
+`laptop-close` to `typewriter` / `typewriter-in` / `typewriter-out`. The other eight states are
+frame-identical to the previous export, verified by comparing the frame data rather than trusted,
+so the swap is the four asset files plus the clip names in `gem.py`'s self-check. The base loop
+grew 32 → 70 frames, which widens the atlas to 70 columns; nothing reads that (the app paints from
+the JSON's palette-indexed grid, and the PNGs are reference art).
+
+`look-around` and `jump` are **muted** in the idle rotation (Thomas) — the first a filler, the
+second a gag, so one skip list covers both tiers. It lives in `gem.py`'s `MUTED` rather than in
+the kit, on the basis that Design's next export overwrites `gem-sprites.json`. `gem.gem` asserts
+neither fires across ~74 minutes of simulated idle, which is what catches an export putting them
+back.

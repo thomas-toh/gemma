@@ -18,15 +18,15 @@ in sync — see **Regenerating** at the end.
 > ### Gemma runs the 26 × 26 build (Option B)
 >
 > The files here are Design's `26/` export, not the 32 one this README describes.
-> Same 462 frames, same clip and state names, same script, same palette — the
+> Same 497 frames, same clip and state names, same script, same palette — the
 > cell is cropped tighter, so Gem is 54 % of the icon width instead of 44 % and
 > renders 1.23× larger at a given box. Read the size figures below as:
 >
 > | this README says | Gemma ships |
 > | --- | --- |
 > | cell 32 × 32 | **26 × 26** |
-> | atlas 1344 × 768 | **1092 × 624** |
-> | 4× atlas 5376 × 3072 | **4368 × 2496** |
+> | atlas 2240 × 768 | **1820 × 624** |
+> | 4× atlas 8960 × 3072 | **7280 × 2496** |
 > | integer scales 32 / 64 / 96 | **26 / 52 / 78** |
 > | `anchor` x6 y6 w20 h20 | **x0 y0 w26 h26** (the cell is its own tight box) |
 > | `body` x9 y11, eyeCols 12–13 / 18–19 | **x6 y6, eyeCols 8–9 / 15–16** |
@@ -38,6 +38,15 @@ in sync — see **Regenerating** at the end.
 > `frontend/gem.py` is this app's renderer (Qt, no Pillow) and ports the
 > two-tier script from them. §7's `recrop_26.py` is superseded by Design's own
 > `26/` export and has been removed.
+>
+> **Gemma mutes two idle fidgets** (Thomas): `look-around` (a filler) and `jump`
+> (a gag) never fire. The frames and their script weights still ship here — the
+> skip lives in `gem.py`'s `MUTED`, because the next export overwrites this
+> folder. Read §3's tables as five gags and one filler.
+>
+> **`working` is the typewriter** as of v2.3, replacing the laptop:
+> `typewriter` / `typewriter-in` / `typewriter-out`. Nothing else moved — the
+> other eight states are frame-identical to the previous kit.
 
 ---
 
@@ -46,15 +55,15 @@ in sync — see **Regenerating** at the end.
 | file | purpose |
 | --- | --- |
 | `gem-sprites.json` | **Source of truth.** All states, clips, frames, timing, palette. |
-| `gem-atlas.png` | 1344 × 768 colour atlas. 32 px cells, one row per clip. |
-| `gem-atlas-4x.png` | Same atlas at 4× (5376 × 3072), for docs and store art. |
+| `gem-atlas.png` | 2240 × 768 colour atlas. 32 px cells, one row per clip. |
+| `gem-atlas-4x.png` | Same atlas at 4× (8960 × 3072), for docs and store art. |
 | `gem-tray-template.png` | Monochrome template: white body, eyes punched to transparent. |
 | `gem_sprites.py` | Pillow loader + `GemPlayer` + a commented pystray tray loop. |
 | `gem_sprites.rs` | Rust port; embeds the JSON with `include_str!`. |
 | `v2-archive/` | The previous version, for rollback and diffing. |
 | `HANDOFF-recrop-26.md`, `recrop_26.py` | Optional 26 × 26 recrop — **not applied**, see §7. |
 
-**462 frames across 24 clips in 9 states.**
+**497 frames across 24 clips in 9 states.**
 
 ---
 
@@ -67,7 +76,7 @@ or is a hold the app triggers by name.
 | state | base | enter → exit | fires from the script | true when |
 | --- | --- | --- | --- | --- |
 | `idle` | `rest` | — | filler + 6 gags, see §3 | nothing asked of her |
-| `working` | `typing` (32f) | `laptop-open` → `laptop-close` | — | executing on the machine |
+| `working` | `typewriter` (70f) | `typewriter-in` → `typewriter-out` | — | executing on the machine |
 | `thinking` | `orbit` (40f) | — | — | planning, no tool running |
 | `listening` | `listen` (42f) | — | `misheard` *(hold)* | mic open, capturing |
 | `speaking` | `speak` (42f) | — | — | TTS playing |
@@ -147,7 +156,7 @@ performs constantly. **Use the loaders in this folder.**
   "anchor": { "x":6, "y":6, "w":20, "h":20 },   // tight box, for legacy crops
   "body":   { "x":9, "y":11, "w":14, "h":13, "eyeCols":[12,18], "eyeRows":[16,17] },
   "palette": { "1": { "role":"body", "light":"#1B1714", "dark":"#FBF9F5", "use":"…" }, … },
-  "atlas":   { "file":"gem-atlas.png", "cell":32, "columns":42, "rows":24, "order":[…] },
+  "atlas":   { "file":"gem-atlas.png", "cell":32, "columns":70, "rows":24, "order":[…] },
   "states": {
     "idle": {
       "fps": 9, "base": "rest", "enter": null, "exit": null,
@@ -221,7 +230,7 @@ Nearest-neighbour resampling, never smooth.
 ### Rules that keep it coherent
 
 - One state at a time. Props and badges never stack.
-- Purple (`3`) is system surfaces — the laptop, the permission lock, activity.
+- Purple (`3`) is system surfaces — the typewriter, the permission lock, activity.
   Orange (`4`) is what Gem holds or emits. Do not swap their jobs.
 - Shade (`6`) is local depth on the body only; it is not an outline colour.
 - Holds (`sparkle`, `fail`, `misheard`) must be released by the app — either
@@ -244,7 +253,7 @@ while True:
     icon.icon = gem.image(palette=TRAY_DARK)   # PIL.Image, RGBA
     time.sleep(gem.tick())                     # advances; returns seconds
 
-gem.set_state("working")     # plays laptop-open, then typing
+gem.set_state("working")     # plays typewriter-in, then typewriter
 gem.hold("misheard")         # freezes until the next set_state / release()
 kit.frame("idle", "guitar", 4, scale=4)        # a single frame, no player
 kit.gif("idle", "disguise", "docs/disguise.gif", scale=4)

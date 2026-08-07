@@ -1,6 +1,6 @@
 # Chapter 1 - Introduction and Overview
 
-**Last reconciled: 2026-08-03** · Build progress: [STATE.md](../STATE.md) · Decisions record: [docs/02](../docs/02_architecture/02_system_architecture.md)
+**Last reconciled: 2026-08-07 02:04** · Build progress: [STATE.md](../STATE.md) · Decisions record: [docs/02](../docs/02_architecture/02_system_architecture.md)
 
 ## Introduction
 
@@ -689,7 +689,7 @@ answer and read the footer.
 
 **D35 (2026-07-29): the Gem sprite kit goes to v3 — Gem gains behaviour; the tray gets a mic ring
 instead.** Design shipped two kits in a day (v2, then v2.2/v3), and neither is drop-in over v1: the
-cell grew from 20px (props can now leave the body — a guitar, a phone, a laptop), a state is no
+cell grew from 20px (props can now leave the body — a guitar, a phone, a typewriter), a state is no
 longer a flat frame list but a set of named **clips** with policies (`loop` / `oneshot` / `hold`),
 and the kit carries its own **timing script**. `idle/rest` is a single frame, so the character is
 now the script's, not the app's. Landed as one decision because none of it shipped separately.
@@ -751,7 +751,7 @@ now the script's, not the app's. Landed as one decision because none of it shipp
   *shrunk* the icon by a fifth. No other call site assumed a cell size.
 
 - **Gem mimes the turn, off the island's typewriter.** The settings Gem was mic-on/mic-off; she now
-  runs `listening` → `working` (composing — the laptop, Thomas's pick over `thinking`/orbit) →
+  runs `listening` → `working` (composing — the typewriter, Thomas's pick over `thinking`/orbit) →
   `speaking` (the answer landing) → `done` → `idle`. Two things make this less obvious than it
   looks. First, **`speaking` cannot come from the feed**: the orchestrator only publishes that state
   when TTS actually plays, and TTS is off by default (D23), so the reply streams in while the state
@@ -768,7 +768,7 @@ now the script's, not the app's. Landed as one decision because none of it shipp
   hand. Two ordering bugs were found by walking it rather than reading it: `gemState` reported the
   player's *current* state, so a QML Binding re-requesting during an exit clip restarted that clip
   forever (it now reports the REQUEST); and a ladder built from several derived booleans could see
-  them disagree for one evaluation and drop through a lower rung, flashing the laptop between the
+  them disagree for one evaluation and drop through a lower rung, flashing the typewriter between the
   answer and the sparkle — it is one expression now.
 
 - **Gem joins the island, behind a switch.** The island is the app's professional face, so a mascot
@@ -921,6 +921,16 @@ not an architecture one. Merging would have paid for it with the three things D1
   - **The model loads from disk first** (`local_files_only`), falling back to a networked load if it
     genuinely isn't cached. Every start had been asking huggingface.co for the revision of a model
     already present — an internet dependency at launch.
+  - **Amended 2026-08-04 — a third tier, after the doors open: the local models' weights.** Starting
+    a local runner is not loading a model, so the first local turn still paid ~9 s of VRAM load
+    while every later round took ~1 s. Warm-up now sends one throwaway one-token request to each
+    LOCAL model a role is pointed at, which is the only portable way to say "load" — no
+    OpenAI-compatible runner exposes a load verb. It runs **after `_ready` is set**, not inside the
+    warm-up block: holding the doors for it would trade a slow first answer for a *dropped* first
+    press (D41). Cloud models are skipped — they have no weights to pull, so a request there would
+    spend metered quota to save nothing. Every role's local model, not just the assistant, so that
+    two roles on different models of one runner collide visibly at boot rather than silently
+    mid-dictation.
 - **Superseded here:** the old ordering comment in `run()` ("after warm-up, so a press during the
   22 s model load cannot queue a turn"). That tradeoff is gone: the doors open early on purpose, and
   the lock — not a closed door — is what keeps an early press safe.
@@ -966,13 +976,17 @@ times, and matching it is the point rather than a failure of nerve.
   `Theme.fontMono` stays declared for a caller that earns it; nothing references it. The dropdown
   loses its `mono` variant with it, so there is one class and no size for a call site to pick.
 - **The icon font is bundled WHOLE, not subset** (Thomas, 2026-08-01). The old 14-glyph subset was
-  the binding constraint on this design — no search, no mic, no iOS chevron, and nothing meaning
+  the binding constraint on this design — no search, no mic, no chevron, and nothing meaning
   "files" or "mail", so the first cut shipped a hand-drawn mic and no nav icons at all. The full
-  file costs ~10 MB and removes the class of problem: an icon is one line in `ico` and nothing
-  else. **Its codepoints are the Material Symbols mapping, which differs from the older Material
-  Icons one the subset used** (`check` E5CA not E668, `close` E14C not E5CD, `edit` E150 not
-  F097) — every existing glyph had to be re-mapped when the file was swapped, not just the new
-  ones, or known-good icons would have silently become different pictures.
+  file removes the class of problem: an icon is one line in the map and nothing else.
+- **The pack is Lucide** (Thomas, 2026-08-07, replacing Material Symbols). One map, `Theme.ico`,
+  serves the settings window and the island's peek, so an icon cannot differ between the two; the
+  app's last SVG icons went with the swap, leaving only the project's own mark. Lucide is a static
+  font, so stroke weight stops being a dial and the size tokens are the only one. It also draws to
+  the edge of its 24 grid where Material Symbols sat inside a padded box, so `Theme.iconInk` holds
+  the ink a notch inside the layout box and every existing alignment survives untouched. The two
+  mappings share no codepoints, so `settings_check` asserts every one resolves to a real glyph
+  rather than trusting the eye to spot an empty box.
 - **Effort stays DOTS** (D29's `EffortDots`, recovered rather than rewritten). A word-segmented
   control was tried and rejected: the five steps are a magnitude, and a cluster that grows says
   that where five words do not. It shares one cell size with the theme picker, so both sit in the

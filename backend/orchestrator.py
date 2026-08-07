@@ -926,6 +926,57 @@ class Orchestrator:
             self._cleanup_sig = sig
         return self._cleanup
 
+    def _preload_local_models(self) -> None:
+        """Ask every LOCAL model a role points at to load its weights, so the first turn doesn't.
+
+        `_start_local_servers()` starts the RUNNER; it does not load a model. Measured 2026-08-03:
+        the first local turn then waits ~9 s while Ollama pulls the weights into VRAM, and every
+        round after it is ~1 s. One tiny generation is the portable way to say "load" — every
+        OpenAI-compatible runner loads on demand and none of them exposes a `/load` verb through
+        `/v1`, so the request IS the instruction.
+
+        EVERY role's local model, not just the assistant (Thomas, 2026-08-04). Two roles on
+        different models of one runner make it swap them on each switch, and warming both puts
+        that collision HERE, in the log, at boot — instead of mid-dictation, where it is invisible
+        and merely reads as "cleanup is slow today".
+
+        Local only, and for the same reason `_warn_missing_models` is: a cloud model has no weights
+        to pull, so a round here would spend real quota to save nothing.
+        """
+        # The role's CACHED builder where one exists, so the adapter warmed is the adapter the
+        # turn will use — its connection pool included (spec/20 adapter lifetime). A role without
+        # one gets a throwaway; it still warms the runner, which is where the 9 s actually lives.
+        builders = {"assistant": self._assistant_model, "cleanup_dictation": self._cleanup_model}
+        seen: set[tuple[str, str]] = set()
+        for role in ("assistant", "cleanup_dictation", "cleanup_prompts"):
+            cfg = router.resolve(role)
+            if not cfg or not cfg.get("model"):
+                continue
+            pid, model_id = cfg["provider"], cfg["model"]
+            if card(pid).get("where") != "local" or (pid, model_id) in seen:
+                continue
+            seen.add((pid, model_id))
+            try:
+                build = builders.get(role)
+                model = build() if build else router.build_for_role(role)
+                if model is None:
+                    continue
+                t0 = time.perf_counter()
+                # Through `transform`, not `converse`: it already pins temperature 0, no tools, no
+                # history and — the part that matters here — NEVER reasons, so a thinking model
+                # cannot spend a minute deliberating over a warm-up ping. One token is plenty; the
+                # load happens before a single one is produced.
+                _text, err = self._run_async(
+                    transform(model, "ping", "Reply with the word ok.", max_tokens=1))
+                took = time.perf_counter() - t0
+                if err:
+                    log.warning("preload: %s %s did not answer (%s) after %.1f s — it will load "
+                                "on first use", pid, model_id, err.kind, took)
+                else:
+                    log.info("preload: %s %s warm in %.1f s", pid, model_id, took)
+            except Exception:       # a warm-up nicety must never be able to take the daemon down
+                log.exception("preload: %s %s failed — it will load on first use", pid, model_id)
+
     def _dictate(self, audio) -> None:
         """A dictation turn (spec/60): transcribe → clean up → paste at the caret. No model
         answer and no follow-up chain — the key was the endpoint and the text goes to whatever
@@ -1096,6 +1147,12 @@ class Orchestrator:
                 # turn's `listening` can never be clobbered by this idle (it runs after ready is set).
                 self._publish_state("idle")
                 self._ready = True
+            # AFTER the doors open, deliberately, and outside the try/finally above so it can
+            # never delay them: pulling weights into VRAM takes ~9 s per model, and holding
+            # `_ready` for that would trade a slow first answer for a DROPPED first press (D41).
+            # The cost of running late is only that a press in the first few seconds waits for
+            # the same load it would have waited for anyway.
+            self._preload_local_models()
 
         threading.Thread(target=_warm, name="warm-up", daemon=True).start()
 
@@ -1630,12 +1687,66 @@ def _selfcheck() -> None:
         assert _o._persona() == DEFAULT_SYSTEM, "a cleared profile must restore the plain voice"
     os.environ.pop("GEMMA_SETTINGS", None)
 
+    # --- the boot preload (ROADMAP, 2026-08-04): local weights are pulled into VRAM at start-up,
+    # not on the first turn. Three things worth guarding, each cheap to get wrong and expensive
+    # to notice.
+    with _tf.TemporaryDirectory() as _tmp:
+        os.environ["GEMMA_SETTINGS"] = str(_P(_tmp) / "settings.json")
+
+        class _Warmed:
+            """Records what a preload asked of it. Injected as the ASSISTANT adapter, which
+            `_assistant_model()` hands back unchanged."""
+
+            def __init__(self, boom: bool = False):
+                self.seen: list[tuple] = []
+                self.boom = boom
+
+            async def converse(self, session, utterance, tools):
+                self.seen.append((session.max_tokens, tools, session.thinking))
+                if self.boom:
+                    raise RuntimeError("the runner refused")
+                yield TextDelta("ok")
+                yield Done()
+
+        # One provider and one model behind BOTH roles: the runner has a single set of weights to
+        # load, so it must be asked once. Pinging per role would load nothing extra and, on a
+        # runner that swaps models, would start the very thrash this exists to reveal.
+        _st.set("models", {"ollama": {"on": True, "model": "qwen3.5:9b",
+                                      "endpoint": "127.0.0.1:11434"}})
+        _st.set("primary", "ollama")
+        _st.set("cleanup_dictation", "ollama")
+        _w = _Warmed()
+        Orchestrator(adapter=_w, broadcaster=_Rec())._preload_local_models()
+        assert len(_w.seen) == 1, \
+            f"one model behind two roles must be preloaded ONCE, not per role: {len(_w.seen)}"
+        _tokens, _tools, _thinking = _w.seen[0]
+        assert _tokens == 1 and _tools == [] and _thinking is False, \
+            f"a preload is one token, no tools and no reasoning — it loads weights: {_w.seen[0]}"
+
+        # A CLOUD model has no weights to pull, so a ping there spends metered quota to save
+        # nothing. This is the assertion that costs real money the day it stops holding.
+        _st.set("models", {"groq": {"on": True, "model": "llama-3.3-70b-versatile"}})
+        _st.set("primary", "groq")
+        _st.set("cleanup_dictation", "groq")
+        _w2 = _Warmed()
+        Orchestrator(adapter=_w2, broadcaster=_Rec())._preload_local_models()
+        assert _w2.seen == [], "a cloud model must never be preloaded — that is billed quota"
+
+        # ...and a runner that refuses is a warm-up nicety failing, never a boot failing: the
+        # weights simply load on the first turn, exactly as they did before this existed.
+        _st.set("models", {"ollama": {"on": True, "model": "m", "endpoint": "127.0.0.1:11434"}})
+        _st.set("primary", "ollama")
+        _st.set("cleanup_dictation", "")
+        Orchestrator(adapter=_Warmed(boom=True), broadcaster=_Rec())._preload_local_models()
+    os.environ.pop("GEMMA_SETTINGS", None)
+
     print("selfcheck OK: speak/hold split, capture endpoint, barge-in counter, error lines, "
           "latency table + targets, feedback credits the screen (D25), pings toggle gates earcons, "
           "Tier 2 announces and Tier 1 stays silent (spec/30), "
           "dictation dispatch + cleanup-fallback-to-raw + the tidy toggle (spec/60), "
           "the persona names switched-off connectors (D38) and carries the user's profile, "
-          "D37 list commands declared in the cleanup prompt")
+          "D37 list commands declared in the cleanup prompt, "
+          "the boot preload warms local weights once per model and never a cloud one")
 
 
 def _catch_polite_stop() -> None:

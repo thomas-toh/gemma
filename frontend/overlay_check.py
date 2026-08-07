@@ -595,7 +595,7 @@ def main() -> int:
         f"pasted should show 'Pasted', got {status.property('text')!r}"
     mark = win.findChild(QObject, "pasteMark")
     assert mark is not None and mark.property("visible"), \
-        "the pasted state must show its Material Symbols check"
+        "the pasted state must show its Lucide check"
     assert paste_dwell.property("running"), "the paste dwell must be counting down"
     model.apply({"type": "state", "state": "idle"})            # daemon done — island stays for the beat
     _pump(app, 40)

@@ -8,7 +8,7 @@ start, update it in the same commit as the work · when a step closes, collapse 
 entry to one or two lines — durable knowledge moves out (behaviour → spec · run
 instructions → README · findings → NOTES.md · decisions → a D-number in spec/00).
 
-Last updated: 2026-08-03
+Last updated: 2026-08-04 02:35
 
 ## Handoff — start here (2026-07-28)
 
@@ -24,6 +24,10 @@ quality it stood for is real and now has its own section — **Config & routing*
 [ROADMAP.md](ROADMAP.md) → *The plan for the router* — measure the premise · latency suite ·
 task routing · skills (design session first) · the round-2 skip last. The router is an umbrella
 over three subsystems; the breakdown is in spec/20 § Routing.
+**Where it stands 2026-08-04:** phase 0 skipped, phase 1 (`eval/latency.py`) BUILT but **never
+run** — so phase 2 is still gated on numbers that do not exist yet, and running the sweep is
+Thomas's call because it costs time locally and metered tokens on a cloud key. The boot preload
+(an independent Stage 1 item) was built instead; see Track G.
 
 **Build sequence (Thomas) — do in this order:**
 1. **Config & routing** — the router v1 landed (D33); what remains is the settings window being
@@ -370,6 +374,24 @@ recorded in spec/00 §D25 and `spec/schemas/targets.json`).
   wake model, VAD, whisper and Kokoro are all blocking C calls, so an async `serve()` would starve
   the loop unless every one moved to an executor. Cross-platform per D10. Run instructions:
   `README.md` · GPU setup, benchmarks, quirks: `NOTES.md`.
+- **DONE 2026-08-04 — the boot preload: local weights are pulled at start-up, not on the first
+  turn.** `_preload_local_models()` sends one throwaway one-token `transform` to every LOCAL model a
+  role names, deduped by (provider, model). Amends D39 in spec/00 (a third warm-up tier). Four
+  things worth not relearning:
+  - **It runs AFTER `_ready` is set, outside `_warm`'s try/finally.** Inside it, the ~9 s per model
+    would be added to the window in which D41 DROPS every door press — a slow first answer traded
+    for no first answer. Running late costs nothing: a press in those seconds waits for the same
+    load it would have waited for anyway.
+  - **Through `transform`, not `converse`** — the verb already pins temperature 0, no tools, no
+    history and, the part that matters, **never reasons**, so a thinking model cannot spend a
+    minute deliberating over a warm-up ping.
+  - **Cloud is skipped**, same rule as `_warn_missing_models`: no weights to pull, and the request
+    would be billed. The selfcheck asserts this — it is the one that costs money when it breaks.
+  - **The role's CACHED builder is used where one exists** (`_assistant_model` / `_cleanup_model`),
+    so the adapter warmed is the adapter the turn uses, connection pool included. A role without
+    one (`cleanup_prompts`) gets a throwaway, which still warms the runner — where the 9 s lives.
+  - [ ] **Owed — unseen live.** Headless cannot show the thing it removes. Wants one start, then a
+    local "what time is it" straight away, with the log's `preload:` line read beside it.
 - **Works now — startup (D39, 2026-07-31).** `run()` warms in two tiers: wake + VAD before serving,
   whisper + Kokoro on a background thread, so the **hotkeys register early**. The lazy inits in
   `listen.py`/`speak.py` are lock-guarded — that is what makes an early keypress safe now that
@@ -463,7 +485,7 @@ recorded in spec/00 §D25 and `spec/schemas/targets.json`).
   `--fake` driver that drives the whole overlay with **no audio, mic or models**. It retains the
   current turn and replays it to a client that reconnects mid-turn (P-02). PySide6 is a **core**
   dependency (D23). Fonts are bundled and registered at run time — **Inter** (the UI face; Archivo
-  was swapped back out on 2026-07-31, Thomas) · Martian Mono · Material Symbols, with Instrument
+  was swapped back out on 2026-07-31, Thomas) · Martian Mono · Lucide (icons), with Instrument
   Serif bundled but deployed nowhere — so there is no system install and the Mac
   gets the same faces (D10). Guarded by `teleprompter.overlay_check` (headless, software RHI),
   `decode --selfcheck`, `settings_check` and `teleprompter.gem`, all CI-wired.
@@ -985,6 +1007,98 @@ recorded in spec/00 §D25 and `spec/schemas/targets.json`).
   a config source — D28 and D33 built it. **spec/70 §1 + §3** no longer call the settings window
   "the M0-close gate" (retired; build status belongs in STATE anyway).
   **`spec/schemas/settings.json`** Engine card flipped to `built: true` — see Config & routing.
+- **MEASURED 2026-08-04 — no small local model is fit to be the router unassisted.** Five models,
+  17 cases, 25 runs each, 425 calls per model, evicted and proven out of VRAM between models.
+  Commands and negatives scored apart.
+
+  | model | commands | negatives (must NOT fire) |
+  |-------|----------|---------------------------|
+  | `qwen3.5:9b` | 232/250 (92.8%) | 152/175 (**86.9%**) |
+  | `qwen3.5:4b` | 240/250 (96.0%) | 64/175 (**36.6%**) |
+  | `qwen3.5:2b` | 221/250 (88.4%) | 130/175 (74.3%) |
+  | `granite4.1:3b` | 240/250 (96.0%) | 50/175 (**28.6%**) |
+  | `lfm2.5:8b` | 218/250 (87.2%) | 130/175 (74.3%) |
+
+  - **The best two at commands are the worst two at negatives.** `granite4.1:3b` and `qwen3.5:4b`
+    both score 96% picking tools and fire on ordinary speech two-thirds of the time. Scoring
+    commands alone would have chosen exactly the wrong model, which is why the two numbers are
+    reported apart and must stay that way.
+  - **Both fired `open_app` 25/25 on "my sister works at Spotify" and "I hate it when Notepad
+    crashes".** They match an app NAME, not a request. The best negative score in the set is 86.9%,
+    so roughly one ordinary sentence in eight would act.
+  - **The clock failure is now a rate, not an anecdote: 13/25 on `qwen3.5:9b`.** It invents a time
+    rather than calling `system_status` — "It is 14:23 UTC+09:00", "It is 16:28 UTC-5". Earlier
+    logged as one unconfirmed sample.
+  - ⚠ **The prompt was the assistant persona, not a routing prompt.** These numbers describe these
+    models in the assistant seat with a tool list. A prompt written to ask "is this a command"
+    is untested and is the fair test of the LLM-router idea.
+  - ⚠ **`lfm2.5:8b` numbers are a floor, not a measurement** — most of its failures are the
+    `UnicodeEncodeError` below rather than model faults. `qwen3.5:9b` and `:4b` runs are clean.
+
+- **MEASURED 2026-08-04 — a routing prompt fixes it, and temperature does not.** Same cases, 5 runs
+  at temperature 0, assistant persona against `ROUTER_SYSTEM` (`eval/tool_check.py --router`).
+  Negatives are the column that moves.
+
+  | model | persona @ 0.7 | persona @ 0 | **router @ 0** |
+  |-------|---------------|-------------|----------------|
+  | `qwen3.5:9b` | 86.9% | 85.7% | **100%** (commands 100%) |
+  | `lfm2.5:8b` | 74.3%※ | 100% | **100%** (commands 100%) |
+  | `qwen3.5:4b` | 36.6% | 28.6% | 85.7% |
+  | `qwen3.5:2b` | 74.3% | 57.1% | 100% (commands **90%**) |
+  | `granite4.1:3b` | 28.6% | 42.9% | **28.6%** |
+
+  - **Two models are clean on both halves: `qwen3.5:9b` and `lfm2.5:8b`** — 50/50 commands and
+    35/35 negatives. An LLM router is viable; the first sweep measured the persona, not the ceiling.
+  - **Temperature was not the lever.** At temperature 0 with the persona, negatives got *worse* for
+    both small qwens (36.6→28.6, 74.3→57.1). At 0.7 the model sometimes failed to fire by luck and
+    scored a pass; temperature 0 makes the wrong behaviour consistent. The prompt did the work.
+  - **`granite4.1:3b` is immune to the prompt** — 28.6% under both. It calls `open_app` on an app
+    name whatever it is told. Rules it out for this seat.
+  - **`qwen3.5:9b` is already the assistant model**, so using it as the router costs no extra VRAM
+    and cannot swap. `lfm2.5:8b` is built for edge tool calling and would be a second resident model.
+  - ※ the 0.7 figure for `lfm2.5:8b` was depressed by the encode bug; its true persona score is
+    higher.
+- [ ] **BUG — a model's own words can kill a turn.** `orchestrator.py:346` prints every `TextDelta`
+  to stdout as a dev trace. A character outside the console codepage raises `UnicodeEncodeError`,
+  which leaves `_one_round` and ends the turn as a generic fault. Found by the sweep, where it also
+  inflated failure counts. Unfixed; the trace must never be able to end a turn.
+- **MEASURED 2026-08-04 — embedding classifiers do not do this job, and bigger ones do it worse.**
+  Five embedders, same 17 cases, nearest-exemplar over 39 exemplars written to be disjoint from the
+  suite (`--embed`). Best negatives 57.1%, against 100% for a prompted LLM.
+
+  | model | VRAM | commands | negatives |
+  |-------|------|----------|-----------|
+  | `nomic-embed-text` | 0.3G | 90.0% | 57.1% |
+  | `all-minilm:22m` | 0.0G | 80.0% | 57.1% |
+  | `qwen3-embedding:0.6b` | 2.4G | 70.0% | 42.9% |
+  | `embeddinggemma:300m` | 0.7G | 80.0% | 28.6% |
+  | `mxbai-embed-large:335m` | 0.6G | 80.0% | **14.3%** |
+
+  - **The inversion is the finding: 22M scores 57.1% and 335M scores 14.3%.** Embeddings measure
+    topical similarity; routing needs pragmatic intent. "My sister works at Spotify" and "start
+    Spotify" are topically near-identical and pragmatically opposite, so a stronger retrieval model
+    places them closer and is more confidently wrong. This is structural, so more exemplars will not
+    fix it — a fine-tuned classifier head might.
+  - **No threshold separates right from wrong.** Margin to the next class was logged per miss:
+    +0.003 to +0.15, the same band as the correct answers (one correct at +0.006, one wrong at
+    +0.101). Confidence gating cannot be the precision knob here.
+  - The `s/call` column in that run includes cold load and is not throughput — a 45 MB model cannot
+    truly be slower than a 669 MB one.
+- **The router intercepts the request and decides where it goes** — to a tool that answers outright,
+  to a tool whose result goes to a composer, or to the model. The model is one destination and no
+  longer the entry point. The judgement is tool call vs genuine prompt, made against the tools the
+  harness exposes. Skills are one outcome of the router, not the whole of it.
+- **DRAFTED 2026-08-04 — `spec/docs/60_evals.md`, "Chapter 6 - Evaluation of LLMs".** Its first
+  section, *Router pre-flight latency evaluation*, is the design for ROADMAP 2.2 and is written in
+  full: what is measured, the prompt set, the controls, the results format, and what the measurement
+  cannot settle. The other four sections (tool selection · dictation cleanup · replay · provider
+  smoke) are `[TBC]` placeholders. **Nothing under it is built** — the prompt set, the sweep driver,
+  the offload guard and the report writer are all tagged `planned` in the chapter.
+  - **Verified while drafting, so the guard is not written on faith:** Ollama's native API evicts a
+    model (`keep_alive: 0`), the resident list then reads empty, and the reload cost **9.06 s** to
+    first token — the same cold load the boot preload removes. The resident list also reports
+    `size_vram` against total `size`, so the guard can detect a **partial CPU offload** rather than
+    merely presence, which is the condition that scored one model 7/9 against its isolated 8/9.
 - **In flight:** —
 - **Parked — rename `bridge/` → `daemon/`** (S-07): see the handoff's parked list.
 

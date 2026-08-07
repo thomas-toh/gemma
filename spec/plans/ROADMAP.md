@@ -1,225 +1,238 @@
-# ROADMAP — router / tools / dictation checklist + concurrent-build ledger
+# ROADMAP
 
-The queued build items (mirrors the task list #7–12) and who is building what right now.
+**Last reconciled: 2026-08-07 03:35** · Build minutiae: [STATE.md](STATE.md) · Published spec: [spec/docs](../docs) · Router design: [router_master_plan.md](router_master_plan.md)
 
-**Coordination model.** One **coordinator** session (holds this file, writes handoff prompts,
-arbitrates file access) + one or more **concurrent** sessions, each restricted to a **file scope**.
-If a concurrent session finds it needs a file outside its scope, it **STOPS and reports to Thomas**
-(it does not edit it) — Thomas relays to the coordinator, and the **coordinator decides when to
-release** that file. Shared append-only files (`checks.yml`, `STATE.md`, `spec/00`) are sequenced by
-the coordinator at commit time.
+The build order and the open questions. How far along a given piece is belongs in STATE; this file
+carries what is queued, in what order, and what each item is waiting on.
 
-## Concurrent-build ledger (live)
+Marks: `[ ]` not started · `[~]` part done · `[x]` done. Items are numbered by stage, and a number
+is an address — cite `1.3`, not "the routing one".
 
-| Owner | Item | May edit (file scope) | Status |
-|-------|------|-----------------------|--------|
-| **coordinator** | Stage 1 · Tools v2 (#9) → **done 2026-08-03** (D42, uncommitted). Next: TBD | — | idle, awaiting next pick |
+## Summary of stages
 
-No concurrent session is running. #11 (`find_document` + `search_email`) closed 2026-07-28 and its
-lane is released; nothing is off-limits at present. Re-cut this table when a second session opens —
-a stale ledger is worse than none, because it reserves files nobody is holding.
+| Stage | Delivers | State |
+|-------|----------|-------|
+| 1 | Gemma acts — acting on the world, routing, showing what it is doing, gated by consent | in progress |
+| 1.5 | The absent knobs — settings the window was built to hold but does not surface | runs beside stage 1 |
+| 2 | The conversation model — history that survives a turn | design session before any code |
+| 3 | Voice out — sentence-streamed speech and the versioned persona | not started |
+| D | Dictation — runs alongside every stage, gated by none | in progress |
 
-## Stages (build sequencing)
+Stage 1 makes it act, stage 3 gives it a voice, stage 2 gives it continuity. Mac parity is last and
+off-stage.
 
-The high-level order; the per-track checklists below are the granular items each stage pulls from.
+## Stage 1 — Gemma acts
 
-**Stage 1 — "Gemma acts" (the assistant / Siri-like *doing*).** Act on the world, route
-intelligently, show what it's doing — gated by consent.
-- ~~**Tools v2** (#9 Tier-2)~~ — **done 2026-08-03 (D42)**: `open_app` · `focus_window` ·
-  `media_control`, the announce earcon, `MAX_TIER` 2, `apps_media` live. `set_timer` deferred —
-  it fires outside a turn and Contract P cannot announce that yet.
-- **Tools v3** (#10 Tier-3 + propose-then-tap, D26) — destructive actions behind an overlay
-  confirmation + limited account.
-- **Router v2** (#7 named instances + migration · #8 classifier/skills · `local_only`) — what a tool
-  turn routes its brain through; #7's schema migration is the risky part (a botched one ate a profile).
-- **Tool activity indicator** — render `overlay.tool` on the island (wire built under D38; it
-  collides with the "Thinking…" slot). **It now has something to show**, and it is what closes
-  D42's hole: with pings off, a Tier-2 action currently has no cue at all.
-- ~~**Two dwells**~~ — **done 2026-08-03 (D43)**: a confirmation clears in 2.5 s, an answer keeps
-  its 20 s, both user-set in General > Preferences. Fell out of Tools v2 — an action that leaves
-  nothing to read should not hold the screen like an answer.
-- **Skip the reply round for an action** — *open, gated on #8 landing first*. Measured 2026-08-03:
-  a tool turn is TWO model calls, and round 2 spends **1630 input tokens to produce 9 output
-  tokens** saying "Spotify is open." Round 2 has three real jobs — compose prose from a machine
-  result, decide whether more tools are needed, and answer a question the tool only supplied an
-  ingredient for — and `open_app` needs none of them. Thomas' position: a fixed string covers more
-  tools than first claimed; the LLM is needed only where the composition IS the value (web search).
-  The counter-case to resolve: the same tool serves both a direct request and a question needing
-  work ("what time in Tokyo?" is arithmetic over `system_status`, not its raw output). Full flow
-  and costs now in spec/00 § Anatomy of a turn. **Latency suite queued after this** — see Router.
-- **URGENT — the empty round + the 1–9 s spread on the local ASK path.** Thomas's bar: 15 ms–1 s
-  of fluctuation is fine, 1–9 s with intermittent total failure is not, and it undermines the
-  viability of tools. A retry was tried and reverted (it also came back empty). The live clue: a
-  model returning *nothing* is not sampling noise, and the failing round is FAST, so the search is
-  structural — start by capturing the raw stream. Constraint: **qwen3.5:9b stays** — it is the
-  best dictation performer and a 14b model is not wanted for a simple assistant. *(STATE, Track T.)*
-- **(2) Preload the local model at boot — STILL OWED, agreed but not built.** Measured 2026-08-03:
-  the FIRST local turn waits ~9 s for Ollama to pull the weights into VRAM; every later turn is
-  ~1 s a round. The server is already started at boot; the model is not. Fits D39's background
-  warm-up walk (`_warn_missing_models` already resolves each role and filters to local), so it is
-  a handful of lines in a walk that exists. **Must run AFTER the doors open**, or D41 drops every
-  press for the extra ~10 s — that would trade a slow first answer for no first answer.
-  **Open question for the build:** warm every role's local model, or only the assistant? Warming
-  both surfaces the two-model VRAM collision at boot where it is visible, rather than mid-dictation
-  where it is not. Independent of #8 — worth doing whenever the daemon path is next open.
-- **`/v1/responses` as a third wire** — parked. It is the only route that restores reasoning to an
-  OpenAI tool turn (D44); a different request/response shape, not a dialect difference.
-- **Connectors folded in** — `apps_media` went live with D42; what remains is the first-run
-  permissions round (owed at packaging).
+Ordering: fix what is broken, measure the premise, ship the safe half of routing, design the risky
+half, then re-scope the last piece against what survives.
 
-**Stage 1.5 — the absent knobs (parallel).** What the settings window was built to hold but does not
-surface yet: sidebar **search** · **STT model** · **wake phrase** · **TTS voice** ·
-**word-replacement table editor** (the settings grid — the D15 backend is done, this is its UI).
-Likely their own Speech/Dictation tab (spec/70 §3).
+[ ] **1.1 — The empty round and the 1–9 s spread on the local ask path.** Blocking, and it
+undermines the case for tools. The bar: 15 ms–1 s of fluctuation is acceptable; 1–9 s with
+intermittent total failure is not. A retry was tried and reverted — the resample came back empty
+too. The failing round is fast and returns nothing, which is not sampling noise, so the cause is
+structural; start by capturing the raw stream. Constraint: qwen3.5:9b stays, being the best
+dictation performer, and a 14b model is not wanted for a simple assistant.
 
-**Stage 2 — the conversation model.** History that survives a turn: the "between named chats and
-dump-everything" design. Gates the proactive context-overflow guard and cross-turn scroll-back.
-*The uncertain one — a design session before any code.*
+[ ] **1.2 — Run the latency suite.** Built at `eval/latency.py` and never run, so it has produced
+no numbers. Times speech-to-text and one model round over hundreds of runs, reports the tail
+(p95/p99/max) rather than the mean, and records what the model did beside how long it took, so a
+run that timed 200 rounds while the model invented the answer cannot read as a pass. Hundreds
+rather than tens because the fault is a rare transient — one run in thirty hit 14.58 s with
+reasoning already off, which a median hides. **Local models only** — a sweep spends GPU time and
+nothing else, and the question it answers is whether a given local model is fast and steady enough
+to deploy. Read beside the tool-selection score, which answers whether it picks the right tool.
+Together they are the instrument for choosing the router's model: candidates are `qwen3.5:4b` and
+`:2b` (same family as the 9b already scored 8/9, so one variable moves), `LFM2.5-8B-A1B` (built for
+tool calling on consumer hardware) and `granite4.1:3b`. Gates 1.3, and settles the open
+`tool_round_effort` question once the spreads are visible.
 
-**Stage 3 — TTS ("it speaks well," M0.5).** Sentence-streamed voice out: the model-tagged speak/hold
-split (retires the ≤ 2-sentence heuristic), the versioned persona, speech normalization,
-read-all-when-on.
+**LLM-driven router eval.** `eval/tool_check.py --sweep MODEL[,MODEL…] RUNS` repeats every case against each candidate and reports command accuracy and false-fire rate separately. Both numbers are needed: a model that never fires looks perfect on negatives and is useless, and one that always fires looks perfect on commands and is dangerous. Each model is evicted and proven wholly out of VRAM before the next loads, because partial CPU offload under memory pressure scores the same model two different ways. The case set gained six negatives for this — only one existed before, and firing on a negative is the failure the precision rule exists to prevent.
 
-*(Mac parity / D10 stays "last", off-stage.) The full "Siri-like" feel completes across the stages:
-Stage 1 makes it ACT, Stage 3 gives it a VOICE, Stage 2 gives it CONTINUITY.*
+[ ] **1.3 — Task routing.** Utterance shape decides which model serves it. No disambiguation, so
+none of the risk in 1.4, and it helps questions as well as commands. Slots into `router.resolve`;
+only the data changes. Gated on 1.2 — do not pick the fast model before knowing which one is fast.
+Ollama with reasoning off ran a 0.68 s median per round and may beat Groq once network is counted.
 
-## Router / model
-- [x] **Router v1** — role → model (D33)
-- [ ] **#7 Named model instances (shape B)** — instance-keyed `models` + `roles`/`routes` + migration + UI. *The foundation.*
-- [ ] **#8 Router 2 — request classifier** — intent → *skill* (bypass LLM) / task-type → *model*;
-  first skill = world-time + live clock. **NEXT after Tools v2** (Thomas, 2026-08-03). It is the
-  "router within a router": a **deterministic** matcher that decides whether an utterance is a
-  command, not a second model — a cheap LLM gate would add a round-trip and its own tokens, and the
-  saving only exists if the model is removed entirely. Measured stake: "open Spotify" costs ~3,200
-  input tokens across two rounds (~1.7¢ on Opus 4.8) for a five-token request; a matched phrase
-  costs nothing and is instant. Design risk is D37's, exactly: telling a command from someone
-  merely saying those words — that ambiguity cost a day on spoken lists.
-  **Baseline measured 2026-08-03** (`--check-tools`, STATE Track T): `qwen3.5:9b` picks the right
-  tool 8/9 with sensible arguments, so #8 is a LATENCY-AND-COST fix, not a correctness one — scope
-  it accordingly. The 9th is the clock, which is already #8's first skill.
+**Targeted "router" behaviour.** The router *intercepts the request and decides where it goes*: to a tool whose result speaks for itself (deterministic), to a tool whose result is then handed to a **composer** (semideterministic; semiagentic), or to the model (agentic). The router therefore "routes" between *a tool call and a genuine prompt*, based on the available context of the tools exposed to it via the tools harness. Hence note that Skills (1.4) are one outcome of this router, not the whole of it; 1.3, 1.4 and 1.5 are all pieces of it.
 
-  **SPLIT THE NAME BEFORE THE DESIGN SESSION (2026-08-03).** "Router" already means one thing here
-  — role → provider+model, D33, built. #8 as written bundles **two more**, and they have different
-  risk, different cost and different schedules. Keeping them under one word will blur the spec and
-  let the risky half drag the safe half:
-  - **`router` (built, D33)** — role → provider + model.
-  - **Task routing** — utterance *shape* → which model. No disambiguation, low risk. Addresses
-    latency for questions as well as commands. Wants the latency suite first, and the answer is
-    not obvious: Ollama with reasoning off ran a **0.68 s median per round**, which may beat Groq
-    once network is counted.
-  - **Skills** — utterance → deterministic answer, **no model at all**. The D37-shaped one, and
-    where all the design risk lives.
+**Router invariants, settled before design.** The router decides and never executes: dispatched calls go through `execute()`, so they pass tier and connector like any other call and land in the audit log. Routing around those gates would let a switched-off connector still act. The whole ledger is offered — the router is generic over `tools.json` and adding a tool needs no router work — and each tool declares in the registry how far it can be reached without a model and whether its result needs a composer. Argument extraction is the limit: `open_app` takes a word, `find_document` takes a composed query, and a tool that cannot be reached honestly falls through. Ask path only; dictation never routes. Fall-through stays byte-identical to today.
 
-  **Binding design principle — PRECISION OVER RECALL.** A bad matcher is worse than none: one that
-  fires on *"I was going to open Spotify but didn't"* has acted against the speaker's intent, which
-  is a worse failure than being slow. **Never fire unless certain; fall through to the model when
-  unsure.** Settle this before writing the matcher, not after — D37 discovered the same ambiguity
-  the expensive way.
+**Router build order.** As the connectors and spoken-formatting work were built: registry fields and their offline guard first; then the matcher and its adversarial suite with nothing wired; then wiring behind a flag, default off, with fall-through proven identical; then the composer path; then dropping the model round for self-describing tools.
 
-  **The counterweight, so this is not read as pure upside:** a skills layer only helps *commands*.
-  A question still costs a full round however good the matcher is — so #8's value is proportional
-  to the share of real utterances that are commands, **and nobody has measured that share.** Worth
-  a day of ordinary use with the transcripts counted before this becomes the centrepiece.
+[~] **1.4 — Skills.** An utterance answered deterministically, with no model at all. Design session
+and a decision record before any code. To settle: what counts as a skill (the 1.7 utilities set is
+the same list — design them together); the matching strategy; the fall-through, which must be
+indistinguishable from today; one backend behind two doors, so a skill and a tool reach the same
+deterministic code and `system_status` is never reimplemented; and a test suite shaped like
+`_FORMAT_CASES`, in which the adversarial non-commands are the point — "I was going to open
+Spotify", "can you open Spotify?", and "what time is it in Tokyo", the last being a question
+wearing a command's clothes, which must reach the model.
 
-  **"The router" stays as the umbrella name (Thomas, 2026-08-03)** — one name over several
-  subsystems is normal and the split above is what matters, not the label. The condition attached:
-  **the breakdown gets written into spec/20 § Routing as it is built**, so the word never has to be
-  explained twice. Noted there as `planned` already.
+Binding constraint, settled before design: precision over recall. A matcher that fires on "I was
+going to open Spotify but didn't" has acted against the speaker's intent, which is a worse failure
+than being slow. It never fires unless certain and falls through to the model when unsure.
 
-### The plan for the router (agreed 2026-08-03, to start 2026-08-04)
+First skill is the clock, which failed both ways on 2026-08-03 — silent with reasoning on, and an
+invented "16:05 UTC+8 (Hong Kong)" with it off — so it carries a correctness argument, not only a
+speed one.
 
-Ordering rationale: **measure the premise → build the instrument → ship the safe half → design the
-risky half → re-scope the last piece against what survives.**
+Scope it as a latency-and-cost fix rather than a correctness one: `qwen3.5:9b` already picks the
+right tool 8 times in 9 with sensible arguments, the ninth being the clock. The counterweight is
+that skills only help commands — a question still costs a full round however good the matcher is —
+and the share of real utterances that are commands has not been measured. The user's estimate from
+use is 40–50%, with opening apps, web search and finding files named as the wanted cases. The
+transcripts in `gemma.log` will confirm or correct that for free as the work proceeds.
 
-0. ~~**Measure the premise**~~ — **SKIPPED (Thomas, 2026-08-03).** The question was what share of
-   ask-path utterances are commands, since everything below scales with it. Thomas' estimate from
-   using it: **40–50%** — "opening apps on Windows is terribly annoying" — plus wanting **web
-   searches** and **finding files**, both tool calls. At that share the skills layer clearly earns
-   its place and the gate has done its job. *It stays an estimate, not a measurement; the
-   transcripts in `gemma.log` will confirm or correct it for free as the work proceeds, so nothing
-   needs to stop for it.*
-   **Two things the answer surfaced:** file-finding is already `find_document` (so it wants a
-   SKILL door onto an existing tool, not a new tool), and **web search does not exist at all** —
-   `connector_web` is dimmed with no backend. Web search is also the clearest case where the
-   round-2 reply genuinely earns its keep, since composing the results *is* the value — Thomas'
-   own example, and it sharpens phase 4's scope.
-1. **The latency suite** — *moved AHEAD of #8*, reversing the earlier "after" call, because every
-   later phase is justified by latency numbers we cannot currently compare. Same utterance, N runs,
-   per provider and model; report **spread and median, never mean**. Also settles the open
-   `tool_round_effort` decision, which stops being a judgement call once the spreads are visible.
-2. **Task routing** — utterance shape → which model. No disambiguation, so no D37 risk. Slots into
-   `router.resolve`; only the data changes. **Helps questions as well as commands**, which skills
-   never will. Gated on 1: do not pick "the fast model" before knowing which one is fast (Ollama
-   with reasoning off ran 0.68 s median/round and may beat Groq once network is counted).
-3. **Skills** — design session and a D-number BEFORE code. Settle: what counts as a skill (the
-   Tools 2.5 "utilities" set is the same list — design them together) · matching strategy ·
-   the fall-through, which must be indistinguishable from today · **one backend, two doors** (a
-   skill and a tool share the deterministic backend — `system_status` is reached both ways, never
-   reimplemented) · the test suite in `_FORMAT_CASES`' shape, where **the adversarial non-commands
-   are the point**: "I was going to open Spotify", "can you open Spotify?", "what time is it in
-   Tokyo" (a question wearing a command's clothes — that one must reach the model).
-   **First skill: the clock** — it failed BOTH ways on 2026-08-03 (silent with reasoning on, an
-   invented "16:05 UTC+8 (Hong Kong)" with it off), so it carries a correctness argument and not
-   just a speed one.
-4. **The round-2 skip** — last, deliberately. Only meaningful for tool turns skills do NOT catch,
-   which after phase 3 is `find_document` and `search_email` — exactly where round two has its
-   strongest claim, since their output is raw rows. **It may turn out to be unnecessary; that is a
-   legitimate outcome.** Conditions if still wanted: exactly one tool call in the round, that tool
-   flagged self-describing in the registry, and its sentence written into history.
+**In progress from 2026-08-07; the design is [router_master_plan.md](router_master_plan.md)** — what
+is being built, the concepts, the training method, the evaluation protocol and a six-phase build
+order. It changes two things above. The deterministic matcher is out, and what replaces it is a
+small trained encoder carrying three heads, a few hundred megabytes, loaded directly rather than
+through Ollama, so the router never occupies a model slot the user chose for Ask or Dictate. And
+every figure measured on 2026-08-04 falls below that document's 100-run floor, so all three sweeps
+are marked provisional and re-running them is phase 0.
 
-**Two things to avoid:** building skills before phase 0 says they are the bottleneck, and letting
-the risky half (3) drag the safe half (2) by scheduling them as one item.
-- [ ] **Latency test suite (after #8 and the round-2 work — Thomas, 2026-08-03).** Not "is it
-  fast" but **"why is it erratic"** — the same request measured repeatedly, per provider and per
-  model, reporting the spread and not just the mean. The provoking measurements: identical input
-  to `qwen3.5:9b` ranged **1.5 s – 4.6 s** over 12 runs, and **2 s – 9 s** for the same case across
-  two `--check-tools` runs; the same 12-run sweep also found an **empty round 1 in 12**, which is
-  a latency fault wearing a correctness costume (the user waits, then hears an apology).
-  Deliberately AFTER #8, because #8 removes the model from the commands that hurt most — measure
-  what survives, not what is about to be deleted. Sits beside `--check-tools` and `--check-format`
-  as a third maintainer command, and feeds "publish measurements, never recommendations" below:
-  a spread is exactly the kind of fact that does not rot.
-  **Build it for HUNDREDS of calls, not tens (Thomas, 2026-08-03).** The fault it must catch is a
-  rare transient — one run in thirty hit 14.58 s with reasoning already off — and a 30-run sweep
-  cannot characterise a 1-in-30 event while the median hides it completely. Report the tail
-  (p95/p99 and the worst case), never the mean.
-  **Cover STT too**, which has never been measured this way at all: its numbers are single
-  observations scattered through the log (44 ms · 61 ms · 182 ms · 687 ms cold), never a
-  distribution. A slow tail in speech-to-text feels identical to a slow tail in the brain and is
-  currently indistinguishable from one — so the suite has to time the whole path, not just the
-  model call.
-- [ ] **Tools v2.5** —  tools not built in a natural way (unnatural grouping of tools ) —
-  next step is to have utilities, i.e., timer, clock calculations, conversions, weights, etc., apps and media
-  and Spotify integration, all under **Tools 2.5**.
-- [ ] **`local_only` / privacy routing** — force a local model for private requests (spec/50 rule 6).
-- [ ] **Publish measurements, never recommendations** — the picker marks a model `tested 8/9 · date`
-  or `untested`, never "recommended"; a curated badge is a treadmill and a stale one misleads worse
-  than silence. Pairs with a "Test for cleanup" button and the suite below. *(STATE, Owed designs.)*
+**Owed after it lands: the cloud path.** The router removes latency only for what it catches. A
+question falls through to the assistant model and pays a full cloud turn, and nothing in this plan
+makes that faster. Prompt caching over the stable system-prompt-and-tool-list prefix is the obvious
+lever; the minimum cacheable prefix differs by model, so it wants measuring rather than assuming.
+Recorded as an open question in the master plan.
 
-## Tools
-- [x] **Tier-1** + the tool loop + audit (D31)
-- [~] **#9 Tier-2 (D42)** — open_app · focus_window · media_control shipped 2026-08-03; the
-  announce earcon is Tier 2's gate. **`set_timer` is the open half**: it needs a Contract P message
-  for something that fires outside a turn (the D20-shaped gap). *(STATE, Track T.)*
-- [ ] **#10 Tier-3 + propose-then-tap** (D26) — destructive actions; overlay confirmation + limited account
-- [~] **#11** find_document ✓ (Windows Search, `d2188b0`) → **search_email** (Outlook) next   ← *session A*
-- *A **skill** (intent-invoked) and a **tool** (LLM-invoked) share the same deterministic backend — build it once.*
+[ ] **1.5 — Skip the reply round for an action.** Last, deliberately, and it may prove unnecessary.
+A tool turn is two model calls, and round two spends 1630 input tokens to produce 9 output tokens
+saying "Spotify is open." Round two has three real jobs — compose prose from a machine result,
+decide whether more tools are needed, and answer a question the tool only supplied an ingredient
+for — and `open_app` needs none of them. After 1.4 the turns skills do not catch are
+`find_document` and `search_email`, which is exactly where round two has its strongest claim, since
+their output is raw rows. Conditions if still wanted: exactly one tool call in the round, that tool
+flagged self-describing in the registry, and its sentence written into history. The full flow and
+its costs are in spec/00 § Anatomy of a turn.
+
+[ ] **1.6 — Named model instances.** Instance-keyed `models`, plus `roles` and `routes`, the
+settings migration, and the UI. The migration is the risky part — a botched one has already eaten a
+profile.
+
+[ ] **1.7 — The utilities set (Tools 2.5).** The current tools are grouped unnaturally. Regroup
+into utilities (timer, clock arithmetic, unit and weight conversions), apps and media, and a
+Spotify integration. Design alongside 1.4, since a skill and a tool share one backend.
+
+[ ] **1.8 — Tool activity indicator.** Render the `tool` status message on the island. The feed
+carries it already; the collision to resolve is with the "Thinking…" slot. This closes the hole
+left by tier 2: with pings off, a tier-2 action currently has no cue at all.
+
+[ ] **1.9 — Tier 3 and propose-then-tap.** Destructive actions behind an overlay confirmation, plus
+the limited account.
+
+[ ] **1.10 — `set_timer`.** The open half of tier 2. It needs a status message for something that
+fires outside a turn, which the feed has no shape for yet.
+
+[ ] **1.11 — `local_only` privacy routing.** Force a local model for private requests (spec/50
+rule 6).
+
+[ ] **1.12 — First-run permissions round.** Ask for the connectors Gemma wants up front instead of
+leaving the choice to be found in the Connectors pane. Owed at packaging.
+
+[ ] **1.13 — Publish measurements, never recommendations.** The model picker marks a model
+`tested 8/9 · date` or `untested`, never "recommended". A curated badge is a treadmill and a stale
+one misleads worse than silence. Pairs with a "Test for cleanup" button and with 1.2.
+
+[ ] **1.14 — `/v1/responses` as a third wire.** Parked. It is the only route that restores
+reasoning to an OpenAI tool turn, and it is a different request and response shape rather than a
+dialect difference.
+
+### Landed — stage 1
+
+- [x] Tier 1, the tool loop and the audit log.
+- [x] Router v1 — a role resolves to a provider and model.
+- [x] `find_document` (Windows Search index) and `search_email` (Outlook).
+- [x] Tier 2, 2026-08-03 — `open_app`, `focus_window`, `media_control`, the announce earcon,
+  `MAX_TIER` raised to 2, the `apps_media` connector live.
+- [x] Two dwells, 2026-08-03 — a confirmation clears in 2.5 s, an answer keeps its 20 s, both
+  user-set in General > Preferences.
+- [x] Boot preload of local models, 2026-08-04 — one throwaway one-token request per local model a
+  role names, sent from the warm-up thread after `_ready` is set so the doors are never held for
+  it. Every role's local model, so a two-model VRAM collision lands at boot where the log shows it
+  rather than mid-dictation where it does not. Cloud roles are skipped. Not yet seen live: the
+  roughly 9 s it removes is what a headless check cannot show.
+- [x] The latency suite is built. Running it is 1.2.
+- [x] Hotkeys read their bindings from settings, and recording a shortcut releases the doors,
+  2026-08-04.
+- [x] The user profile reaches the system prompt, 2026-08-04.
+
+## Stage 1.5 — the absent knobs
+
+What the settings window was built to hold and does not surface. Specced in spec/70, rendered
+nowhere. Likely a Speech tab and a Dictation tab of their own.
+
+Lettered, not numbered: `1.5` is already the address of a stage-1 item.
+
+[ ] **1.5(a) — Sidebar search.**
+
+[ ] **1.5(b) — Speech-to-text model.**
+
+[ ] **1.5(c) — Wake phrase.**
+
+[ ] **1.5(d) — Text-to-speech voice.**
+
+[ ] **1.5(e) — Word-replacement table editor.** The backend is done; this is its UI.
+
+## Stage 2 — the conversation model
+
+[ ] **2.1 — History that survives a turn.** The design sits between named chats and
+dump-everything, and neither end is right. A design session before any code — this is the
+uncertain one. It gates the proactive context-overflow guard and cross-turn scroll-back.
+
+## Stage 3 — voice out
+
+[ ] **3.1 — Model-tagged speak/hold split.** The model tags its own output for what to speak and
+what to show, retiring the two-sentence heuristic.
+
+[ ] **3.2 — The versioned persona.** Replaces the placeholder system prompt.
+
+[ ] **3.3 — Speech normalisation** for text-to-speech.
+
+[ ] **3.4 — Read every answer when speech is on**, rather than holding long ones.
 
 ## Dictation
-- [x] **D1** capture→STT→cleanup→paste · **D2** overlay states · cleanup prompt (self-corrections, spoken punctuation, spelled-out letters)
-- [x] **#12 word-replacement table (D15)** — deterministic acronyms / names / jargon, before cleanup (2026-07-28)
-- [~] **spoken-structure formatting (D37)** — shipped, but **GATED ON A DECISION**: keep the spoken
-  commands (`enumerate list`…) or drop them and let the model infer a list from ordinary speech, as
-  VoiceInk does. Decides whether the deterministic pre-pass is ever built. *(STATE, Track D.)*
-- [ ] **Cleanup test suite, two tiers** — a short smoke set behind a user-facing button, the full
-  suite as a maintainer command. Word fidelity needs a multiset diff, not substring assertions: a
-  model can pass every check while deleting a clause. *(STATE, Owed designs.)*
-- [ ] **per-mode STT (D12)** — a higher-accuracy engine for dictation
-- [ ] **Surface the absent settings** — STT model · wake phrase · TTS voice · the word-replacement
-  table editor: specced in spec/70 §3, rendered nowhere. Probably its own tab. *(STATE, queued.)*
-- [ ] **context injection** (#3 lift) · **D3 rewrite** (select → speak instruction → transform)
+
+Runs alongside the stages and is gated by none of them.
+
+[~] **D.1 — Spoken-structure formatting.** Shipped, and gated on a decision: keep the spoken
+commands ("enumerate list" and the rest), or drop them and let the model infer a list from ordinary
+speech as VoiceInk does. The answer decides whether the deterministic pre-pass is ever built.
+
+[ ] **D.2 — Cleanup test suite, two tiers.** A short smoke set behind a user-facing button, the
+full suite as a maintainer command. Word fidelity needs a multiset diff rather than substring
+assertions: a model can pass every check while deleting a clause.
+
+[ ] **D.3 — Per-mode speech-to-text.** A higher-accuracy engine for dictation than for the ask
+path.
+
+[ ] **D.4 — Context injection and the rewrite verb.** Selected text, clipboard or screen as
+context; then select, speak an instruction, and transform.
+
+### Landed — dictation
+
+- [x] Capture, transcribe, clean up, paste; the overlay states; the cleanup prompt covering
+  self-corrections, spoken punctuation and spelled-out letters.
+- [x] The word-replacement table, 2026-07-28 — deterministic acronym, name and jargon fixes, run
+  before cleanup.
 
 ## Through-line
-**Deterministic-first.** Table/hardcode what is exact (acronyms, time, unit conversion, timers);
-reserve the LLM for the open-ended tail. The word-replacement table (#12), the skills layer (#8),
-and per-task routing (#8) are the same move.
+
+Deterministic-first. Table or hardcode what is exact — acronyms, time, unit conversion, timers —
+and reserve the model for the open-ended tail. The word-replacement table, the skills layer and
+task routing are the same move.
+
+## Working practice
+
+One coordinator session holds this file, writes the handoff prompts, and arbitrates file access.
+Any number of concurrent sessions may run, each restricted to a file scope.
+
+A concurrent session that finds it needs a file outside its scope stops and reports rather than
+editing it; the user relays, and the coordinator decides when to release the file. Files everything
+appends to — `checks.yml`, `STATE.md`, `spec/docs/00_overview.md` — are sequenced by the
+coordinator at commit time.
+
+No concurrent session is running and nothing is off-limits. Re-cut a scope table when a second
+session opens, and delete it when that session closes: a stale ledger reserves files nobody holds,
+which is worse than no ledger.

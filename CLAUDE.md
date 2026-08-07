@@ -30,6 +30,15 @@ The following rules set out inviolable rules that all LLMs must comply with. You
 
 7. **Rule 8 - Draft discipline:** All agentically updated files - `CLAUDE.md`, `STATE.md`, and `ROADMAP.md`, should be kept thin. Be careful where you put information. Decisions which just reflect certain choices but do not constitute project-important decisions belong in NOTES. If not, it belongs in `spec/`.
 
+8. **Rule 9 - Prose discipline:** Written work is for a reader, not performed at one. State propositions directly.
+   - NO contrast constructions: "not X, but Y" / "it is Y, not X" / "not merely X". Say what is true.
+   - NO rhetorical lead-ins that announce an explanation before delivering it ("the arithmetic decides it", "that fact sets the design", "here is the thing"). Signpost the reason plainly — "on the basis that", "because" — then state it.
+   - NO dramatic register and NO aphoristic closers. A paragraph ends when the fact is delivered.
+   - NO provenance stamps or cross-reference trails — "settled 2026-08-04, recorded in spec/20", "as decided above", "see § X for the full account". Nobody reads them. Record the point being made.
+   - When adding to an EXISTING document, match its structure, density and voice. Do not insert a block that breaks its formatting. The user's beautification is not yours to overwrite.
+   - If the explanation is longer than the thing it explains, cut the explanation.
+   A failure to comply with any of this is a STRIKE.
+
 ## Repo map
 
 ```

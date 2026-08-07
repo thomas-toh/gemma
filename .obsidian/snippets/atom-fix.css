@@ -1,0 +1,8 @@
+.cm-s-obsidian .HyperMD-codeblock, .code-block-container, .cm-inline-code {
+    background-color: #efefef !important;
+}
+.cm-s-obsidian span.cm-keyword { color: #c678dd !important; }
+.cm-s-obsidian span.cm-string { color: #98c379 !important; }
+.cm-s-obsidian span.cm-variable { color: #e06c75 !important; }
+.cm-s-obsidian span.cm-function { color: #61afef !important; }
+.cm-s-obsidian span.cm-comment { color: #5c6370 !important; }

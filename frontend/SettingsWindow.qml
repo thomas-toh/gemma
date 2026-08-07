@@ -282,49 +282,9 @@ Window {
         manageOpen = false          // triggers clearSheet via onManageOpenChanged
     }
 
-    // Material Symbols Outlined, bundled FULL rather than subset (Thomas, 2026-08-01), so an
-    // icon is now one line here and nothing else — no re-cutting the font, no tofu risk.
-    // NOTE the codepoints are the Symbols mapping, which differs from the older Material Icons
-    // one the previous 14-glyph subset used (check E5CA not E668, close E14C not E5CD, edit
-    // E150 not F097): every glyph had to be re-mapped when the file was swapped, not just the
-    // new ones. Chevrons are the iOS pair (arrow_back_ios / arrow_forward_ios) plus
-    // keyboard_arrow_down — bigger and evenly weighted, where expand_more's wide shallow V
-    // read small beside 14px text (Thomas).
-    QtObject {
-        id: ico
-        readonly property string cloud:     "\uE2BD"   // cloud               — a provider-hosted model
-        readonly property string chip:      "\uE322"   // memory              — a local model
-        readonly property string sparkle:   "\uE65F"   // auto_awesome        — the Ask model
-        readonly property string kebab:     "\uE5D4"   // more_vert           — a row's ⋯
-        readonly property string check:     "\uE5CA"   // check               — selected option, stored key
-        readonly property string chevron:   "\uE313"   // keyboard_arrow_down — a dropdown's indicator
-        readonly property string plus:      "\uE145"   // add                 — add a model
-        readonly property string trash:     "\uE872"   // delete              — remove a model
-        readonly property string close:     "\uE14C"   // close               — dismiss a sheet / the window
-        readonly property string minimize:  "\uE15B"   // remove              — window minimise
-        readonly property string maximize:  "\uE3C1"   // crop_square         — window maximise
-        readonly property string restore:   "\uE3E0"   // filter_none         — window restore
-        readonly property string back:      "\uE5E0"   // arrow_back_ios      — step 2 → step 1
-        readonly property string forward:   "\uE5E1"   // arrow_forward_ios   — a catalogue row
-        readonly property string edit:      "\uE150"   // edit                — configure a model
-        readonly property string search:    "\uE8B6"   // search              — the sidebar field
-        readonly property string mic:       "\uE029"   // mic                 — the mic status mark
-        readonly property string settings:  "\uE8B8"   // settings            — nav: General
-        readonly property string plug:      "\uF102"   // electrical_services — nav: Connectors
-        readonly property string box:       "\uF720"   // deployed_code       — nav: Model selection
-        readonly property string keyboard:  "\uE312"   // keyboard            — nav: Triggers
-        readonly property string lines:     "\uE8D2"   // subject             — nav: Dictation
-        readonly property string info:      "\uE88E"   // info                — nav: About (unbuilt)
-        readonly property string sun:       "\uE518"   // light_mode          — theme: light
-        readonly property string moon:      "\uE51C"   // dark_mode           — theme: dark
-        readonly property string monitor:   "\uE30A"   // computer            — theme: system
-        readonly property string folder:    ""   // folder_open         — connector: Files
-        readonly property string mail:      ""   // mail                — connector: Email
-        readonly property string paste:     ""   // content_paste       — connector: Clipboard
-        readonly property string globe:     ""   // public              — connector: Web
-        readonly property string apps:      ""   // widgets             — connector: Apps & media
-        readonly property string hub:       ""   // database            — connector: MCP servers
-    }
+    // Every icon in the window, by role — the map itself lives in Theme so the island's peek
+    // draws the same pictures from the same place. Aliased to the short name the call sites use.
+    readonly property QtObject ico: Theme.ico
 
     // Escape closes what is open, innermost first: the confirm dialog, then the Add/Edit sheet. An
     // open Dropdown popup consumes Escape itself (it takes focus now), and the KeyRecorder consumes
@@ -342,29 +302,6 @@ Window {
     }
 
     // ── building blocks ───────────────────────────────────────────────────────
-
-    // An icon, drawn as one Material Symbols glyph. `d` is the glyph char (an `ico.*`); `px` is
-    // the box the glyph is centred in, fed to the font's optical-size axis so it stays crisp.
-    component Glyph: Item {
-        id: g
-        property string d: ""
-        property int px: Theme.iconMd
-        property color tint: Theme.uiText
-        property int weight: 400
-        property int spin: 0        // the only way to get a chevron the subset does not carry
-        implicitWidth: px
-        implicitHeight: px
-        Text {
-            anchors.centerIn: parent
-            rotation: g.spin
-            text: g.d
-            color: g.tint
-            font.family: Theme.fontIcon
-            font.pixelSize: g.px
-            font.variableAxes: ({ "wght": g.weight, "opsz": g.px, "FILL": 0, "GRAD": 0 })
-            renderType: Text.QtRendering
-        }
-    }
 
     component Toggle: Item {
         id: sw
@@ -1092,7 +1029,7 @@ Window {
                     // only read when overlay is non-null.
                     readonly property bool capturing: overlay ? overlay.state === "listening" : false
                     readonly property real level: capturing ? overlay.mic : 0
-                    // The Material Symbols mic, not a drawing (Thomas): every icon in this
+                    // The Lucide mic, not a drawing (Thomas): every icon in this
                     // window comes from the font. The level fills it by CLIPPING a second copy
                     // drawn in the bright ink over the dim one — so the shape is always the
                     // font's, and the fill can never leave the glyph's own silhouette.

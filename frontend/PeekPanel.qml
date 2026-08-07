@@ -175,10 +175,11 @@ Item {
         Rectangle {
             width: panel.actionH; height: panel.actionH; radius: 9
             color: hoverCopy.containsMouse ? Qt.rgba(1, 1, 1, 0.08) : "transparent"
-            Image {
+            Glyph {
                 anchors.centerIn: parent
-                sourceSize: Qt.size(21, 21)
-                source: actions.copied ? "icons/check.svg" : "icons/content_copy.svg"
+                px: 21
+                d: actions.copied ? Theme.ico.check : Theme.ico.copy
+                tint: actions.copied ? Theme.inkOk : Theme.inkBase
                 opacity: actions.copied ? 1.0 : (hoverCopy.containsMouse ? 1.0 : 0.42)
             }
             MouseArea {
@@ -191,10 +192,11 @@ Item {
         Rectangle {
             width: panel.actionH; height: panel.actionH; radius: 9
             color: hoverSave.containsMouse ? Qt.rgba(1, 1, 1, 0.08) : "transparent"
-            Image {
+            Glyph {
                 anchors.centerIn: parent
-                sourceSize: Qt.size(21, 21)
-                source: "icons/save.svg"
+                px: 21
+                d: Theme.ico.save
+                tint: Theme.inkBase
                 opacity: hoverSave.containsMouse ? 1.0 : 0.42
             }
             MouseArea {

@@ -38,6 +38,11 @@ from PySide6.QtQuick import QQuickImageProvider
 
 _JSON = Path(__file__).resolve().parent / "gem" / "gem-sprites.json"
 
+# Idle fidgets this app never rolls (Thomas). The kit still ships the frames and the script still
+# weights them; the pick just skips them, in EITHER tier — `look-around` is a filler, `jump` a gag.
+# Muting here rather than in the kit because Design's next export overwrites `gem-sprites.json`.
+MUTED = frozenset({"look-around", "jump"})
+
 
 @lru_cache(maxsize=1)
 def _data() -> dict:
@@ -257,9 +262,11 @@ class GemPlayer:
 
     def _pick(self, table: dict | None) -> str | None:
         """Weighted pick over a script table, skipping holds — `listening/misheard` is a statement
-        the app makes, never a fidget — and skipping names the state does not own."""
+        the app makes, never a fidget — skipping names the state does not own, and skipping the
+        fidgets this app mutes."""
         usable = {c: w for c, w in (table or {}).items()
-                  if w > 0 and c in _state(self.state)["clips"] and policy(self.state, c) != "hold"}
+                  if w > 0 and c in _state(self.state)["clips"]
+                  and policy(self.state, c) != "hold" and c not in MUTED}
         if not usable:
             return None
         names = list(usable)
@@ -319,7 +326,7 @@ class QmlGem(QObject):
         self._palette = palette
         self._model = model
         # What the app has ASKED for, which is not the same as what the player is showing: a
-        # state with an exit clip (working -> laptop-close) stays on the old state until that
+        # state with an exit clip (working -> typewriter-out) stays on the old state until that
         # clip has played out. Tracking the request separately is what stops a QML Binding —
         # which re-evaluates freely — from restarting the exit on every pass and never arriving.
         self._want = state
@@ -358,7 +365,7 @@ class QmlGem(QObject):
         elif m.reply:
             want = "speaking" if (m.revealing or not m.done) else "done"
         elif m.state in ("thinking", "transcribing", "transforming"):
-            # The laptop, for anything where the machine is chewing on it (Thomas): the model
+            # The typewriter, for anything where the machine is chewing on it (Thomas): the model
             # composing, and dictation's transcribe + tidy passes. These three read identically
             # to the user — the island shows a status word and nothing else is asked of them.
             want = "working"
@@ -521,8 +528,12 @@ def _selfcheck() -> None:
     # ...and the TWO TIERS must stay separate. This is the whole point of the v3 script: a v2
     # loader runs a v3 kit happily but draws gags where fillers belong, so Gem performs
     # constantly instead of blinking. Gags must be the rare tier.
-    fillers, gags = set(script["filler"]), set(script["weights"])
+    fillers, gags = set(script["filler"]) - MUTED, set(script["weights"]) - MUTED
     assert not fillers & gags, "a clip cannot be both a filler and a gag"
+    # The muted fidgets must never fire, in either tier. The kit still weights them, so this is
+    # the assertion that catches Design's next export quietly putting them back.
+    assert MUTED <= set(clips("idle")), f"MUTED names a clip idle does not own: {MUTED}"
+    assert not MUTED & set(played), f"a muted fidget fired: {MUTED & set(played)}"
     nf = sum(1 for c in played if c in fillers)
     ng = sum(1 for c in played if c in gags)
     assert nf and ng, f"both tiers must fire: {nf} fillers, {ng} gags"
@@ -535,14 +546,14 @@ def _selfcheck() -> None:
     # An enter clip leads into the new base; a hold freezes on its last frame until released.
     p = GemPlayer("idle", random.Random(1))
     p.set_state("working")
-    assert p.clip == "laptop-open", f"the enter clip must play first, got {p.clip}"
-    for _ in range(frame_count("working", "laptop-open")):
+    assert p.clip == "typewriter-in", f"the enter clip must play first, got {p.clip}"
+    for _ in range(frame_count("working", "typewriter-in")):
         p.tick()
-    assert p.clip == "typing", f"the enter must resolve into the base loop, got {p.clip}"
+    assert p.clip == "typewriter", f"the enter must resolve into the base loop, got {p.clip}"
     p.set_state("listening")                                 # plays working's exit, then arrives
     p.hold("misheard")                                       # ignored: still exiting `working`
-    assert p.clip == "laptop-close", f"a foreign hold must not hijack the exit, got {p.clip}"
-    for _ in range(frame_count("working", "laptop-close")):
+    assert p.clip == "typewriter-out", f"a foreign hold must not hijack the exit, got {p.clip}"
+    for _ in range(frame_count("working", "typewriter-out")):
         p.tick()
     assert (p.state, p.clip) == ("listening", "listen"), (p.state, p.clip)
     p.hold("misheard")
@@ -561,22 +572,22 @@ def _selfcheck() -> None:
     # A QML Binding re-evaluates whenever anything it reads changes, so it will assign the same
     # state repeatedly. While an EXIT clip is playing the player is still on the old state, so
     # reporting that back would make each re-assignment look like a change and restart the exit
-    # — Gem would loop `laptop-close` and never arrive. `gemState` reports the REQUEST.
+    # — Gem would loop `typewriter-out` and never arrive. `gemState` reports the REQUEST.
     q.gemState = "working"
-    for _ in range(frame_count("working", "laptop-open") + 1):
+    for _ in range(frame_count("working", "typewriter-in") + 1):
         q._tick()
-    assert q._p.clip == "typing", q._p.clip
-    q.gemState = "speaking"                       # working has an exit: laptop-close plays first
+    assert q._p.clip == "typewriter", q._p.clip
+    q.gemState = "speaking"                       # working has an exit: typewriter-out plays first
     assert q.gemState == "speaking", "the request must be visible immediately, not after the exit"
-    assert q._p.clip == "laptop-close", q._p.clip
+    assert q._p.clip == "typewriter-out", q._p.clip
     q._tick(); q._tick()
     mid = q._p.index
     assert mid > 0, "the exit did not advance"
     for _ in range(3):
         q.gemState = "speaking"                   # the binding, firing again mid-exit
-    assert q._p.clip == "laptop-close" and q._p.index == mid, \
+    assert q._p.clip == "typewriter-out" and q._p.index == mid, \
         f"re-requesting the same state restarted the exit ({q._p.clip}/{q._p.index}, was {mid})"
-    for _ in range(frame_count("working", "laptop-close") + 1):
+    for _ in range(frame_count("working", "typewriter-out") + 1):
         q._tick()
     assert (q._p.state, q._p.clip) == ("speaking", "speak"), (q._p.state, q._p.clip)
 

@@ -1,6 +1,6 @@
 # Chapter 2 — The model layer
 
-**Last reconciled: 2026-08-04** · Build progress: [STATE.md](../plans/STATE.md) (Tracks G · B) · Provider catalogue (executable): [shared/schemas/settings.json](../../shared/schemas/settings.json)
+**Last reconciled: 2026-08-04 02:55** · Build progress: [STATE.md](../plans/STATE.md) (Tracks G · B) · Provider catalogue (executable): [shared/schemas/settings.json](../../shared/schemas/settings.json)
 
 `backend/llm/` is the only part of Gemma that talks to a language model. One async interface;
 every provider plugs in behind it. The internal message shape is the chat-completions convention —
@@ -297,18 +297,74 @@ Reaching only part way today: `effort` reaches the OpenAI wire alone — `Claude
 Anthropic declares no temperature capability. The per-card `thinking` value is resolved but is not
 passed to an adapter; the only path that sets it is `transform`.
 
-Planned, and out of role routing's scope:
+## What the router must achieve (binding)
 
-| Subsystem | Question it answers |
-|-----------|---------------------|
-| Task routing | which model suits this utterance's shape? |
-| Skills | does this need a model at all? |
+`planned`. The section above describes the router as built: a lookup from role to model, which never
+sees the utterance. This section states what the router is **for**, and it is binding on everything
+built under that name.
 
-Skills carry one binding constraint: precision over recall. A matcher that fires on "I was going to
-open Spotify but didn't" has acted against the speaker's intent, so it never fires unless certain and
-falls through to the model when unsure. A skill and a tool share one deterministic backend and are
-two doors to it, never two implementations (spec/30).
+**The router is the thing that intercepts the request and decides where it goes.** The model is one
+destination among several, not the entry point. Today the model is the front door and every decision
+runs through it — including the decision about whether a tool is needed at all, which costs a full
+round before any work happens.
 
-Also planned: several instances per provider with the roles-and-routes redesign (spec/70), and
-mapping `local_only` to a policy that forces a local provider. The orchestrator's seam
-(`build_for_role`) does not change when those land — only the data the router reads.
+The judgement the router makes is between **a tool call and a genuine prompt**. A tool call is a
+request to do something the harness already implements. A genuine prompt is everything else — a
+question, a conversation, an open-ended instruction. This is intent identification, and it is
+possible deterministically because **the tool registry is ours**: the router matches against a
+closed set of capabilities this machine declares, not against an open world.
+
+Four destinations:
+
+| The request is | Goes to | Costs |
+|----------------|---------|-------|
+| a tool call the harness implements, whose result speaks for itself | the tool, and the answer ends there | no model |
+| a tool call whose result needs prose to be useful | the tool, then the router sends the result to a **composer** | one model round, on the result rather than on the request |
+| a genuine prompt | the model | a full turn, as today |
+| anything the router is not certain about | the model | a full turn, as today |
+
+```
+utterance ─▶ ROUTER ──┬── tool ──────────────▶ answer
+                      │
+                      ├── tool ──▶ composer ─▶ answer
+                      │
+                      └── model ─────────────▶ answer   (also every uncertain case)
+```
+
+Three consequences, each deliberate:
+
+- **A tool turn need not begin at a model.** "Open Spotify" is a five-token request that costs ~3,200
+  input tokens across two rounds today, because the model is asked first whether a tool applies and
+  then asked again to narrate the result.
+- **Composition is a separate job from selection**, and the two may run on different models. Selecting
+  a tool is cheap, bounded and testable; composing prose from a retrieval result is where a capable
+  model earns its cost. A local model already picks the right tool 8 times in 9.
+- **Role routing becomes a component, not the whole.** Resolving `assistant` to a provider still
+  happens; it happens *after* the router has decided a model is wanted at all.
+
+**The router's dials are Gemma's, not the user's.** The model it runs, its temperature and its
+effort are fixed in code and appear in no settings pane. The user chooses the model that *answers*
+them; the router is Gemma's own machinery, and a routing decision taken at the user's sampling
+temperature would vary for no reason they asked for. `transform` already works this way, pinning
+temperature 0 and never reasoning as invariants of the verb.
+
+Two consequences. A fixed model that is absent from the machine cannot be an error — the router
+falls through to the assistant, which is what it already does when uncertain, so a missing router
+model costs speed and nothing else. And a router model is weights on disk, so it inherits the
+delivery question the speech-to-text model has: a size, a download, a cache location, and a
+part-downloaded failure mode.
+
+**Binding constraint: precision over recall.** The router never fires on a tool unless it is certain.
+A matcher that fires on "I was going to open Spotify but didn't" has acted against the speaker's
+intent, which is a worse failure than being slow. Every uncertain case falls through to the model,
+and the fall-through must be indistinguishable from today's behaviour. A skill and a tool share one
+deterministic backend and are two doors to it, never two implementations (spec/30).
+
+Skills, as scoped in the build plan, are one outcome of this router — the case where a deterministic
+answer needs no model at all. The router is the larger thing: the dispatcher that makes skills, tool
+turns and conversations three results of one decision.
+
+Also planned, and separate from the above: several instances per provider with the roles-and-routes
+redesign (spec/70), and mapping `local_only` to a policy that forces a local provider. The
+orchestrator's seam (`build_for_role`) does not change when those land — only the data the router
+reads.

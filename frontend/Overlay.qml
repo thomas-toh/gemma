@@ -675,19 +675,19 @@ Window {
             lineHeightMode: Text.FixedHeight
         }
 
-        // Dictation's paste confirmation earns a real ✓ from Material Symbols — the island's body
+        // Dictation's paste confirmation earns a real ✓ from the icon font — the island's body
         // face has no U+2713 (it renders as tofu). Set just after the "Pasted" word, shown only
         // for the `pasted` beat (D2).
         Text {
             id: pasteMark
             objectName: "pasteMark"
             visible: root.pasted
-            text: "\ue668"                          // Material Symbols: check
+            text: Theme.ico.check
             x: statusWord.x + statusWord.contentWidth + 7
             y: root.padTop
             color: Theme.textMuted
             font.family: Theme.fontIcon
-            font.pixelSize: Theme.fontSize
+            font.pixelSize: Math.round(Theme.fontSize * Theme.iconInk)
             lineHeight: root.lineBox
             lineHeightMode: Text.FixedHeight
         }

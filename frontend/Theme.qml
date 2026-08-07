@@ -13,6 +13,7 @@ QtObject {
     // ── palette ─────────────────────────────────────────────────────────────
     readonly property color surface: "#000000"       // the island body
     readonly property color inkBase: "#f4f6f8"       // white, before any opacity is applied
+    readonly property color inkOk:   "#7ee0a0"       // an action that just succeeded (the peek's copied ✓)
 
     // ── opacity scale, named by ROLE not by value ──────────────────────────
     // Two levels, not three: the status word and fault text sit at the same recessive weight,
@@ -178,15 +179,59 @@ QtObject {
     readonly property int fontCardLabel: 13   // Model / Effort / Extended thinking / Notes
     readonly property int fontCardMeta:  12   // mono model ids, the key-status footer
 
-    // Icons — Material Symbols Outlined (bundled in frontend/fonts, subset to the glyphs the
-    // window uses). Drawn as font text, not hand-authored paths, so weight/optical-size are real
-    // font axes, not stroke fudges (Thomas, 2026-07-27). A call site picks a size by role; the
-    // Glyph component feeds `iconWeight` to the font's `wght` axis (light, per Thomas).
-    readonly property string fontIcon: "Material Symbols Outlined"
-    readonly property int iconWeight: 300
+    // Icons — Lucide (bundled in frontend/fonts, the full family). Drawn as font text, never as
+    // SVG paths, so an icon is one codepoint here and nothing else. Lucide is a STATIC font: its
+    // stroke is fixed at 2px on a 24 grid, so there are no wght/opsz axes to feed and no
+    // per-call-site weight — the size tokens below are the only knob.
+    readonly property string fontIcon: "lucide"
     readonly property int iconSm: 16
     readonly property int iconMd: 19
     readonly property int iconLg: 24
+    // Lucide draws to the edge of its 24 grid where Material Symbols sat inside a padded optical
+    // box, so the same pixelSize came out about 18% bigger. The size tokens above stay the LAYOUT
+    // box and the Glyph draws its text at this fraction of it, which keeps every existing
+    // alignment while matching the old ink. Measured across the 26 icons that were swapped.
+    readonly property real iconInk: 0.85
+
+    // Every icon the app draws, by role rather than by Lucide's name, so a call site reads as
+    // intent and swapping the picture is one edit here. Codepoints are Lucide's own mapping
+    // (font/codepoints.json in lucide-static); the trailing comment is the Lucide icon name.
+    readonly property QtObject ico: QtObject {
+        readonly property string cloud:     "\uE088"   // cloud             — a provider-hosted model
+        readonly property string chip:      "\uE0A9"   // cpu               — a local model
+        readonly property string sparkle:   "\uE412"   // sparkles          — the Ask model
+        readonly property string kebab:     "\uE0B7"   // ellipsis-vertical — a row's ⋯
+        readonly property string check:     "\uE06C"   // check             — selected option, stored key
+        readonly property string chevron:   "\uE06D"   // chevron-down      — a dropdown's indicator
+        readonly property string plus:      "\uE13D"   // plus              — add a model
+        readonly property string trash:     "\uE18E"   // trash-2           — remove a model
+        readonly property string close:     "\uE1B2"   // x                 — dismiss a sheet / the window
+        readonly property string minimize:  "\uE11C"   // minus             — window minimise
+        readonly property string maximize:  "\uE167"   // square            — window maximise
+        readonly property string restore:   "\uE09E"   // copy              — window restore
+        readonly property string back:      "\uE06E"   // chevron-left      — step 2 → step 1
+        readonly property string forward:   "\uE06F"   // chevron-right     — a catalogue row
+        readonly property string edit:      "\uE172"   // square-pen        — configure a model
+        readonly property string search:    "\uE151"   // search            — the sidebar field
+        readonly property string mic:       "\uE118"   // mic               — the mic status mark
+        readonly property string settings:  "\uE154"   // settings          — nav: General
+        readonly property string plug:      "\uE37F"   // plug              — nav: Connectors
+        readonly property string box:       "\uE061"   // box               — nav: Model selection
+        readonly property string keyboard:  "\uE284"   // keyboard          — nav: Triggers
+        readonly property string lines:     "\uE185"   // align-left        — nav: Dictation
+        readonly property string info:      "\uE0F9"   // info              — nav: About (unbuilt)
+        readonly property string sun:       "\uE178"   // sun               — theme: light
+        readonly property string moon:      "\uE11E"   // moon              — theme: dark
+        readonly property string monitor:   "\uE11D"   // monitor           — theme: system
+        readonly property string folder:    "\uE247"   // folder-open       — connector: Files
+        readonly property string mail:      "\uE10F"   // mail              — connector: Email
+        readonly property string paste:     "\uE085"   // clipboard         — connector: Clipboard
+        readonly property string globe:     "\uE0E8"   // globe             — connector: Web
+        readonly property string apps:      "\uE0FF"   // layout-grid       — connector: Apps & media
+        readonly property string hub:       "\uE0AD"   // database          — connector: MCP servers
+        readonly property string copy:      "\uE09E"   // copy              — the peek's Copy action
+        readonly property string save:      "\uE14D"   // save              — the peek's Save action
+    }
     // Dropdown popup: show at most this many rows, then scroll (a fetched model list can be 100+).
     readonly property int dropdownRows: 8
     // Scrollbar thumb thickness — the one width every scrollbar shares (settings + the island peek),

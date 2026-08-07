@@ -1,0 +1,8 @@
+{
+  "interfaceFontFamily": "Inter",
+  "cssTheme": "",
+  "textFontFamily": "Inter",
+  "enabledCssSnippets": [
+    "atom-fix"
+  ]
+}

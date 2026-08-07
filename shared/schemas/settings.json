@@ -80,7 +80,7 @@
       "label": "Keep a confirmation on screen for",
       "control": "dropdown",
       "choices": ["1.5 s", "2.5 s", "4 s", "8 s"],
-      "help": "How long the island stays up after Gemma has DONE something — opened an app, brought a window forward. Short by default: you can see it happened, so there is nothing to read.",
+      "help": "Gemma will remain on-screen for a short time after confirming it has completed an action",
       "built": true,
       "$comment": "D43. A CHOICE, not a free number: a dropdown of sensible durations needs no new control (spec/70 §2's WORDS class) and no new schema type, and it cannot be set to 0 or to something absurd. The overlay reads the number off the front of the string, which is why every choice must start with one — asserted in frontend/overlay_check.py so a hand-edited choice that does not parse fails offline instead of freezing the island at its default."
     },
@@ -92,7 +92,7 @@
       "label": "Keep an answer on screen for",
       "control": "dropdown",
       "choices": ["10 s", "20 s", "40 s", "90 s"],
-      "help": "How long the island stays up after Gemma has ANSWERED something. Long enough to walk back to the desk and still read it. Hovering over the island pauses the countdown, and Escape dismisses it at once.",
+      "help": "Gemma will remain on-screen for an extended time after answering you, to allow you to read the response.",
       "built": true,
       "$comment": "D43. Was the fixed 20 s of Theme.durationAnswerDwell, which is still the default and the fallback if this cannot be read."
     },

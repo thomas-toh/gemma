@@ -45,27 +45,38 @@ HERE = Path(__file__).resolve().parent
 
 
 def check_icon_font() -> None:
-    """The window draws its icons as Material Symbols glyphs (D29). A missing or renamed font file
-    turns every icon to tofu with no QML warning — exactly the silent failure this check exists to
-    catch — so load the bundled file and confirm the family the Glyph component asks for resolves.
+    """Every icon in the app is one Lucide glyph (D29). Three ways that fails silently, so three
+    assertions: the bundled file goes missing or is renamed, a codepoint in `Theme.ico` has no
+    glyph behind it (tofu, with no QML warning), or an icon creeps back in as an SVG.
     """
-    from PySide6.QtGui import QFontDatabase
-    ttf = HERE / "fonts" / "MaterialSymbolsOutlined.ttf"
+    import re
+    from PySide6.QtGui import QFontDatabase, QFont, QRawFont
+    ttf = HERE / "fonts" / "lucide.ttf"
     assert ttf.exists(), f"icon font missing: {ttf}"
     fid = QFontDatabase.addApplicationFont(str(ttf))
     fams = QFontDatabase.applicationFontFamilies(fid) if fid != -1 else []
     # The literal must match Theme.qml's `fontIcon`; both name the same bundled family.
-    assert "Material Symbols Outlined" in fams, f"icon font family changed or failed to load: {fams}"
+    assert "lucide" in fams, f"icon font family changed or failed to load: {fams}"
 
-    # Since D29 a Glyph's `d` is a glyph char (an `ico.*`), never an SVG path. A leftover path
-    # literal renders as literal text with no QML warning — the Add-a-model sheet shipped two like
-    # that. Fail on any `d: "M…"`/`d: "m…"` (an SVG path starts with a move + coords); `ico.*`
-    # bindings have no quote, and the Mark logo uses `PathSvg { path: … }`, so neither trips this.
-    import re
-    src = (HERE / "SettingsWindow.qml").read_text(encoding="utf-8")
-    stray = re.findall(r'\bd:\s*"[Mm][\d\s.\-]', src)
-    assert not stray, f"{len(stray)} Glyph(s) still fed an SVG path instead of an ico glyph char"
-    print(f"  icon font: {ttf.name} -> {fams[0]}; no raw glyph paths")
+    # Every codepoint in Theme.ico must actually resolve to a glyph. A mistyped or stale one
+    # renders as an empty box and nothing anywhere complains — the failure that made re-mapping
+    # the whole set off Material Symbols worth verifying rather than eyeballing.
+    theme = (HERE / "Theme.qml").read_text(encoding="utf-8")
+    icons = re.findall(r'readonly property string (\w+):\s*"\\u([0-9A-Fa-f]{4})"', theme)
+    assert len(icons) > 20, f"Theme.ico looks empty or reformatted — found {len(icons)} codepoints"
+    raw = QRawFont.fromFont(QFont("lucide", 24))
+    tofu = [name for name, cp in icons if not raw.supportsCharacter(int(cp, 16))]
+    assert not tofu, f"{len(tofu)} icon(s) have no glyph in the font: {tofu}"
+
+    # Icons are font glyphs, never SVG (Thomas). A `d: "M…"` fed to a Glyph, or an Image pointed at
+    # an icons/*.svg, both render with no QML warning. `gemma-mark.svg` is the project's own mark
+    # rather than an icon, and the Mark logo uses `PathSvg { path: … }`, so neither trips this.
+    for qml in ("SettingsWindow.qml", "PeekPanel.qml", "Overlay.qml"):
+        src = (HERE / qml).read_text(encoding="utf-8")
+        assert not re.findall(r'\bd:\s*"[Mm][\d\s.\-]', src), f"{qml}: a Glyph is fed an SVG path"
+        stray = re.findall(r'source:.*"[^"]*icons/(?!gemma-mark)[^"]*\.svg"', src)
+        assert not stray, f"{qml}: icon(s) drawn from SVG instead of the font: {stray}"
+    print(f"  icon font: {ttf.name} -> {fams[0]}; {len(icons)} glyphs present, none SVG")
 
 
 def check_gem_turn(player, overlay, settle) -> None:
@@ -88,7 +99,7 @@ def check_gem_turn(player, overlay, settle) -> None:
     overlay.apply({"type": "state", "state": "listening"})
     assert phase() == "listening", "the mic is open — spec/50 rule 4, never inferred"
     overlay.apply({"type": "state", "state": "thinking"})
-    assert phase() == "working", "composing an answer draws the laptop (Thomas)"
+    assert phase() == "working", "composing an answer draws the typewriter (Thomas)"
     overlay.apply({"type": "transcript", "text": "when is my meeting", "final": True})
     assert phase() == "working", "the prompt showing is not yet an answer"
 
@@ -118,12 +129,12 @@ def check_gem_turn(player, overlay, settle) -> None:
     assert phase() == "listening", phase()
 
     # DICTATION (Thomas): the transcribe and tidy passes are the machine chewing, so they draw the
-    # same laptop as composing; the paste landing gets the same sparkle as a finished answer. All
+    # same typewriter as composing; the paste landing gets the same sparkle as a finished answer. All
     # three fell through to `idle` before — Gem resting while the island said "Transcribing…".
     overlay.feed_lost()
     for state in ("transcribing", "transforming"):
         overlay.apply({"type": "state", "state": state})
-        assert phase() == "working", f"{state} should draw the laptop, got {phase()}"
+        assert phase() == "working", f"{state} should draw the typewriter, got {phase()}"
     overlay.apply({"type": "state", "state": "pasted"})
     assert phase() == "done", f"a landed paste should sparkle, got {phase()}"
 
