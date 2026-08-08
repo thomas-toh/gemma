@@ -1,5 +1,5 @@
-Gemma is a a voice-controlled desk assistant for Windows (MacOS forthcoming). This is also
-a vehicle through which I'm learning several different coding concepts. 
+Many people thought it was impossible to make a worse voice assistant than Siri. I accept that 
+challenge.
 
 STT is handled by a hard-coded faster-whisper, probably moving to Parakeet for Mac (since
 faster-whisper uses CUDA).
