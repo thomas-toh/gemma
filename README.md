@@ -1,5 +1,3 @@
-# Gemma
-
 Gemma is a a voice-controlled desk assistant for Windows (MacOS forthcoming). This is also
 a vehicle through which I'm learning several different coding concepts. 
 
@@ -13,7 +11,17 @@ It can be turned on in the settings panel.
 
 _tbc_
 
-## Running
+## Installing
+
+### With the script
+
+Run
+```bash
+.\install.bat          REM CPU
+.\install.bat gpu      REM + NVIDIA CUDA speech-to-text
+```
+
+### Manually
 
 You'd need `Python 3.12+`. I recommended that you use an isolated environment (`.venv`) so
 installs do not touch the system Python.
